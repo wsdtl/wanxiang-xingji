@@ -272,8 +272,11 @@ async def _assert_world_completion_rewards(services, character) -> None:
     )
     stellar_name = services.world_views.require(STELLAR_RING_WORLD_ID).skin.name
     reply = await _dispatch(f"行纪 {stellar_name}", "progress-stellar-complete")
-    assert "世界圆满" in _content(reply) and "已获得" in _content(reply)
-    assert "界门相位核 x1" in _content(reply)
+    reply_content = _content(reply)
+    assert "世界圆满" in reply_content and "已获得" in reply_content
+    assert "界门相位核 x1" in reply_content
+    assert "&#91;完成&#93;" in reply_content
+    assert "\\[完成\\]" not in reply_content
     _assert_world_completion_backfill(services, character)
 
 

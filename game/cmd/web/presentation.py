@@ -127,7 +127,9 @@ def _inline(value: str, flow_id: int) -> str:
 
 
 def _format_text(value: str) -> str:
-    escaped = html.escape(_unescape_markdown_punctuation(value), quote=False)
+    text = _unescape_markdown_punctuation(value)
+    text = text.replace("&#91;", "[").replace("&#93;", "]")
+    escaped = html.escape(text, quote=False)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
     escaped = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", escaped)
     escaped = re.sub(r"(?<!_)_([^_]+)_(?!_)", r"<em>\1</em>", escaped)

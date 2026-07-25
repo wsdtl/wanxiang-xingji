@@ -66,7 +66,7 @@ def _assert_markdown_shape(message) -> None:
             "> ",
             "> 📦 资源列表",
             "> > 数量: _2_&nbsp;|&nbsp;状态: _可用_",
-            "> > \\[1\\] 示例物品",
+            "> > &#91;1&#93; 示例物品",
             "> ",
             "> 请谨慎操作",
         ]
@@ -102,6 +102,8 @@ def _assert_header_rules() -> None:
 def _assert_qq_translation(message) -> None:
     rendered = render_qq_message(message)
     assert rendered["kind"] == "markdown"
+    assert "&#91;1&#93;" in rendered["content"]
+    assert "\\[" not in rendered["content"] and "\\]" not in rendered["content"]
     keyboard = rendered["keyboard"]
     buttons = [button for row in keyboard["content"]["rows"] for button in row["buttons"]]
     assert [button["id"] for button in buttons] == ["view", "fill", "callback"]

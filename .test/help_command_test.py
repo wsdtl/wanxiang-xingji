@@ -48,7 +48,7 @@ async def _main() -> None:
     assert "keyboard" not in home_payload
     for category in HELP_CATEGORY_ORDER:
         category_payload = render_qq_message(help_service._category_message(category))
-        assert re.search(r"\\\[\d+\\\]", category_payload["content"]) is None
+        assert re.search(r"&#91;\d+&#93;", category_payload["content"]) is None
     detail_payload = render_qq_message(
         help_service._detail_message(help_registry.find("开始探险"))
     )

@@ -92,7 +92,8 @@ async def _main() -> None:
                 text = _content(listing)
                 assert view.skin.name in text
                 assert all(title in text for title in ("主城", "探险区域", "人物地点"))
-                assert text.count("\\[当前\\]") == 1
+                assert text.count("&#91;当前&#93;") == 1
+                assert "\\[当前\\]" not in text
 
                 bindings = services.content.worlds.bindings_for_world(world_id)
                 assert len(bindings) == 17

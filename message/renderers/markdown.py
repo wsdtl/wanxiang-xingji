@@ -124,8 +124,9 @@ def _escape_latex(value: object) -> str:
 
 def _escape(value: object) -> str:
     text = str(value or "")
-    for token in ("\\", "`", "*", "_", "[", "]"):
+    for token in ("\\", "`", "*", "_"):
         text = text.replace(token, f"\\{token}")
+    text = text.replace("[", "&#91;").replace("]", "&#93;")
     return text.replace("\r", " ").replace("\n", " ")
 
 

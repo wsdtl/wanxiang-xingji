@@ -93,7 +93,7 @@ def test_web_projection_restores_escaped_markdown_punctuation() -> None:
         client_id="local.message_console",
         sender_name="万象行纪",
         message_type="markdown",
-        content="\\[1\\] 查看角色\n\\> 保留引用符号",
+        content="&#91;1&#93; 查看角色\n\\[旧记录\\]\n\\> 保留引用符号",
         image="",
         interactions=(),
         content_truncated=False,
@@ -102,7 +102,8 @@ def test_web_projection_restores_escaped_markdown_punctuation() -> None:
     )
     rendered = render_message_html(record)
     assert "[1] 查看角色" in rendered
-    assert "\\[1\\]" not in rendered
+    assert "&#91;1&#93;" not in rendered
+    assert "[旧记录]" in rendered and "\\[旧记录\\]" not in rendered
     assert "&gt; 保留引用符号" in rendered
 
 
