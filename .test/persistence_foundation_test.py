@@ -1,4 +1,4 @@
-"""持久化结构版本、联合提交、CAS、防重与 Outbox 测试。"""
+"""持久化结构版本、联合提交、CAS、事实日志与可选 Outbox 测试。"""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from game.core.gameplay.rewards import (  # noqa: E402
 from game.core.persistence import (  # noqa: E402
     ConcurrencyConflict,
     CorruptPersistenceData,
+    FactJournalService,
     INVENTORY_AGGREGATE,
     PERSISTENCE_FOUNDATION_VERSION,
     PERSISTENCE_SCHEMA_VERSION,
@@ -108,7 +109,7 @@ def _assert_atomic_persisted_settlement(directory: Path) -> None:
     database.initialize()
     service = PersistedRewardSettlementService(database, engine)
     service.initialize_snapshot(keys, initial, logical_time=TIME)
-    assert PERSISTENCE_FOUNDATION_VERSION == "persistence.foundation.v8"
+    assert PERSISTENCE_FOUNDATION_VERSION == "persistence.foundation.v9"
     assert PERSISTENCE_SCHEMA_VERSION == 6
     assert service.load_snapshot(keys, claim_scope_id="account-a") == initial
 
@@ -123,18 +124,19 @@ def _assert_atomic_persisted_settlement(directory: Path) -> None:
     assert persisted.weapons["weapon-a"].revision == 1
     assert persisted.claims.revision == 1
 
-    pending = service.pending_events(limit=100)
-    assert len(pending) == len(outcome.value.events)
-    assert pending[-1].event.kind == "reward.settlement.completed"
+    facts = FactJournalService(database).list(limit=100)
+    assert len(facts) == len(outcome.value.events)
+    assert facts[-1].kind == "reward.settlement.completed"
+    assert service.pending_events(limit=100) == ()
     with database.unit_of_work(write=False) as uow:
         committed = uow.load_transaction(settlement.id)
         assert committed and committed.scope_id == "account-a"
-        assert len(uow.pending_outbox(limit=100)) == len(pending)
+        assert uow.pending_outbox(limit=100) == ()
 
     replay = service.settle(settlement, keys, context=_context(seed=1_002))
     assert replay.ok and replay.value and replay.value.replayed
     assert service.load_snapshot(keys, claim_scope_id="account-a") == persisted
-    assert len(service.pending_events(limit=100)) == len(pending)
+    assert len(FactJournalService(database).list(limit=100)) == len(facts)
 
     changed = replace(
         settlement,
@@ -149,17 +151,29 @@ def _assert_atomic_persisted_settlement(directory: Path) -> None:
     _assert_late_rule_failure_does_not_persist(service, keys, persisted)
     _assert_uncommitted_and_stale_cas_rollback(database, persisted)
 
-    first = pending[0]
+    first = outcome.value.events[0]
+    with database.unit_of_work() as uow:
+        uow.enqueue_outbox(
+            settlement.id,
+            0,
+            first.kind,
+            service.snapshots.codec.dumps(first),
+            TIME.isoformat(),
+        )
+        uow.commit()
+    pending = service.pending_events(limit=100)
+    assert len(pending) == 1 and pending[0].event == first
+    first_delivery = pending[0]
     service.mark_event_published(
-        first.transaction_id,
-        first.sequence,
+        first_delivery.transaction_id,
+        first_delivery.sequence,
         published_at=TIME + timedelta(minutes=1),
     )
-    assert len(service.pending_events(limit=100)) == len(pending) - 1
+    assert service.pending_events(limit=100) == ()
     try:
         service.mark_event_published(
-            first.transaction_id,
-            first.sequence,
+            first_delivery.transaction_id,
+            first_delivery.sequence,
             published_at=TIME + timedelta(minutes=2),
         )
         raise AssertionError("同一 Outbox 事件不能重复标记发布")

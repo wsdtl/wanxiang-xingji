@@ -32,6 +32,15 @@ class ScheduleHandlerRegistration:
     ending_between: WindowRangeHandler
     latest_ending_at_or_before: LatestWindowHandler
     containing: ContainingWindowHandler
+    implementation_version: int = 1
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.implementation_version, bool)
+            or not isinstance(self.implementation_version, int)
+            or self.implementation_version < 1
+        ):
+            raise ValueError("周期调度实现版本必须是大于 0 的整数")
 
 
 class CycleScheduleHandlers:

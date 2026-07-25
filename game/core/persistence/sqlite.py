@@ -1311,7 +1311,31 @@ class SqliteUnitOfWork:
             (transaction_id, fingerprint, scope_id, receipt_payload, committed_at),
         )
 
-    def append_outbox(
+    def append_fact(
+        self,
+        transaction_id: str,
+        sequence: int,
+        event_kind: str,
+        payload: str,
+        occurred_at: str,
+    ) -> None:
+        """追加已经提交的领域事实，不隐式创建外部投递。"""
+
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO fact_journal(
+                    transaction_id, sequence, event_kind, payload, occurred_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (transaction_id, sequence, event_kind, payload, occurred_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConcurrencyConflict(
+                f"领域事实已经存在：{transaction_id}/{sequence}"
+            ) from exc
+
+    def enqueue_outbox(
         self,
         transaction_id: str,
         sequence: int,
@@ -1319,6 +1343,8 @@ class SqliteUnitOfWork:
         payload: str,
         created_at: str,
     ) -> None:
+        """只为明确登记的外部消费者创建投递记录。"""
+
         try:
             self.connection.execute(
                 """
@@ -1328,17 +1354,9 @@ class SqliteUnitOfWork:
                 """,
                 (transaction_id, sequence, event_kind, payload, created_at),
             )
-            self.connection.execute(
-                """
-                INSERT INTO fact_journal(
-                    transaction_id, sequence, event_kind, payload, occurred_at
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (transaction_id, sequence, event_kind, payload, created_at),
-            )
         except sqlite3.IntegrityError as exc:
             raise ConcurrencyConflict(
-                f"Outbox 事件已经存在：{transaction_id}/{sequence}"
+                f"外部投递已经存在：{transaction_id}/{sequence}"
             ) from exc
 
     def pending_outbox(self, *, limit: int = 100) -> tuple[OutboxEventRow, ...]:

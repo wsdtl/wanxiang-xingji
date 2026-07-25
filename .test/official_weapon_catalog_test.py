@@ -13,10 +13,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+TEST_ROOT = ROOT / ".test"
+if str(TEST_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_ROOT))
 
 from game.content.catalog.foundation import QUALITY_IDS  # noqa: E402
 from game.content.catalog import STARTER_WEAPON_ID  # noqa: E402
-from game.content.catalog.weapon.balance import WeaponBalanceAuditor  # noqa: E402
 from game.content.catalog.weapon.blueprints import WEAPON_BLUEPRINTS  # noqa: E402
 from game.content.catalog.weapon.mechanics import (  # noqa: E402
     WEAPON_MARK_EFFECT_ID,
@@ -35,13 +37,14 @@ from game.core.gameplay import (  # noqa: E402
     AbilityUse,
     ActiveEffect,
     GameplayExecutor,
-    ItemizationBalanceAuditor,
     RuleContext,
     RuleEntity,
     RuleEvent,
     Ruleset,
     SeededRandomSource,
 )
+from support.itemization_balance_audit import ItemizationBalanceAuditor  # noqa: E402
+from support.weapon_balance_audit import WeaponBalanceAuditor  # noqa: E402
 from game.content.catalog.combat.stats import SHIELD_CURRENT  # noqa: E402
 from game.features.battle_report import present_battle_event  # noqa: E402
 from game.rules import (  # noqa: E402

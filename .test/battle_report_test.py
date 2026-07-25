@@ -118,7 +118,7 @@ def main() -> None:
 
         full = service.load_public(
             reference.share_id,
-            logical_time=NOW + timedelta(days=6),
+            logical_time=NOW + timedelta(hours=1),
         )
         assert full is not None and full.detail_available
         assert [item.segment_id for item in full.segments] == ["segment-1", "segment-2"]
@@ -149,12 +149,22 @@ def main() -> None:
         _assert_companion_origin_projection(services)
         previous = install_game_services(services)
         try:
+            real_load_public = services.battle_reports.load_public
+
+            def load_public_at_test_time(share_id, *, logical_time):
+                return real_load_public(
+                    share_id,
+                    logical_time=NOW + timedelta(hours=1),
+                )
+
+            services.battle_reports.load_public = load_public_at_test_time
             app = FastAPI()
             app.include_router(game_router)
             app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
             with TestClient(app) as client:
                 _assert_web_assets(client, reference.share_id)
         finally:
+            services.battle_reports.load_public = real_load_public
             restore_game_services(previous)
 
         connection = sqlite3.connect(database.path)
@@ -170,21 +180,21 @@ def main() -> None:
 
         summary = service.load_public(
             reference.share_id,
-            logical_time=NOW + timedelta(days=8),
+            logical_time=NOW + timedelta(hours=12),
         )
         assert summary is not None and not summary.detail_available
         assert summary.segments == ()
         removed_details, removed_reports = service.cleanup(
-            logical_time=NOW + timedelta(days=8)
+            logical_time=NOW + timedelta(hours=12)
         )
         assert removed_details == 2 and removed_reports == 0
-        assert service.cleanup(logical_time=NOW + timedelta(days=8)) == (0, 0)
+        assert service.cleanup(logical_time=NOW + timedelta(hours=12)) == (0, 0)
 
         assert service.load_public(
             reference.share_id,
-            logical_time=NOW + timedelta(days=31),
+            logical_time=NOW + timedelta(days=2),
         ) is None
-        assert service.cleanup(logical_time=NOW + timedelta(days=31)) == (0, 1)
+        assert service.cleanup(logical_time=NOW + timedelta(days=2)) == (0, 1)
 
     print("battle report tests passed")
 

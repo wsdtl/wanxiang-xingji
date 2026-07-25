@@ -376,7 +376,7 @@ def _publish_fact(uow, services, fact) -> None:
         payload,
         timestamp,
     )
-    uow.append_outbox(
+    uow.append_fact(
         transaction_id,
         0,
         WORLD_PROGRESS_FACT_KIND,

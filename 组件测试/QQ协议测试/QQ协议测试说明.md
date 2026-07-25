@@ -63,7 +63,7 @@ QQ 回复已发送 msg_type=7
 ## 离线验证
 
 ```powershell
-.venv\Scripts\python.exe -X utf8 -B test\qq_protocol_component_test.py
+.venv\Scripts\python.exe -X utf8 -B .test\qq_protocol_component_test.py
 ```
 
 该测试检查公共动作、稳定按钮 ID、QQ keyboard 翻译、测试图片和脱敏摘要。

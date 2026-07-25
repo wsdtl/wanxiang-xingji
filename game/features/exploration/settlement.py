@@ -849,7 +849,7 @@ class ExplorationSettlementService:
             payload,
             timestamp,
         )
-        uow.append_outbox(
+        uow.append_fact(
             transaction_id,
             0,
             EXPLORATION_VICTORY_FACT_KIND,

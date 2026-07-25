@@ -12,10 +12,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+TEST_ROOT = ROOT / ".test"
+if str(TEST_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_ROOT))
 
 from game.content.catalog import BASIC_ATTACK_ABILITY_ID  # noqa: E402
 from game.content.catalog.economy import EQUIPMENT_BLUEPRINT_EXPECTED_GEAR_VALUE  # noqa: E402
-from game.content.catalog.equipment.balance import EquipmentBalanceAuditor  # noqa: E402
 from game.content.catalog.equipment.blueprints import (  # noqa: E402
     EQUIPMENT_FAMILY_BLUEPRINTS,
     EQUIPMENT_PROPERTY_BLUEPRINTS,
@@ -43,6 +45,7 @@ from game.content.official import (  # noqa: E402
 )
 from game.content.world_skins import MAGIC_SKIN_ID  # noqa: E402
 from game.features.battle_report import resolve_battle_content_name  # noqa: E402
+from support.equipment_balance_audit import EquipmentBalanceAuditor  # noqa: E402
 from game.core.gameplay import (  # noqa: E402
     ActiveEffect,
     AbilityUse,

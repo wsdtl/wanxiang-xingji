@@ -19,8 +19,8 @@ from game.rules.battle_report import (
 from .assembly import BattleReportBuilder
 
 
-DETAIL_RETENTION = timedelta(days=7)
-SUMMARY_RETENTION = timedelta(days=30)
+DETAIL_RETENTION = timedelta(hours=6)
+SUMMARY_RETENTION = timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,7 @@ class BattleReportService:
         )
 
     def cleanup(self, *, logical_time: datetime) -> tuple[int, int]:
-        """删除七天前的明细，并在三十天后删除整份摘要。"""
+        """删除超过短期保留期的明细与摘要。"""
 
         _aware(logical_time)
         return self.store.cleanup(logical_time=logical_time.isoformat())

@@ -236,7 +236,7 @@ class PersistedRewardSettlementService:
                 timestamp,
             )
             for sequence, event in enumerate(outcome.value.events):
-                uow.append_outbox(
+                uow.append_fact(
                     settlement.id,
                     sequence,
                     event.kind,

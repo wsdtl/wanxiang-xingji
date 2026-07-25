@@ -303,7 +303,7 @@ await manager.send(reply, client_id)
 ## 运行测试
 
 ```powershell
-Get-ChildItem test\*_test.py | Sort-Object Name | ForEach-Object {
+Get-ChildItem .test\*_test.py | Sort-Object Name | ForEach-Object {
   .venv\Scripts\python.exe -X utf8 -B $_.FullName
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

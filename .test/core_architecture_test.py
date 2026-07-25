@@ -21,6 +21,7 @@ from game.core import account, gameplay, persistence  # noqa: E402
 
 def main() -> None:
     _assert_physical_layout()
+    _assert_test_support_boundaries()
     _assert_product_identity()
     _assert_ascii_python_identifiers()
     _assert_ascii_static_import_paths()
@@ -31,9 +32,38 @@ def main() -> None:
     _assert_application_assembly_boundaries()
     _assert_command_helper_boundaries()
     _assert_extension_consumers_use_composed_catalogs()
+    _assert_content_registration_boundaries()
     _assert_core_neutrality()
     _assert_world_identity_boundaries()
     print("core architecture tests passed")
+
+
+def _assert_test_support_boundaries() -> None:
+    """离线审计器只能依赖生产代码，生产代码不得反向携带或依赖审计器。"""
+
+    forbidden_runtime_files = (
+        ROOT / "game" / "core" / "gameplay" / "itemization" / "audit.py",
+        ROOT / "game" / "content" / "catalog" / "equipment" / "balance.py",
+        ROOT / "game" / "content" / "catalog" / "weapon" / "balance.py",
+    )
+    for path in forbidden_runtime_files:
+        assert not path.exists(), f"测试审计器不得留在生产目录：{path.relative_to(ROOT)}"
+
+    support = ROOT / ".test" / "support"
+    for filename in (
+        "itemization_balance_audit.py",
+        "equipment_balance_audit.py",
+        "weapon_balance_audit.py",
+    ):
+        assert (support / filename).is_file(), f"缺少测试审计支持：{filename}"
+
+    valuation = ROOT / "game" / "content" / "catalog" / "weapon" / "valuation.py"
+    assert valuation.is_file(), "正式武器价值估算必须独立于测试审计器"
+    for path in (ROOT / "game").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "from support" not in source and "import support" not in source, (
+            f"生产代码反向依赖了测试支持：{path.relative_to(ROOT)}"
+        )
 
 
 def _assert_product_identity() -> None:
@@ -41,9 +71,7 @@ def _assert_product_identity() -> None:
 
     assert GAME_NAME == "万象行纪"
     assert GAME_TITLE == "《万象行纪》"
-    assert (ROOT / "README.md").read_text(encoding="utf-8").startswith(
-        "# 万象行纪\n"
-    )
+    assert (ROOT / "README.md").read_text(encoding="utf-8").startswith("# 万象行纪\n")
     background = ROOT / "design" / "万象行纪世界设定.md"
     assert background.is_file()
     source = background.read_text(encoding="utf-8")
@@ -93,9 +121,7 @@ def _assert_ascii_static_import_paths() -> None:
                 continue
             for module in modules:
                 if not module.isascii():
-                    failures.append(
-                        f"{path.relative_to(ROOT)} 存在中文静态导包：{module}"
-                    )
+                    failures.append(f"{path.relative_to(ROOT)} 存在中文静态导包：{module}")
     assert not failures, "\n".join(failures)
 
 
@@ -177,17 +203,19 @@ def _assert_physical_layout() -> None:
         "trial": {"__init__.py", "definitions.py", "models.py"},
         "weapon": {
             "__init__.py",
-            "balance.py",
             "blueprints.py",
             "definitions.py",
             "mechanics.py",
+            "official_mechanics.py",
             "registry.py",
+            "valuation.py",
         },
         "equipment": {
             "__init__.py",
-            "balance.py",
             "blueprints.py",
             "definitions.py",
+            "ids.py",
+            "mechanisms.py",
             "properties.py",
         },
         "economy": {
@@ -201,11 +229,9 @@ def _assert_physical_layout() -> None:
         "world": {"__init__.py", "definitions.py"},
         "world_progress": {"__init__.py", "definitions.py"},
     }
-    assert {
-        path.name
-        for path in catalog.iterdir()
-        if path.is_dir() and path.name != "__pycache__"
-    } == set(catalog_domains), "名录领域目录必须同步登记到架构契约"
+    assert {path.name for path in catalog.iterdir() if path.is_dir() and path.name != "__pycache__"} == set(
+        catalog_domains
+    ), "名录领域目录必须同步登记到架构契约"
     for domain_name, expected_modules in catalog_domains.items():
         domain = catalog / domain_name
         assert domain.is_dir(), f"名录领域缺失：{domain_name}"
@@ -232,18 +258,10 @@ def _assert_physical_layout() -> None:
     assert not (content / "skins").exists(), "具体世界皮肤必须归入 world_skins"
     from game.content.world_skins import WORLD_SKIN_PACKAGE
 
-    registered_skin_names = {
-        str(pack.id).rsplit(".", 1)[-1]
-        for pack in WORLD_SKIN_PACKAGE.skin_packs
-    }
-    actual_skin_names = {
-        path.name
-        for path in world_skins.iterdir()
-        if path.is_dir() and path.name != "__pycache__"
-    }
+    registered_skin_names = {str(pack.id).rsplit(".", 1)[-1] for pack in WORLD_SKIN_PACKAGE.skin_packs}
+    actual_skin_names = {path.name for path in world_skins.iterdir() if path.is_dir() and path.name != "__pycache__"}
     assert actual_skin_names == registered_skin_names, (
-        "世界皮肤目录必须与官方世界包登记同步："
-        f"目录={sorted(actual_skin_names)} 登记={sorted(registered_skin_names)}"
+        f"世界皮肤目录必须与官方世界包登记同步：目录={sorted(actual_skin_names)} 登记={sorted(registered_skin_names)}"
     )
     worlds = content / "worlds"
     assert (worlds / "__init__.py").is_file()
@@ -314,17 +332,11 @@ def _assert_application_assembly_boundaries() -> None:
 
     path = ROOT / "game" / "app.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    functions = {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    functions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     assert "build_game_services" in functions
     assert {"_assemble_content", "_assemble_foundation"}.issubset(functions)
     assert not (ROOT / "game" / "runtime").exists()
-    exploration_reporting = (
-        ROOT / "game" / "features" / "exploration" / "reporting.py"
-    )
+    exploration_reporting = ROOT / "game" / "features" / "exploration" / "reporting.py"
     reporting_source = exploration_reporting.read_text(encoding="utf-8")
     assert "unit_of_work" not in reporting_source
     assert "game.core.persistence" not in reporting_source
@@ -341,13 +353,10 @@ def _assert_command_helper_boundaries() -> None:
         local_helpers = {
             node.name
             for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name in {"_now", "_character"}
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {"_now", "_character"}
         }
         if local_helpers:
-            failures.append(
-                f"{path.relative_to(ROOT)} 重复定义命令工具：{', '.join(sorted(local_helpers))}"
-            )
+            failures.append(f"{path.relative_to(ROOT)} 重复定义命令工具：{', '.join(sorted(local_helpers))}")
         source = path.read_text(encoding="utf-8")
         if "datetime.now(" in source:
             failures.append(f"{path.relative_to(ROOT)} 绕过统一命令时钟")
@@ -386,9 +395,7 @@ def _assert_world_identity_boundaries() -> None:
 
 def _assert_import_boundaries() -> None:
     forbidden_by_layer = {
-        "gameplay": {
-            "launch", "message", "组件测试", "account", "persistence"
-        },
+        "gameplay": {"launch", "message", "组件测试", "account", "persistence"},
         "account": {
             "launch",
             "message",
@@ -405,41 +412,24 @@ def _assert_import_boundaries() -> None:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for imported in _imports(tree, path):
                 root_name = imported.split(".", 1)[0]
-                core_layer = (
-                    imported.split(".", 3)[2]
-                    if imported.startswith("game.core.")
-                    else root_name
-                )
-                if (
-                    core_layer in forbidden
-                    or _is_game_integration(imported)
-                    or _is_game_product(imported)
-                ):
-                    failures.append(
-                        f"{path.relative_to(ROOT)} 导入了禁止层 {imported}"
-                    )
+                core_layer = imported.split(".", 3)[2] if imported.startswith("game.core.") else root_name
+                if core_layer in forbidden or _is_game_integration(imported) or _is_game_product(imported):
+                    failures.append(f"{path.relative_to(ROOT)} 导入了禁止层 {imported}")
     for folder_name in ("launch", "message"):
         for path in (ROOT / folder_name).rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             if any(
                 imported == "game"
                 or imported.startswith("game.")
-                or (
-                    folder_name == "message"
-                    and (imported == "launch" or imported.startswith("launch."))
-                )
+                or (folder_name == "message" and (imported == "launch" or imported.startswith("launch.")))
                 for imported in _imports(tree, path)
             ):
-                failures.append(
-                    f"{path.relative_to(ROOT)} 违反公共框架与游戏代码依赖边界"
-                )
+                failures.append(f"{path.relative_to(ROOT)} 违反公共框架与游戏代码依赖边界")
     for path in (ROOT / "组件测试").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for imported in _imports(tree, path):
             if imported == "game" or imported.startswith("game."):
-                failures.append(
-                    f"{path.relative_to(ROOT)} 协议测试不得依赖游戏代码 {imported}"
-                )
+                failures.append(f"{path.relative_to(ROOT)} 协议测试不得依赖游戏代码 {imported}")
     for path in (ROOT / "game" / "content").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for imported in _imports(tree, path):
@@ -459,9 +449,7 @@ def _assert_import_boundaries() -> None:
                 or imported == "game.core.persistence"
                 or imported.startswith("game.core.persistence.")
             ):
-                failures.append(
-                    f"{path.relative_to(ROOT)} 正式内容层导入了禁止模块 {imported}"
-                )
+                failures.append(f"{path.relative_to(ROOT)} 正式内容层导入了禁止模块 {imported}")
     for path in (ROOT / "game" / "rules" / "character").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for imported in _imports(tree, path):
@@ -478,15 +466,11 @@ def _assert_import_boundaries() -> None:
                 or imported == "game.core.persistence"
                 or imported.startswith("game.core.persistence.")
             ):
-                failures.append(
-                    f"{path.relative_to(ROOT)} 角色内部策略导入了禁止模块 {imported}"
-                )
+                failures.append(f"{path.relative_to(ROOT)} 角色内部策略导入了禁止模块 {imported}")
     for path in (ROOT / "game" / "cmd").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for imported in _imports(tree, path):
-            private_driver = imported.startswith("launch.adapter.qq") or imported.startswith(
-                "launch.adapter.local"
-            )
+            private_driver = imported.startswith("launch.adapter.qq") or imported.startswith("launch.adapter.local")
             registration_bypass = path.name == "__init__.py" and (
                 imported == "game.core"
                 or imported.startswith("game.core.")
@@ -496,9 +480,7 @@ def _assert_import_boundaries() -> None:
                 or imported.startswith("game.app.")
             )
             if private_driver or registration_bypass:
-                failures.append(
-                    f"{path.relative_to(ROOT)} 命令注册入口导入了禁止模块 {imported}"
-                )
+                failures.append(f"{path.relative_to(ROOT)} 命令注册入口导入了禁止模块 {imported}")
     assert not failures, "\n".join(failures)
 
 
@@ -519,10 +501,69 @@ def _assert_extension_consumers_use_composed_catalogs() -> None:
                 imported = forbidden & {alias.name for alias in node.names}
                 if imported:
                     failures.append(
-                        f"{path.relative_to(ROOT)} 绕过扩展目录导入静态映射："
-                        + ", ".join(sorted(imported))
+                        f"{path.relative_to(ROOT)} 绕过扩展目录导入静态映射：" + ", ".join(sorted(imported))
                     )
     assert not failures, "\n".join(failures)
+
+
+def _assert_content_registration_boundaries() -> None:
+    """正式机制必须由单点声明驱动，扩展必须保持无中央清单发现。"""
+
+    from game.content.catalog.equipment.blueprints import (
+        EQUIPMENT_SET_BLUEPRINTS,
+        MECHANIC_EQUIPMENT_PROPERTY_BLUEPRINTS,
+    )
+    from game.content.catalog.equipment.mechanisms import (
+        OFFICIAL_EQUIPMENT_MECHANICS,
+    )
+    from game.content.catalog.weapon.blueprints import WEAPON_BLUEPRINTS
+    from game.content.catalog.weapon.official_mechanics import (
+        OFFICIAL_WEAPON_MECHANICS,
+    )
+
+    equipment_root = ROOT / "game" / "content" / "catalog" / "equipment"
+    weapon_root = ROOT / "game" / "content" / "catalog" / "weapon"
+    definitions_source = (equipment_root / "definitions.py").read_text(encoding="utf-8")
+    properties_source = (equipment_root / "properties.py").read_text(encoding="utf-8")
+    weapon_assembly_source = (weapon_root / "mechanics.py").read_text(encoding="utf-8")
+    assert "_set_bonuses" not in definitions_source
+    assert all(len(blueprint.bonuses) == 3 for blueprint in EQUIPMENT_SET_BLUEPRINTS)
+    assert "_mechanic_content" not in properties_source
+    assert "_base_damage_operations" not in weapon_assembly_source
+    assert "if blueprint.primary" not in weapon_assembly_source
+    assert "if support" not in weapon_assembly_source
+
+    equipment_blueprints = {(value.key, value.category) for value in MECHANIC_EQUIPMENT_PROPERTY_BLUEPRINTS}
+    equipment_definitions = {(value.key, value.category) for value in OFFICIAL_EQUIPMENT_MECHANICS.definitions.values()}
+    assert equipment_blueprints == equipment_definitions
+    for mechanism in OFFICIAL_EQUIPMENT_MECHANICS.definitions.values():
+        for tier in (1, 2, 3):
+            compiled = mechanism.compile(tier)
+            assert compiled.effects and compiled.triggers
+
+    OFFICIAL_WEAPON_MECHANICS.validate_blueprints(WEAPON_BLUEPRINTS)
+    for blueprint in WEAPON_BLUEPRINTS:
+        recipe = OFFICIAL_WEAPON_MECHANICS.resolve(blueprint)
+        assert recipe.primary.compile(blueprint).operations
+        recipe.support.compile(blueprint, f"ability.weapon.{blueprint.key}")
+
+    discovery = (ROOT / "game" / "content" / "extensions" / "discovery.py").read_text(encoding="utf-8")
+    for required in (
+        "pkgutil.iter_modules",
+        "sorted(",
+        'module.name.startswith("_")',
+        '"CONTENT_EXTENSION"',
+        '"WORLD_EXTENSION"',
+    ):
+        assert required in discovery, f"扩展发现契约缺少：{required}"
+
+    forbidden_imports: list[str] = []
+    for path in (ROOT / "game").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for imported in _imports(tree, path):
+            if imported in {"test", "ops"} or imported.startswith(("test.", "ops.")):
+                forbidden_imports.append(f"{path.relative_to(ROOT)} 导入了离线目录 {imported}")
+    assert not forbidden_imports, "\n".join(forbidden_imports)
 
 
 def _assert_core_neutrality() -> None:
@@ -547,17 +588,9 @@ def _assert_core_neutrality() -> None:
                 failures.append(f"{relative} 直接导入模块随机源")
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 owner = node.func.value
-                if (
-                    isinstance(owner, ast.Name)
-                    and owner.id == "datetime"
-                    and node.func.attr in {"now", "utcnow"}
-                ):
+                if isinstance(owner, ast.Name) and owner.id == "datetime" and node.func.attr in {"now", "utcnow"}:
                     failures.append(f"{relative} 直接读取机器当前时间")
-                if (
-                    isinstance(owner, ast.Name)
-                    and owner.id == "time"
-                    and node.func.attr == "time"
-                ):
+                if isinstance(owner, ast.Name) and owner.id == "time" and node.func.attr == "time":
                     failures.append(f"{relative} 直接读取机器当前时间")
     assert not failures, "\n".join(failures)
 
@@ -579,9 +612,7 @@ def _assert_game_reply_boundaries() -> None:
                 continue
             if node.func.attr == "inline_section":
                 failures.append(f"{relative} 手写了全局通知通栏")
-            if node.func.attr == "header" and any(
-                keyword.arg == "color" for keyword in node.keywords
-            ):
+            if node.func.attr == "header" and any(keyword.arg == "color" for keyword in node.keywords):
                 failures.append(f"{relative} 手写了彩色人物头")
     assert not failures, "\n".join(failures)
 
@@ -595,11 +626,7 @@ def _is_game_integration(imported: str) -> bool:
 
 
 def _is_game_product(imported: str) -> bool:
-    return (
-        imported == "game.content"
-        or imported.startswith("game.content.")
-        or _is_game_policy(imported)
-    )
+    return imported == "game.content" or imported.startswith("game.content.") or _is_game_policy(imported)
 
 
 def _is_game_policy(imported: str) -> bool:

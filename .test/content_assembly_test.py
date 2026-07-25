@@ -761,6 +761,18 @@ def _assert_fingerprint_is_deterministic(packages, expected) -> None:
         (upgraded_core, packages[1], upgraded_adventure, packages[3])
     )
     assert changed.report.content_fingerprint != expected
+    upgraded_registration = replace(
+        packages[1].magnitude_registrations[0],
+        implementation_version=2,
+    )
+    upgraded_mechanics = replace(
+        packages[1],
+        magnitude_registrations=(upgraded_registration,),
+    )
+    implementation_changed = ContentAssembler().assemble(
+        (packages[0], upgraded_mechanics, packages[2], packages[3])
+    )
+    assert implementation_changed.report.content_fingerprint != expected
 
 
 def _assert_persisted_activation(runtime) -> None:

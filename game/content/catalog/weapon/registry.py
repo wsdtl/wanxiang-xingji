@@ -4,30 +4,65 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping
+from typing import Callable, Mapping
 
-from game.core.gameplay import ValueVector
+from game.core.gameplay import EffectDefinition, EffectReference, TriggerDefinition, ValueVector
+
+from .blueprints import WeaponBlueprint
+
+
+@dataclass(frozen=True)
+class CompiledPrimaryMechanic:
+    operations: tuple[object, ...]
+    effects: tuple[EffectDefinition, ...] = ()
+    triggers: tuple[TriggerDefinition, ...] = ()
+    references: tuple[EffectReference, ...] = ()
+    final_references: tuple[EffectReference, ...] = ()
+
+
+@dataclass(frozen=True)
+class CompiledSupportMechanic:
+    effects: tuple[EffectDefinition, ...] = ()
+    triggers: tuple[TriggerDefinition, ...] = ()
+    references: tuple[EffectReference, ...] = ()
+    granted_triggers: frozenset[str] = frozenset()
+
+
+PrimaryCompiler = Callable[[WeaponBlueprint], CompiledPrimaryMechanic]
+SupportCompiler = Callable[[WeaponBlueprint, str], CompiledSupportMechanic]
 
 
 @dataclass(frozen=True)
 class PrimaryMechanicDefinition:
     key: str
     hit_factor: float
+    compiler: PrimaryCompiler
     value: ValueVector = ValueVector()
 
     def __post_init__(self) -> None:
-        if not self.key.strip() or self.hit_factor <= 0:
+        if not self.key.strip() or self.hit_factor <= 0 or not callable(self.compiler):
             raise ValueError("主机制注册缺少稳定键或有效命中系数")
+
+    def compile(self, blueprint: WeaponBlueprint) -> CompiledPrimaryMechanic:
+        return self.compiler(blueprint)
 
 
 @dataclass(frozen=True)
 class SupportMechanicDefinition:
     key: str
+    compiler: SupportCompiler
     value: ValueVector = ValueVector()
 
     def __post_init__(self) -> None:
-        if not self.key.strip():
+        if not self.key.strip() or not callable(self.compiler):
             raise ValueError("辅助机制注册缺少稳定键")
+
+    def compile(
+        self,
+        blueprint: WeaponBlueprint,
+        ability_id: str,
+    ) -> CompiledSupportMechanic:
+        return self.compiler(blueprint, ability_id)
 
 
 @dataclass(frozen=True)
@@ -79,9 +114,7 @@ class WeaponMechanicRegistry:
                 self.targeting[blueprint.targeting],
             )
         except KeyError as error:
-            raise ValueError(
-                f"武器 {blueprint.key} 引用了未注册机制：{error.args[0]}"
-            ) from error
+            raise ValueError(f"武器 {blueprint.key} 引用了未注册机制：{error.args[0]}") from error
 
     def validate_blueprints(self, blueprints) -> None:
         values = tuple(blueprints)
@@ -113,117 +146,9 @@ def _indexed(values, label: str):
     return MappingProxyType(result)
 
 
-def _primary(key: str, hit_factor: float = 1.0, **value) -> PrimaryMechanicDefinition:
-    return PrimaryMechanicDefinition(key, hit_factor, ValueVector(**value))
-
-
-def _support(key: str, **value) -> SupportMechanicDefinition:
-    return SupportMechanicDefinition(key, ValueVector(**value))
-
-
-OFFICIAL_WEAPON_MECHANICS = WeaponMechanicRegistry(
-    primaries=(
-        _primary("heavy"),
-        _primary("swift", tempo=3),
-        _primary("multi2", 2.0, volatility=1),
-        _primary("multi3", 3.0, volatility=2),
-        _primary("execute", offense=8, volatility=4),
-        _primary("missing_rage", offense=7, volatility=6),
-        _primary("max_health", offense=8),
-        _primary("true_strike", offense=8),
-        _primary("pierce", offense=6),
-        _primary("poison", offense=8, volatility=2),
-        _primary("bleed", offense=8, volatility=2),
-        _primary("burn", offense=8, volatility=2),
-        _primary("frost", offense=5, control=3),
-        _primary("spirit_drain", sustain=4, control=4),
-        _primary("spirit_burst", offense=6, volatility=4),
-        _primary("element_cycle", offense=7, volatility=3),
-        _primary("detonate", offense=11, volatility=7),
-        _primary("mark", offense=4, volatility=4),
-        _primary("self_cost", offense=7, volatility=8),
-        _primary("volatile", 1.05, offense=4, volatility=14),
-        _primary("borrowed_force", 1.50, offense=7, volatility=5),
-        _primary("deferred_echo", 1.85, offense=8, tempo=5, volatility=3),
-    ),
-    supports=(
-        _support("none"),
-        _support("sunder", offense=5, control=3),
-        _support("crit", offense=7, tempo=2),
-        _support("delay", tempo=3, control=5),
-        _support("burn", offense=8, volatility=2),
-        _support("stun", control=11, volatility=3),
-        _support("lifesteal", sustain=11),
-        _support("on_kill", tempo=10, volatility=5),
-        _support("haste", tempo=8),
-        _support("guard", survival=8),
-        _support("extra_turn", tempo=14, volatility=5),
-        _support("evasion", survival=7, tempo=2),
-        _support("cooldown", tempo=8, volatility=4),
-        _support("slow", tempo=2, control=6),
-        _support("on_crit", offense=8, volatility=5),
-        _support("mark", offense=5, volatility=4),
-        _support("execute", offense=8, volatility=3),
-        _support("spirit_drain", sustain=4, control=4),
-        _support("freeze", control=12, volatility=4),
-        _support("weaken", survival=4, control=5),
-        _support("detonate", offense=10, volatility=7),
-        _support("heal", sustain=10),
-        _support("mark_self", offense=5, tempo=3, volatility=3),
-        _support("shield", survival=10),
-        _support("death_guard", survival=12, volatility=5),
-        _support("resource_balance", sustain=10, volatility=3),
-        _support("dispel", control=9),
-        _support("thorns", survival=4, offense=5, volatility=5),
-        _support("block", survival=10),
-        _support("on_kill_heal", sustain=9, volatility=5),
-        _support("damage_cap", survival=14),
-        _support("immunity", survival=15, volatility=5),
-        _support("taunt", survival=3, control=9),
-        _support("sleep", control=13, volatility=4),
-        _support("cooldown_delay", tempo=3, control=10),
-        _support("evasion_counter", offense=5, survival=6, volatility=4),
-        _support("on_crit_stun", offense=6, control=8, volatility=6),
-        _support("shield_counter", offense=5, survival=8, volatility=4),
-        _support("self_cost", offense=5, volatility=8),
-    ),
-    targeting=(
-        TargetingMechanicDefinition(
-            "single",
-            frozenset({"target.enemy.explicit", "target.enemy.first"}),
-            1,
-            1.0,
-        ),
-        TargetingMechanicDefinition(
-            "lowest",
-            frozenset({"target.enemy.lowest_health"}),
-            1,
-            1.08,
-        ),
-        TargetingMechanicDefinition(
-            "random",
-            frozenset({"target.enemy.random"}),
-            1,
-            1.0,
-        ),
-        TargetingMechanicDefinition(
-            "adjacent",
-            frozenset({"target.enemy.adjacent"}),
-            3,
-            1.45,
-        ),
-        TargetingMechanicDefinition(
-            "all",
-            frozenset({"target.enemy.all"}),
-            None,
-            1.80,
-        ),
-    ),
-)
-
-
 __all__ = [
-    "OFFICIAL_WEAPON_MECHANICS",
+    "CompiledPrimaryMechanic",
+    "CompiledSupportMechanic",
     "PrimaryMechanicDefinition",
     "SupportMechanicDefinition",
     "TargetingMechanicDefinition",

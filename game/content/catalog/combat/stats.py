@@ -43,6 +43,9 @@ STUN_CONTROL_ID = "control.stun"
 FREEZE_CONTROL_ID = "control.freeze"
 SLEEP_CONTROL_ID = "control.sleep"
 
+# 历史稳定 ID 保留 weapon 命名；所有会授予该拦截器的内容共用此处事实。
+DEATH_GUARD_INTERCEPTOR_ID = "interceptor.weapon.death_guard"
+
 
 DERIVED_COMBAT_ATTRIBUTES = (
     AttributeDefinition(COMBAT_ACCURACY, minimum=-1.0, maximum=1.0),

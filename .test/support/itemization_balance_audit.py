@@ -1,4 +1,4 @@
-"""不运行完整战斗的确定性物品生成与品质分布审计。"""
+"""基于正式物品生成器执行确定性品质分布审计。"""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from hashlib import sha256
 from types import MappingProxyType
 from typing import Mapping
 
-from ..context import RuleContext, Ruleset, SeededRandomSource
-from ..ids import StableId
-from .engine import ItemizationEngine
-from .models import ItemGenerationCommand
+from game.core.gameplay.context import RuleContext, Ruleset, SeededRandomSource
+from game.core.gameplay.ids import StableId
+from game.core.gameplay.itemization.engine import ItemizationEngine
+from game.core.gameplay.itemization.models import ItemGenerationCommand
 
 
 @dataclass(frozen=True)

@@ -43,6 +43,7 @@ from game.core.persistence import (
     BattleReportStore,
     CHARACTER_AGGREGATE,
     ConcurrencyConflict,
+    ContentActivationStore,
     INVENTORY_AGGREGATE,
     INSCRIPTION_PREFERENCE_AGGREGATE,
     LEDGER_AGGREGATE,
@@ -64,6 +65,7 @@ from game.core.persistence import (
     PersistedWeaponItemUseService,
     PersistedLoadoutService,
     PersistedRewardSettlementService,
+    PersistenceRetentionService,
     PersistedSocialService,
     PersistedPartyAdmissionService,
     PersistedPartyService,
@@ -118,6 +120,7 @@ from game.features.dimensional_disaster import (
     DimensionalDisasterFeature,
     DimensionalDisasterStorageKinds,
 )
+from game.features.data_lifecycle import DataLifecycleFeature, DataLifecycleTask
 from game.features.breakthrough import (
     BreakthroughFeature,
     BreakthroughStorageKinds,
@@ -222,6 +225,7 @@ class GameServices:
     actions: PersistedActionService
     global_activities: GlobalActivityCatalog
     battle_reports: BattleReportService
+    data_lifecycle: DataLifecycleFeature
     build_trials: BuildTrialFeature
     dimensional_disasters: DimensionalDisasterFeature
     party: PartyFeature
@@ -803,6 +807,19 @@ def build_game_services(
         BattleReportStore(database),
         battle_report_builder,
     )
+    persistence_retention = PersistenceRetentionService(database)
+    data_lifecycle = DataLifecycleFeature(
+        (
+            DataLifecycleTask(
+                "data.battle_reports",
+                lambda logical_time: battle_reports.cleanup(logical_time=logical_time),
+            ),
+            DataLifecycleTask(
+                "data.persistence",
+                lambda logical_time: persistence_retention.cleanup(logical_time=logical_time),
+            ),
+        )
+    )
     build_trials = BuildTrialFeature(
         database,
         content,
@@ -1125,6 +1142,7 @@ def build_game_services(
         actions=action_service,
         global_activities=registered_global_activities,
         battle_reports=battle_reports,
+        data_lifecycle=data_lifecycle,
         build_trials=build_trials,
         dimensional_disasters=dimensional_disasters,
         party=party,
@@ -1215,18 +1233,23 @@ def initialize_game_services() -> None:
         _services = None
     services = current_game_services()
     services.database.initialize()
+    logical_time = datetime.now(ZoneInfo(config.project.timezone))
+    ContentActivationStore(services.database).verify_or_initialize(
+        services.content.catalog.report,
+        logical_time=logical_time,
+    )
     services.activities.initialize(
         GLOBAL_ACTIVITY_SCOPE_ID,
-        logical_time=datetime.now(ZoneInfo(config.project.timezone)),
+        logical_time=logical_time,
     )
     services.economy.initialize(
-        logical_time=datetime.now(ZoneInfo(config.project.timezone)),
+        logical_time=logical_time,
     )
     services.lottery.initialize(
-        logical_time=datetime.now(ZoneInfo(config.project.timezone)),
+        logical_time=logical_time,
     )
     services.dimensional_disasters.maintain(
-        logical_time=datetime.now(ZoneInfo(config.project.timezone))
+        logical_time=logical_time
     )
 
 

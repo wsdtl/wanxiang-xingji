@@ -237,7 +237,7 @@ class BreakthroughFeature:
             for sequence, event in enumerate(
                 (*unlock.value.events, *restore_events, *inventory_outcome.value.events)
             ):
-                uow.append_outbox(
+                uow.append_fact(
                     transaction_id,
                     sequence,
                     event.kind,

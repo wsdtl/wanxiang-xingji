@@ -113,12 +113,12 @@ QQ 驱动器会把这些字段一次性转换为公共 `MessageIdentity`：群�
 ## 测试
 
 ```powershell
-.venv\Scripts\python.exe -X utf8 -B test\qq_driver_test.py
-.venv\Scripts\python.exe -X utf8 -B test\qq_event_normalization_test.py
-.venv\Scripts\python.exe -X utf8 -B test\qq_signature_test.py
-.venv\Scripts\python.exe -X utf8 -B test\qq_http_flow_test.py
-.venv\Scripts\python.exe -X utf8 -B test\qq_openapi_retry_test.py
-.venv\Scripts\python.exe -X utf8 -B test\qq_protocol_component_test.py
+.venv\Scripts\python.exe -X utf8 -B .test\qq_driver_test.py
+.venv\Scripts\python.exe -X utf8 -B .test\qq_event_normalization_test.py
+.venv\Scripts\python.exe -X utf8 -B .test\qq_signature_test.py
+.venv\Scripts\python.exe -X utf8 -B .test\qq_http_flow_test.py
+.venv\Scripts\python.exe -X utf8 -B .test\qq_openapi_retry_test.py
+.venv\Scripts\python.exe -X utf8 -B .test\qq_protocol_component_test.py
 ```
 
 修改事件字段、按钮协议、签名、队列或发送重试后，必须运行对应测试并使用真实 QQ 客户端完成至少一次消息和回调验证。

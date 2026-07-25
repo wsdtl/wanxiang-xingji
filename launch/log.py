@@ -20,10 +20,7 @@ import sys
 import loguru
 import inspect
 import logging
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from loguru import Logger
+from typing import Any
 
 from .config import config
 
@@ -33,7 +30,7 @@ COLOR_TAG_RE = re.compile(r"(\\*)(</?(?:[fb]g\s)?[^<>\s]*>)")
 
 
 # 项目全局 logger。业务代码优先从 launch 统一导入。
-logger: "Logger" = loguru.logger
+logger: Any = loguru.logger
 
 
 def source_name(record: dict) -> str:

@@ -421,7 +421,7 @@ class PersistedAccountService:
         event: AccountEvent,
         timestamp: str,
     ) -> None:
-        uow.append_outbox(
+        uow.append_fact(
             transaction_id,
             sequence,
             event.kind,

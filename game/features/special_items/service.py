@@ -105,7 +105,7 @@ class SpecialItemUseService:
                     timestamp,
                 )
                 for sequence, event in enumerate(events):
-                    uow.append_outbox(
+                    uow.append_fact(
                         command.id,
                         sequence,
                         event.kind,

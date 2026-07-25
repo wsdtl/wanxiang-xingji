@@ -302,7 +302,7 @@ def _record_execution(
         timestamp,
     )
     for sequence, event in enumerate(events):
-        uow.append_outbox(
+        uow.append_fact(
             transaction_id,
             sequence,
             event.kind,

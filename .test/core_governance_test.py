@@ -111,33 +111,33 @@ APPROVED_DYNAMIC_FIELDS = {
 
 # 每个领域版本必须由一个直接可运行的测试文件锁定。
 FOUNDATION_TESTS = {
-    "ACCOUNT_FOUNDATION_VERSION": "test/account_foundation_test.py",
-    "ACTION_FOUNDATION_VERSION": "test/action_foundation_test.py",
-    "BATTLE_AI_FOUNDATION_VERSION": "test/official_enemy_catalog_test.py",
-    "ACTIVITY_FOUNDATION_VERSION": "test/activity_foundation_test.py",
-    "CHARACTER_FOUNDATION_VERSION": "test/character_foundation_test.py",
-    "COMBAT_FOUNDATION_VERSION": "test/advanced_effects_test.py",
-    "CONTENT_FOUNDATION_VERSION": "test/content_assembly_test.py",
-    "CYCLE_FOUNDATION_VERSION": "test/cycle_foundation_test.py",
-    "DRAW_FOUNDATION_VERSION": "test/draw_foundation_test.py",
-    "ECONOMY_FOUNDATION_VERSION": "test/economy_foundation_test.py",
-    "ENEMY_FOUNDATION_VERSION": "test/official_enemy_catalog_test.py",
-    "EQUIPMENT_FOUNDATION_VERSION": "test/loadout_weapon_equipment_test.py",
-    "EXCHANGE_FOUNDATION_VERSION": "test/exchange_foundation_test.py",
-    "GRANT_FOUNDATION_VERSION": "test/grant_foundation_test.py",
-    "INSCRIPTION_FOUNDATION_VERSION": "test/inscription_foundation_test.py",
-    "INVENTORY_FOUNDATION_VERSION": "test/inventory_foundation_test.py",
-    "ITEMIZATION_FOUNDATION_VERSION": "test/itemization_foundation_test.py",
-    "LOADOUT_FOUNDATION_VERSION": "test/loadout_weapon_equipment_test.py",
-    "LOOT_FOUNDATION_VERSION": "test/loot_foundation_test.py",
-    "PARTY_FOUNDATION_VERSION": "test/party_foundation_test.py",
-    "PERSISTENCE_FOUNDATION_VERSION": "test/persistence_foundation_test.py",
-    "PROJECTION_FOUNDATION_VERSION": "test/projection_foundation_test.py",
-    "REWARD_FOUNDATION_VERSION": "test/reward_settlement_test.py",
-    "SOCIAL_FOUNDATION_VERSION": "test/social_foundation_test.py",
-    "VALUATION_FOUNDATION_VERSION": "test/itemization_foundation_test.py",
-    "WEAPON_FOUNDATION_VERSION": "test/loadout_weapon_equipment_test.py",
-    "WORLD_FOUNDATION_VERSION": "test/world_foundation_test.py",
+    "ACCOUNT_FOUNDATION_VERSION": ".test/account_foundation_test.py",
+    "ACTION_FOUNDATION_VERSION": ".test/action_foundation_test.py",
+    "BATTLE_AI_FOUNDATION_VERSION": ".test/official_enemy_catalog_test.py",
+    "ACTIVITY_FOUNDATION_VERSION": ".test/activity_foundation_test.py",
+    "CHARACTER_FOUNDATION_VERSION": ".test/character_foundation_test.py",
+    "COMBAT_FOUNDATION_VERSION": ".test/advanced_effects_test.py",
+    "CONTENT_FOUNDATION_VERSION": ".test/content_assembly_test.py",
+    "CYCLE_FOUNDATION_VERSION": ".test/cycle_foundation_test.py",
+    "DRAW_FOUNDATION_VERSION": ".test/draw_foundation_test.py",
+    "ECONOMY_FOUNDATION_VERSION": ".test/economy_foundation_test.py",
+    "ENEMY_FOUNDATION_VERSION": ".test/official_enemy_catalog_test.py",
+    "EQUIPMENT_FOUNDATION_VERSION": ".test/loadout_weapon_equipment_test.py",
+    "EXCHANGE_FOUNDATION_VERSION": ".test/exchange_foundation_test.py",
+    "GRANT_FOUNDATION_VERSION": ".test/grant_foundation_test.py",
+    "INSCRIPTION_FOUNDATION_VERSION": ".test/inscription_foundation_test.py",
+    "INVENTORY_FOUNDATION_VERSION": ".test/inventory_foundation_test.py",
+    "ITEMIZATION_FOUNDATION_VERSION": ".test/itemization_foundation_test.py",
+    "LOADOUT_FOUNDATION_VERSION": ".test/loadout_weapon_equipment_test.py",
+    "LOOT_FOUNDATION_VERSION": ".test/loot_foundation_test.py",
+    "PARTY_FOUNDATION_VERSION": ".test/party_foundation_test.py",
+    "PERSISTENCE_FOUNDATION_VERSION": ".test/persistence_foundation_test.py",
+    "PROJECTION_FOUNDATION_VERSION": ".test/projection_foundation_test.py",
+    "REWARD_FOUNDATION_VERSION": ".test/reward_settlement_test.py",
+    "SOCIAL_FOUNDATION_VERSION": ".test/social_foundation_test.py",
+    "VALUATION_FOUNDATION_VERSION": ".test/itemization_foundation_test.py",
+    "WEAPON_FOUNDATION_VERSION": ".test/loadout_weapon_equipment_test.py",
+    "WORLD_FOUNDATION_VERSION": ".test/world_foundation_test.py",
 }
 
 
@@ -345,8 +345,9 @@ def _assert_database_write_boundary() -> None:
     failures: list[str] = []
     for path in (ROOT / "game").rglob("*.py"):
         relative = path.relative_to(ROOT)
-        if _is_below(relative, Path("game/core/persistence")) or relative == Path(
-            "game/app.py"
+        if (
+            _is_below(relative, Path("game/core/persistence"))
+            or relative == Path("game/app.py")
         ):
             continue
         tree = _parse(path)
@@ -546,8 +547,8 @@ def _assert_changed_core_has_evidence() -> None:
     if not core_changes:
         return
     failures: list[str] = []
-    if not any(name.startswith("test/") and name.endswith("_test.py") for name in changed):
-        failures.append("核心有变更，但没有同步提交 test/*_test.py")
+    if not any(name.startswith(".test/") and name.endswith("_test.py") for name in changed):
+        failures.append("核心有变更，但没有同步提交 .test/*_test.py")
     if not any(
         name.endswith(".md")
         and (name.startswith("game/core/") or name.startswith("design/"))

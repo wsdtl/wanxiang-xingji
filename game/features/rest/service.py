@@ -345,7 +345,7 @@ class RestFeature:
             timestamp = logical_time.isoformat()
             sequence = len(action_outcome.value.execution.events)
             for offset, event in enumerate(character_events):
-                uow.append_outbox(
+                uow.append_fact(
                     operation_id,
                     sequence + offset,
                     event.kind,

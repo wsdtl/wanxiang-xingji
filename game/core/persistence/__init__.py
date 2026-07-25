@@ -1,6 +1,6 @@
 """协议和具体玩法无关的持久化联合事务基础设施。"""
 
-PERSISTENCE_FOUNDATION_VERSION = "persistence.foundation.v8"
+PERSISTENCE_FOUNDATION_VERSION = "persistence.foundation.v9"
 
 from .codec import StructuredJsonCodec
 from .actions import (
@@ -53,6 +53,15 @@ from .projections import (
     NotificationInboxService,
     ProjectionStore,
     RankingSnapshotStore,
+)
+from .retention import (
+    FACT_RETENTION,
+    PUBLISHED_DELIVERY_RETENTION,
+    READ_NOTIFICATION_RETENTION,
+    RETENTION_BATCH_SIZE,
+    UNREAD_NOTIFICATION_RETENTION,
+    PersistenceRetentionService,
+    RetentionReceipt,
 )
 from .exchange import PersistedExchangeExecution, PersistedExchangeService
 from .grants import PersistedGrantService
@@ -114,6 +123,7 @@ __all__ = [
     "CharacterCreationWorkflow",
     "EXCHANGE_AGGREGATE",
     "FactJournalService",
+    "FACT_RETENTION",
     "CommittedTransactionRow",
     "ConcurrencyConflict",
     "ContentActivation",
@@ -139,6 +149,8 @@ __all__ = [
     "PERSISTENCE_FOUNDATION_VERSION",
     "PERSISTENCE_SCHEMA_VERSION",
     "ProjectionStore",
+    "PersistenceRetentionService",
+    "PUBLISHED_DELIVERY_RETENTION",
     "PublicBattleReportRow",
     "PendingRuleEvent",
     "PersistedAccountService",
@@ -177,12 +189,16 @@ __all__ = [
     "REWARD_CLAIM_AGGREGATE",
     "SOCIAL_AGGREGATE",
     "RewardSettlementStorageKeys",
+    "READ_NOTIFICATION_RETENTION",
+    "RETENTION_BATCH_SIZE",
+    "RetentionReceipt",
     "RankingSnapshotStore",
     "SNAPSHOT_CODEC_VERSION",
     "SchemaVersionError",
     "SnapshotRepository",
     "SqliteDatabase",
     "SqliteUnitOfWork",
+    "UNREAD_NOTIFICATION_RETENTION",
     "StructuredJsonCodec",
     "TransactionMismatch",
     "WEAPON_AGGREGATE",

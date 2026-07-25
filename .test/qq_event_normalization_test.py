@@ -2,7 +2,7 @@
 
 运行方式：
 
-    python test/qq_event_normalization_test.py
+    python .test/qq_event_normalization_test.py
 """
 
 from __future__ import annotations

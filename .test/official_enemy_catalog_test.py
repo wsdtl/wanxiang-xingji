@@ -24,7 +24,9 @@ from game.content.catalog.enemy import (  # noqa: E402
     REGULAR_ENEMIES,
 )
 from game.content.catalog.weapon.blueprints import WEAPON_BLUEPRINTS  # noqa: E402
-from game.content.catalog.weapon.registry import OFFICIAL_WEAPON_MECHANICS  # noqa: E402
+from game.content.catalog.weapon.official_mechanics import (  # noqa: E402
+    OFFICIAL_WEAPON_MECHANICS,
+)
 from game.content.catalog.disaster.combat import DISASTER_ENEMY_DEFINITIONS  # noqa: E402
 from game.content.catalog.trial import (  # noqa: E402
     BUILD_TRIAL_TARGETS,
@@ -59,17 +61,11 @@ def main() -> None:
     assert BEHAVIOR_BLUEPRINTS
     assert BOSS_BLUEPRINTS
     assert all(
-        not hasattr(value, "source_weapon_key")
-        and value.mechanic_recipe_id.startswith("combat.recipe.")
+        not hasattr(value, "source_weapon_key") and value.mechanic_recipe_id.startswith("combat.recipe.")
         for value in BEHAVIOR_BLUEPRINTS
     )
-    recipe_ids = {
-        OFFICIAL_WEAPON_MECHANICS.recipe_id(value.key)
-        for value in WEAPON_BLUEPRINTS
-    }
-    assert {
-        value.mechanic_recipe_id for value in BEHAVIOR_BLUEPRINTS
-    } <= recipe_ids
+    recipe_ids = {OFFICIAL_WEAPON_MECHANICS.recipe_id(value.key) for value in WEAPON_BLUEPRINTS}
+    assert {value.mechanic_recipe_id for value in BEHAVIOR_BLUEPRINTS} <= recipe_ids
     assert REGULAR_ENEMIES
     assert PERSONAL_BOSS_ENEMIES
     assert PARTY_BOSS_ENEMIES
@@ -86,9 +82,7 @@ def main() -> None:
         *disaster_ids,
     }
     assert gameplay_ids <= set(catalog.enemies.definitions.ids())
-    assert {
-        f"enemy.behavior.{value.key}" for value in BEHAVIOR_BLUEPRINTS
-    } <= set(catalog.enemies.behaviors.ids())
+    assert {f"enemy.behavior.{value.key}" for value in BEHAVIOR_BLUEPRINTS} <= set(catalog.enemies.behaviors.ids())
     assert {
         PERSONAL_NORMAL_ENCOUNTER_ID,
         PERSONAL_ELITE_ENCOUNTER_ID,
@@ -97,9 +91,7 @@ def main() -> None:
     } <= set(catalog.enemies.encounters.ids())
     assert not gameplay_ids & trial_ids
     assert not any(
-        trial_ids & set(spawn.enemy_ids)
-        for encounter in catalog.enemies.encounters
-        for spawn in encounter.spawns
+        trial_ids & set(spawn.enemy_ids) for encounter in catalog.enemies.encounters for spawn in encounter.spawns
     )
     assert not personal_ids & party_ids
     assert not personal_ids & disaster_ids
@@ -125,18 +117,14 @@ def main() -> None:
         level=36,
         generation_seed="elite-demo",
         random=SeededRandomSource("elite-demo"),
-        behavior_weights=cultivation.enemy_behavior_profiles.require(
-            cultivation.world.id
-        ).behavior_weights,
+        behavior_weights=cultivation.enemy_behavior_profiles.require(cultivation.world.id).behavior_weights,
     )
     repeated = generator.generate(
         PERSONAL_ELITE_ENCOUNTER_ID,
         level=36,
         generation_seed="elite-demo",
         random=SeededRandomSource("elite-demo"),
-        behavior_weights=cultivation.enemy_behavior_profiles.require(
-            cultivation.world.id
-        ).behavior_weights,
+        behavior_weights=cultivation.enemy_behavior_profiles.require(cultivation.world.id).behavior_weights,
     )
     assert first == repeated
     assert len(first.enemies) == 1
@@ -151,9 +139,7 @@ def main() -> None:
             generation_seed=f"elite-variety:{index}",
             random=SeededRandomSource(f"elite-variety:{index}"),
             allowed_enemy_ids=frozenset({elite.definition_id}),
-            behavior_weights=cultivation.enemy_behavior_profiles.require(
-                cultivation.world.id
-            ).behavior_weights,
+            behavior_weights=cultivation.enemy_behavior_profiles.require(cultivation.world.id).behavior_weights,
         ).enemies[0]
         same_identity_builds.add(generated.behavior_ids)
         _assert_compatible_loadout(catalog, generated)
@@ -171,19 +157,20 @@ def main() -> None:
         generation_seed="boss-demo",
         random=SeededRandomSource("boss-demo"),
         allowed_enemy_ids=frozenset({"enemy.boss.nine_headed_plague"}),
-        behavior_weights=cultivation.enemy_behavior_profiles.require(
-            cultivation.world.id
-        ).behavior_weights,
+        behavior_weights=cultivation.enemy_behavior_profiles.require(cultivation.world.id).behavior_weights,
     )
     boss = boss_encounter.enemies[0]
     assert len(boss.behavior_ids) == 3
     assert len(boss.phase_loadouts) == 2
-    assert len(
-        {
-            *boss.behavior_ids,
-            *(behavior_id for phase in boss.phase_loadouts for behavior_id in phase.behavior_ids),
-        }
-    ) == 5
+    assert (
+        len(
+            {
+                *boss.behavior_ids,
+                *(behavior_id for phase in boss.phase_loadouts for behavior_id in phase.behavior_ids),
+            }
+        )
+        == 5
+    )
     assert cultivation.enemy_projector.enemy(boss).name == "化蛇·洪涛妖君"
     assert magic.enemy_projector.enemy(boss).name == "九头蛇·沼泽暴君"
     _assert_compatible_loadout(catalog, boss)
@@ -304,29 +291,20 @@ def _assert_all_behavior_abilities_execute(content) -> None:
         )
         assert outcome.failure is None, (behavior.id, outcome.failure)
         assert outcome.value is not None
-        unknown = {
-            str(event.kind) for event in outcome.value.events
-        } - KNOWN_BATTLE_EVENT_KINDS
+        unknown = {str(event.kind) for event in outcome.value.events} - KNOWN_BATTLE_EVENT_KINDS
         assert not unknown, (behavior.id, unknown)
         covered.add(behavior.id)
     assert covered == set(catalog.enemies.behaviors.ids())
     assert all(
         set(profile.behavior_weights) == covered
-        for profile in (
-            content.enemy_behavior_profiles.require(world_id)
-            for world_id in content.worlds.world_ids()
-        )
+        for profile in (content.enemy_behavior_profiles.require(world_id) for world_id in content.worlds.world_ids())
     )
 
 
 def _assert_compatible_loadout(catalog, enemy: EnemyInstance) -> None:
     behavior_ids = [
         *enemy.behavior_ids,
-        *(
-            behavior_id
-            for phase in enemy.phase_loadouts
-            for behavior_id in phase.behavior_ids
-        ),
+        *(behavior_id for phase in enemy.phase_loadouts for behavior_id in phase.behavior_ids),
     ]
     assert len(behavior_ids) == len(set(behavior_ids))
     for behavior_id in behavior_ids:

@@ -1,4 +1,4 @@
-"""装备随机词条覆盖、品质分位和套装累计价值的快速审计。"""
+"""基于正式装备生成器执行词条、品质与套装价值审计。"""
 
 from __future__ import annotations
 
@@ -8,17 +8,12 @@ from hashlib import sha256
 from types import MappingProxyType
 from typing import Mapping
 
-from game.core.gameplay import (
-    EquipmentCatalog,
-    ItemGenerationCommand,
-    ItemizationEngine,
-    RuleContext,
-    Ruleset,
-    SeededRandomSource,
-    ValuationEngine,
-)
-
-from .properties import EQUIPMENT_GENERATION_PROFILE_ID
+from game.content.catalog.equipment.properties import EQUIPMENT_GENERATION_PROFILE_ID
+from game.core.gameplay.context import RuleContext, Ruleset, SeededRandomSource
+from game.core.gameplay.equipment.models import EquipmentCatalog
+from game.core.gameplay.itemization.engine import ItemizationEngine
+from game.core.gameplay.itemization.models import ItemGenerationCommand
+from game.core.gameplay.valuation.engine import ValuationEngine
 
 
 @dataclass(frozen=True)
@@ -83,9 +78,7 @@ class EquipmentBalanceAuditor:
             raise ValueError("装备平衡审计样本数必须大于 0")
         if not content_fingerprint.strip():
             raise ValueError("装备平衡审计缺少内容指纹")
-        profile = self.itemization.catalog.require_profile(
-            EQUIPMENT_GENERATION_PROFILE_ID
-        )
+        profile = self.itemization.catalog.require_profile(EQUIPMENT_GENERATION_PROFILE_ID)
         quality_counts: dict[str, int] = {}
         property_counts = {property_id: 0 for property_id in profile.property_ids}
         tier_counts: dict[tuple[str, int], int] = {}
@@ -118,10 +111,7 @@ class EquipmentBalanceAuditor:
                 key = (rolled.property_id, rolled.tier)
                 tier_counts[key] = tier_counts.get(key, 0) + 1
         ordered = sorted(values)
-        quantiles = {
-            value: _quantile(ordered, value)
-            for value in (0.45, 0.76, 0.91, 0.985)
-        }
+        quantiles = {value: _quantile(ordered, value) for value in (0.45, 0.76, 0.91, 0.985)}
         return EquipmentBalanceReport(
             samples,
             quality_counts,
@@ -141,10 +131,7 @@ class EquipmentBalanceAuditor:
             cumulative = 0.0
             values: dict[int, float] = {}
             for bonus in definition.bonuses:
-                cumulative += self.valuation.evaluate(
-                    bonus.contribution,
-                    strict=True,
-                ).value.total
+                cumulative += self.valuation.evaluate(bonus.contribution, strict=True).value.total
                 values[bonus.required_pieces] = cumulative
             result[definition.id] = values
         return result

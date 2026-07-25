@@ -221,7 +221,7 @@ class PersistedActionService:
             timestamp,
         )
         for sequence, event in enumerate(execution.events):
-            uow.append_outbox(
+            uow.append_fact(
                 transaction.id,
                 sequence,
                 event.kind,

@@ -165,6 +165,10 @@ class MagnitudeRegistration:
     value_type: type[object]
     evaluator: Callable[[object, MagnitudeContext], float]
     validator: Callable[[object, frozenset[str], frozenset[str]], None] | None = None
+    implementation_version: int = 1
+
+    def __post_init__(self) -> None:
+        _validate_implementation_version(self.implementation_version)
 
 
 @dataclass(frozen=True)
@@ -172,6 +176,10 @@ class ConditionRegistration:
     value_type: type[object]
     handler: Callable[[object, ConditionContext], bool]
     validator: Callable[[object, ConditionReferences], None] | None = None
+    implementation_version: int = 1
+
+    def __post_init__(self) -> None:
+        _validate_implementation_version(self.implementation_version)
 
 
 @dataclass(frozen=True)
@@ -179,15 +187,21 @@ class EffectOperationRegistration:
     value_type: type[object]
     handler: Callable[[object, EffectOperationContext], EffectContribution]
     validator: Callable[[object, RuleReferences], None] | None = None
+    implementation_version: int = 1
+
+    def __post_init__(self) -> None:
+        _validate_implementation_version(self.implementation_version)
 
 
 @dataclass(frozen=True)
 class InterceptorHandlerRegistration:
     id: StableId
     handler: InterceptorHandler
+    implementation_version: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", stable_id(self.id, field="interceptor handler id"))
+        _validate_implementation_version(self.implementation_version)
 
 
 @dataclass(frozen=True)
@@ -195,9 +209,16 @@ class TargetSelectorRegistration:
     id: StableId
     selector: TargetSelector
     automatic_request: AutomaticTargetRequest | None = None
+    implementation_version: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", stable_id(self.id, field="target selector id"))
+        _validate_implementation_version(self.implementation_version)
+
+
+def _validate_implementation_version(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("扩展实现版本必须是大于 0 的整数")
 
 
 @dataclass(frozen=True)

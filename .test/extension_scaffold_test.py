@@ -1,0 +1,61 @@
+"""扩展脚手架必须安全、可重复审计且不污染正式发现。"""
+
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import sys
+from tempfile import TemporaryDirectory
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+OPS_SPEC = spec_from_file_location("xiuxian_ops", ROOT / ".ops" / "__main__.py")
+assert OPS_SPEC is not None and OPS_SPEC.loader is not None
+OPS_MODULE = module_from_spec(OPS_SPEC)
+OPS_SPEC.loader.exec_module(OPS_MODULE)
+scaffold_extension = OPS_MODULE.scaffold_extension
+
+
+def main() -> None:
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        world_root = root / "game" / "content" / "extensions" / "official"
+        content_root = root / "game" / "content" / "extensions" / "official_content"
+        world_root.mkdir(parents=True)
+        content_root.mkdir(parents=True)
+
+        world = scaffold_extension("world", "fourth_world", root=root)
+        content = scaffold_extension("content", "new_armaments", root=root)
+        assert world.name == "_fourth_world"
+        assert content.name == "_new_armaments"
+        assert "WORLD_EXTENSION" in (world / "extension.py").read_text(encoding="utf-8")
+        assert "CONTENT_EXTENSION" in (content / "extension.py").read_text(encoding="utf-8")
+
+        for invalid in ("FourthWorld", "fourth-world", "_hidden", "class", "世界"):
+            try:
+                scaffold_extension("world", invalid, root=root)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"脚手架接受了非法模块名：{invalid}")
+
+        try:
+            scaffold_extension("world", "fourth_world", root=root)
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("脚手架不得覆盖已有扩展草稿")
+
+        assert (
+            spec_from_file_location(
+                "draft_world_extension",
+                world / "extension.py",
+            )
+            is not None
+        )
+    print("extension scaffold tests passed")
+
+
+if __name__ == "__main__":
+    main()

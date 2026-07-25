@@ -82,7 +82,13 @@ ACTIVE_FEATURE_MANIFESTS = (
         "battle_report",
         "保存、公开读取和清理跨战斗模式共用的战报",
         ("战报",),
-        ("game_battle_report_cleanup",),
+    ),
+    FeatureManifest(
+        "data_lifecycle",
+        "data_lifecycle",
+        "统一执行各领域登记的短期数据清理",
+        ("数据维护",),
+        scheduled_jobs=("game_data_lifecycle_cleanup",),
     ),
     FeatureManifest(
         "companion",

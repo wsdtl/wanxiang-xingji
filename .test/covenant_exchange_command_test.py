@@ -13,8 +13,8 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-if str(ROOT / "test") not in sys.path:
-    sys.path.insert(0, str(ROOT / "test"))
+if str(ROOT / ".test") not in sys.path:
+    sys.path.insert(0, str(ROOT / ".test"))
 
 from covenant_exchange_test import _grant_stack, _inventory  # noqa: E402
 from game.app import build_game_services, install_game_services, restore_game_services  # noqa: E402

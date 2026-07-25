@@ -1,4 +1,4 @@
-"""装备名录的稳定入口；蓝图、属性编译和审计器不向根名录泄漏。"""
+"""装备名录的稳定入口；蓝图和属性编译按需从子模块导入。"""
 
 from .definitions import (
     equipment_definition_id,

@@ -101,7 +101,7 @@ class PersistedLootService:
                     timestamp,
                 )
                 for sequence, event in enumerate(outcome.value.events):
-                    uow.append_outbox(
+                    uow.append_fact(
                         command.id,
                         sequence,
                         event.kind,

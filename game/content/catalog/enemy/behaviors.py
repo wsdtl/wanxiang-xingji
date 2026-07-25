@@ -17,7 +17,7 @@ from game.core.gameplay import (
 )
 
 from ..weapon.mechanics import WEAPON_MECHANIC_CONTENT
-from ..weapon.registry import OFFICIAL_WEAPON_MECHANICS
+from ..weapon.official_mechanics import OFFICIAL_WEAPON_MECHANICS
 from .blueprints import BEHAVIOR_BLUEPRINTS
 
 
@@ -46,9 +46,7 @@ def _selector(targeting: BattleAbilityTargeting) -> str:
 
 def build_enemy_behavior_content() -> EnemyBehaviorContent:
     source_abilities = {
-        OFFICIAL_WEAPON_MECHANICS.recipe_id(
-            str(value.id).removeprefix("ability.weapon.")
-        ): value
+        OFFICIAL_WEAPON_MECHANICS.recipe_id(str(value.id).removeprefix("ability.weapon.")): value
         for value in WEAPON_MECHANIC_CONTENT.abilities
     }
     source_targeting = {value.ability_id: value for value in WEAPON_MECHANIC_CONTENT.targeting}
@@ -66,10 +64,7 @@ def build_enemy_behavior_content() -> EnemyBehaviorContent:
         try:
             source = source_abilities[blueprint.mechanic_recipe_id]
         except KeyError as error:
-            raise ValueError(
-                f"敌人行为 {blueprint.key} 引用了未知机制配方："
-                f"{blueprint.mechanic_recipe_id}"
-            ) from error
+            raise ValueError(f"敌人行为 {blueprint.key} 引用了未知机制配方：{blueprint.mechanic_recipe_id}") from error
         source_id = source.id
         ability_id = f"ability.enemy.{blueprint.key}"
         behavior_id = f"enemy.behavior.{blueprint.key}"

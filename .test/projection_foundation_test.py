@@ -53,7 +53,7 @@ def main() -> None:
 def _append_fact(database: SqliteDatabase) -> None:
     with database.unit_of_work() as uow:
         uow.insert_transaction("fact-tx-1", "fingerprint-1", "account-a", "{}", TIME.isoformat())
-        uow.append_outbox(
+        uow.append_fact(
             "fact-tx-1",
             0,
             "activity.contribution.recorded",
@@ -67,9 +67,6 @@ def _assert_fact_survives_outbox_publish(database: SqliteDatabase) -> None:
     facts = FactJournalService(database)
     first = facts.list()
     assert len(first) == 1 and first[0].offset == 1
-    with database.unit_of_work() as uow:
-        uow.mark_outbox_published("fact-tx-1", 0, (TIME + timedelta(seconds=1)).isoformat())
-        uow.commit()
     assert facts.list() == first
     assert facts.list(kinds=("activity.contribution.recorded",)) == first
 

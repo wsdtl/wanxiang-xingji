@@ -231,7 +231,7 @@ class CompanionFeature:
                 logical_time.isoformat(),
             )
             for sequence, event in enumerate(inventory_outcome.value.events):
-                uow.append_outbox(
+                uow.append_fact(
                     transaction_id,
                     sequence,
                     event.kind,

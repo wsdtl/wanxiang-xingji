@@ -392,7 +392,7 @@ def _assert_persistence_replay():
             assert stored.reference_number("weapon-1") == weapon_reference
             assert stored.next_reference_number == next_reference_number
             assert stored.instances["weapon-1"].data[INSCRIPTION_DATA_KEY].asset_name == "青云剑"
-            assert len(uow.pending_outbox(limit=10)) == 2
+            assert uow.pending_outbox(limit=10) == ()
 
         preference = service.initialize_preference("player.one", logical_time=TIME)
         assert preference.show_original_name
