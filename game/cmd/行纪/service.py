@@ -8,12 +8,11 @@ from game.app import CharacterOverview, CharacterOverviewResult, current_game_se
 from game.content.catalog import PRIMARY_CURRENCY_ID
 from game.content.catalog.world import LOCATION_FUNCTION_EXPLORATION
 from game.content.catalog.world_progress import WORLD_PROGRESS_DEFINITION
-from launch import C, logger
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
-from ..reply import send_game_reply
+from ..reply import send_command_failure, send_game_reply
 
 
 async def view_world_progress(message: str, result: CharacterOverviewResult) -> None:
@@ -36,12 +35,18 @@ async def view_world_progress(message: str, result: CharacterOverviewResult) -> 
         else:
             reply = _world_overview(progress, view)
     except (KeyError, TypeError, ValueError) as exc:
-        reply = _failure(str(exc))
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("行纪查询失败"), C.kv("character", overview.character.id))
+        reply = _failure(
+            str(exc),
+            Action("progress.back", "返回行纪", "行纪", style="secondary"),
         )
-        reply = _failure("当前没有读取到行纪，请稍后重试")
+    except Exception as exc:
+        await send_command_failure(
+            "行纪查询失败",
+            overview.character.id,
+            exc,
+            _failure("当前没有读取到行纪，请稍后重试"),
+        )
+        return
     await send_game_reply(reply)
 
 
@@ -68,12 +73,18 @@ async def view_world_progress_ranking(
         )
         reply = _ranking(ranking, view)
     except (KeyError, TypeError, ValueError) as exc:
-        reply = _failure(str(exc))
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("行纪排行查询失败"), C.kv("character", overview.character.id))
+        reply = _failure(
+            str(exc),
+            Action("progress-ranking.back", "返回行纪", "行纪", style="secondary"),
         )
-        reply = _failure("当前没有读取到行纪排行，请稍后重试")
+    except Exception as exc:
+        await send_command_failure(
+            "行纪排行查询失败",
+            overview.character.id,
+            exc,
+            _failure("当前没有读取到行纪排行，请稍后重试"),
+        )
+        return
     await send_game_reply(reply)
 
 
@@ -93,7 +104,7 @@ def _world_overview(progress, view) -> DocumentMessage:
         name = _region_name(services, view, region.region_id)
         builder.line(
             "[完成] " if region.completed else "",
-            name,
+            M.command(name, f"行纪 {name}"),
             FieldSeparator(),
             f"{region.percent}%",
         )
@@ -147,7 +158,11 @@ def _region_detail(requested: str, progress, view) -> DocumentMessage:
         builder.note("这处区域的行纪已经写至圆满。")
     else:
         builder.note(f"距离下一阶段还差 {next_stage - region.percent}%")
-    return builder.build()
+    return (
+        builder.action(
+            Action("progress.back", "返回行纪", "行纪", style="secondary")
+        ).build()
+    )
 
 
 def _ranking(ranking, view) -> DocumentMessage:
@@ -211,8 +226,11 @@ def _overview(result: CharacterOverviewResult) -> CharacterOverview | None:
     return result.overview if result.status == "ok" else None
 
 
-def _failure(message: str) -> DocumentMessage:
-    return M.document().section("行纪", icon="notice").line(message).build()
+def _failure(message: str, recovery: Action | None = None) -> DocumentMessage:
+    builder = M.document().section("行纪", icon="notice").line(message)
+    if recovery is not None:
+        builder.action(recovery)
+    return builder.build()
 
 
 __all__ = ["view_world_progress", "view_world_progress_ranking"]

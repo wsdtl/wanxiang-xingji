@@ -127,7 +127,7 @@ async def transfer(message: str = "", current=Depends(current_character)) -> Non
     ),
 )
 async def disband(current=Depends(current_character)) -> None:
-    await party.preview_disband(current)
+    await party.disband(current)
 
 
 @GameCommand.handler(cmd="party_disband_confirm", hidden=True)

@@ -44,7 +44,24 @@ async def create(current: CurrentCharacterResult) -> None:
             logical_time=shared.command_time(),
         )
         if result.status == "created" and result.party is not None:
-            reply = shared.success("队伍", "队伍已经创建，你现在是队长")
+            reply = (
+                M.document()
+                .section("队伍", icon="player")
+                .line("队伍已经创建，你现在是队长")
+                .actions(
+                    (
+                        Action("party.challenge", "组队挑战", "组队挑战"),
+                        Action(
+                            "party.invite",
+                            "邀请",
+                            "邀请组队 ",
+                            behavior="fill",
+                            style="secondary",
+                        ),
+                    )
+                )
+                .build()
+            )
         elif result.status == "already_member":
             reply = shared.failure("你已经在一支队伍中")
         else:
@@ -123,7 +140,13 @@ async def _resolve_invitation(message, current, *, accepted: bool) -> None:
             logical_time=shared.command_time(),
         )
         if accepted and result.status == "accepted":
-            reply = shared.success("组队", "已经加入队伍")
+            reply = (
+                M.document()
+                .section("组队", icon="player")
+                .line("已经加入队伍")
+                .action(Action("party.challenge", "组队挑战", "组队挑战"))
+                .build()
+            )
         elif not accepted and result.status == "rejected":
             reply = shared.success("组队", "已经拒绝这份队伍邀请")
         else:
@@ -145,7 +168,7 @@ async def transfer(message: str, current: CurrentCharacterResult) -> None:
     await _target_action(current, message, "transfer", "转让队长", "已经转让队长")
 
 
-async def preview_disband(current: CurrentCharacterResult) -> None:
+async def disband(current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
         await send_game_reply(shared.failure("当前没有可用角色"))
@@ -163,23 +186,20 @@ async def preview_disband(current: CurrentCharacterResult) -> None:
         if party.leader_id != character.id:
             await send_game_reply(shared.failure("只有队长可以解散队伍"))
             return
+        disbanded = await asyncio.to_thread(
+            current_game_services().party.disband,
+            shared.operation_id("party-disband"),
+            character.id,
+            expected_revision=result.state_revision,
+            logical_time=shared.command_time(),
+        )
         await send_game_reply(
-            M.document()
-            .section("确认解散队伍", icon="notice")
-            .line(f"解散后，当前 {len(party.members)} 名成员的队伍关系会立即结束。")
-            .actions((
-                Action(
-                    "party.disband.confirm",
-                    "确认解散",
-                    f"party_disband_confirm {result.state_revision}",
-                    behavior="send",
-                    style="secondary",
-                ),
-            ))
-            .build()
+            shared.success("组队", "队伍已经解散")
+            if disbanded.status == "disbanded"
+            else shared.failure(disbanded.failure_message or "队伍解散没有完成")
         )
     except Exception as exc:
-        await shared.failed("解散队伍预览失败", character.id, exc)
+        await shared.failed("解散队伍失败", character.id, exc)
 
 
 async def confirm_disband(message: str, current: CurrentCharacterResult) -> None:
@@ -202,7 +222,12 @@ async def confirm_disband(message: str, current: CurrentCharacterResult) -> None
             else shared.failure(result.failure_message or "队伍解散没有完成")
         )
     except ValueError:
-        await send_game_reply(shared.failure("解散确认已经失效"))
+        await send_game_reply(
+            shared.failure(
+                "解散确认已经失效",
+                Action("party.disband.back", "返回队伍", "队伍", style="secondary"),
+            )
+        )
     except Exception as exc:
         await shared.failed("解散队伍失败", character.id, exc)
 
@@ -292,27 +317,42 @@ def _view_message(
                 FieldSeparator(),
                 ready,
             )
-        actions.append(Action("party.leave", "退出", "退出队伍", behavior="send"))
+        actions.append(Action("party.challenge", "组队挑战", "组队挑战", behavior="send"))
         if party.leader_id == character_id:
-            actions.append(
-                Action(
-                    "party.disband",
-                    "解散",
-                    "解散队伍",
-                    behavior="send",
-                    style="secondary",
+            actions.extend(
+                (
+                    Action(
+                        "party.invite",
+                        "邀请",
+                        "邀请组队 ",
+                        behavior="fill",
+                        style="secondary",
+                    ),
+                    Action(
+                        "party.sparring",
+                        "组队切磋",
+                        "组队切磋 ",
+                        behavior="fill",
+                        style="secondary",
+                    ),
+                    Action(
+                        "party.disband",
+                        "解散",
+                        "解散队伍",
+                        behavior="send",
+                        style="secondary",
+                    ),
                 )
             )
-        actions.extend((
-            Action("party.ready", "准备", "准备", behavior="send"),
+        actions.append(
             Action(
-                "party.unready",
-                "取消准备",
-                "取消准备",
+                "party.leave",
+                "退出",
+                "退出队伍",
                 behavior="send",
                 style="secondary",
-            ),
-        ))
+            )
+        )
     if requests:
         builder.section("队伍邀请", icon="message")
         for request in requests:
@@ -346,7 +386,7 @@ __all__ = [
     "invite",
     "kick",
     "leave",
-    "preview_disband",
+    "disband",
     "reject",
     "transfer",
     "view",

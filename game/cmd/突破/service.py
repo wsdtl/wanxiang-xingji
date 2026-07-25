@@ -12,12 +12,11 @@ from game.content import (
 )
 from game.core.gameplay import CharacterState
 from game.features.breakthrough import BreakthroughResult
-from launch import C, logger
 from launch.adapter import MessageContext
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time
-from ..reply import send_game_reply
+from ..reply import send_command_failure, send_game_reply
 
 
 async def breakthrough(
@@ -39,10 +38,12 @@ async def breakthrough(
             logical_time=command_time(),
         )
     except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("境界突破失败"), C.kv("character", character.id))
+        await send_command_failure(
+            "境界突破失败",
+            character.id,
+            exc,
+            _failure("当前突破没有完成，请稍后重试"),
         )
-        await send_game_reply(_failure("当前突破没有完成，请稍后重试"))
         return
     view = services.world_view(dimension).projector
     await send_game_reply(_result_message(result, view))
@@ -81,6 +82,14 @@ def _result_message(result: BreakthroughResult, projector) -> DocumentMessage:
             .section("境界突破", icon="notice")
             .field("当前境界", realm_name)
             .line(f"缺少 {projector.name(BREAKTHROUGH_TOKEN_ITEM_ID)}")
+            .action(
+                Action(
+                    "breakthrough.draw_pool",
+                    "查看奖池",
+                    "抽奖奖池",
+                    style="secondary",
+                )
+            )
             .build()
         )
     if result.status == "experience_incomplete":
@@ -90,6 +99,7 @@ def _result_message(result: BreakthroughResult, projector) -> DocumentMessage:
             .section("境界突破", icon="notice")
             .field("当前境界", realm_name)
             .line(f"经验尚未积满：{progression.experience}/{required}")
+            .action(Action("breakthrough.explore", "前往探险", "探险", style="secondary"))
             .build()
         )
     if result.status == "not_at_cap":
@@ -97,6 +107,7 @@ def _result_message(result: BreakthroughResult, projector) -> DocumentMessage:
             M.document()
             .section("境界突破", icon="notice")
             .line(f"当前为 {realm_name} Lv{progression.level}，尚未到达关隘")
+            .action(Action("breakthrough.explore", "前往探险", "探险", style="secondary"))
             .build()
         )
     return _failure(result.failure_message or "当前不能突破")

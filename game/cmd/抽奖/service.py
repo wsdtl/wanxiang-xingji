@@ -26,13 +26,12 @@ from game.content import (
     PRIMARY_CURRENCY_ID,
 )
 from game.features.draw import DrawHistoryRecord, DrawOperationResult
-from launch import C, logger
 from launch.adapter import current_message_context
 from launch.paths import public_url, static_path
 from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time
-from ..reply import send_game_reply
+from ..reply import send_command_failure, send_game_reply
 
 
 DRAW_ANIMATION_VERSION = "20260720"
@@ -75,10 +74,12 @@ async def draw(current: CurrentCharacterResult, rolls: int) -> None:
         view = services.world_view(current.character_world)
         await send_game_reply(_result_message(result, view.projector, rolls))
     except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("抽奖命令失败"), C.kv("character", character.id))
+        await send_command_failure(
+            "抽奖命令失败",
+            character.id,
+            exc,
+            _failure("当前操作没有完成，请稍后重试"),
         )
-        await send_game_reply(_failure("当前操作没有完成，请稍后重试"))
 
 
 async def pool(current: CurrentCharacterResult) -> None:
@@ -123,10 +124,12 @@ async def pool(current: CurrentCharacterResult) -> None:
         ).actions(_actions())
         await send_game_reply(builder.build())
     except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("抽奖奖池查询失败"), C.kv("character", character.id))
+        await send_command_failure(
+            "抽奖奖池查询失败",
+            character.id,
+            exc,
+            _failure("当前没有读取到奖池状态，请稍后重试"),
         )
-        await send_game_reply(_failure("当前没有读取到奖池状态"))
 
 
 async def history(current: CurrentCharacterResult) -> None:
@@ -150,10 +153,12 @@ async def history(current: CurrentCharacterResult) -> None:
         builder.actions(_actions())
         await send_game_reply(builder.build())
     except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("抽奖记录查询失败"), C.kv("character", character.id))
+        await send_command_failure(
+            "抽奖记录查询失败",
+            character.id,
+            exc,
+            _failure("当前没有读取到抽奖记录，请稍后重试"),
         )
-        await send_game_reply(_failure("当前没有读取到抽奖记录"))
 
 
 def _result_message(result: DrawOperationResult, projector, rolls: int) -> DocumentMessage:
@@ -164,6 +169,7 @@ def _result_message(result: DrawOperationResult, projector, rolls: int) -> Docum
             .line(result.failure_message)
             .field("持有", f"{result.ticket_count} 张")
             .note("抽奖签由战斗余响凝成，会从探险、组队首领和跨界灾厄中掉落")
+            .action(Action("draw.explore", "前往探险", "探险", style="secondary"))
             .build()
         )
     if result.status not in {"drawn", "replayed"} or result.record is None:
@@ -239,8 +245,8 @@ def _animation_url(rolls: int, tier: str) -> str:
 
 def _actions() -> tuple[Action, ...]:
     return (
-        Action("draw-once", "抽奖", "抽奖", behavior="send"),
-        Action("draw-ten", "十连", "十连抽奖", behavior="send"),
+        Action("draw-once", "单抽（1张）", "抽奖", behavior="send"),
+        Action("draw-ten", "十连（10张）", "十连抽奖", behavior="send"),
         Action("draw-pool", "奖池", "抽奖奖池", behavior="send", style="secondary"),
     )
 

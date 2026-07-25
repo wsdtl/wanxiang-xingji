@@ -12,12 +12,11 @@ from game.content.catalog.world import (
     LOCATION_FUNCTION_EXPLORATION,
 )
 from game.features.world_travel import WorldLocationIntent
-from launch import C, logger
 from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
-from ..reply import send_game_reply
+from ..reply import send_command_failure, send_game_reply
 
 
 _REGION_KIND_NAMES = {
@@ -68,10 +67,13 @@ async def view_map(message: str, result: CharacterOverviewResult) -> None:
     except (KeyError, TypeError, ValueError) as exc:
         reply = _failure(str(exc))
     except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("地图查询失败"), C.kv("character", overview.character.id))
+        await send_command_failure(
+            "地图查询失败",
+            overview.character.id,
+            exc,
+            _failure("当前没有读取到地图，请稍后重试"),
         )
-        reply = _failure("当前没有读取到地图，请稍后重试")
+        return
     await send_game_reply(reply)
 
 
@@ -209,9 +211,10 @@ def _location_detail(
 
 def _map_line(resolved, current, view, detail: str):
     marker = "[当前] " if current is not None and current.anchor.id == resolved.anchor.id else ""
+    location_name = view.projector.name(resolved.display_id)
     return (
         marker,
-        view.projector.name(resolved.display_id),
+        M.command(location_name, f"地图 {location_name}"),
         FieldSeparator(),
         _coordinates(resolved),
         FieldSeparator(),

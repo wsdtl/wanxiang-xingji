@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from game.app import CharacterOverviewResult, current_game_services
-from launch import C, logger
+from message import Action
 
 from ..lore_presentation import (
     world_lore_failure_message,
@@ -13,7 +13,7 @@ from ..lore_presentation import (
     world_lore_record_message,
 )
 from ..command_helpers import command_time
-from ..reply import send_game_reply
+from ..reply import send_command_failure, send_game_reply
 
 
 async def view_world_lore(message: str, result: CharacterOverviewResult) -> None:
@@ -22,6 +22,7 @@ async def view_world_lore(message: str, result: CharacterOverviewResult) -> None
         await send_game_reply(world_lore_failure_message("当前没有读取到角色状态，请稍后重试"))
         return
     services = current_game_services()
+    world_view = None
     try:
         world_token, record_number = _parse_request(message)
         world_view = (
@@ -64,15 +65,25 @@ async def view_world_lore(message: str, result: CharacterOverviewResult) -> None
                 logical_time=command_time(),
             )
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(world_lore_failure_message(str(exc)))
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(
-                C.fail("世界志查询失败"),
-                C.kv("character", overview.character.id),
+        command = f"世界志 {world_view.skin.name}" if world_view is not None else "世界志"
+        await send_game_reply(
+            world_lore_failure_message(
+                str(exc),
+                Action(
+                    "world-lore.recover",
+                    "返回世界志",
+                    command,
+                    style="secondary",
+                ),
             )
         )
-        await send_game_reply(world_lore_failure_message("当前没有读取到世界志，请稍后重试"))
+    except Exception as exc:
+        await send_command_failure(
+            "世界志查询失败",
+            overview.character.id,
+            exc,
+            world_lore_failure_message("当前没有读取到世界志，请稍后重试"),
+        )
 
 
 def _parse_request(message: str) -> tuple[str, int | None]:

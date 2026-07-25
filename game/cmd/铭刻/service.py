@@ -1,4 +1,4 @@
-"""铭刻命令解析、预览、确认与协议中立展示。"""
+"""铭刻命令解析、直接执行与协议中立展示。"""
 
 from __future__ import annotations
 
@@ -28,11 +28,13 @@ from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time, current_character_value
+from ..interaction import (
+    DEFAULT_PAGE_SIZE,
+    paginate,
+    pagination_actions,
+    parse_page_number,
+)
 from ..reply import send_command_failure, send_game_reply
-from ..reply_intents import reply_intents
-
-
-_LIST_LIMIT = 8
 
 
 async def inscription(message: str, current: CurrentCharacterResult) -> None:
@@ -46,10 +48,19 @@ async def inscription(message: str, current: CurrentCharacterResult) -> None:
         return
     requested = str(message or "").strip()
     view = current_game_services().world_view(overview.character_world)
-    if not requested:
-        await send_game_reply(
-            _inscription_home(overview.inventory, overview.inscription_preference, view)
-        )
+    if not requested or (len(requested.split()) == 1 and requested.isdigit()):
+        try:
+            page = parse_page_number(requested)
+            await send_game_reply(
+                _inscription_home(
+                    overview.inventory,
+                    overview.inscription_preference,
+                    view,
+                    page,
+                )
+            )
+        except ValueError as exc:
+            await send_game_reply(_invalid(str(exc)))
         return
     parts = requested.split(maxsplit=2)
     if len(parts) != 3:
@@ -63,16 +74,18 @@ async def inscription(message: str, current: CurrentCharacterResult) -> None:
     except (KeyError, TypeError, ValueError) as exc:
         await send_game_reply(_invalid(str(exc)))
         return
-    await send_game_reply(
-        _asset_preview(
-            overview.inventory,
-            medium,
-            target,
-            custom_name,
-            overview.inscription_preference,
-            view,
+    try:
+        await send_game_reply(
+            await _apply_asset_inscription(
+                character,
+                overview,
+                medium,
+                target,
+                custom_name,
+            )
         )
-    )
+    except Exception as exc:
+        await _failed("资产铭刻执行失败", character.id, exc)
 
 
 async def inscription_ability(message: str, current: CurrentCharacterResult) -> None:
@@ -86,10 +99,19 @@ async def inscription_ability(message: str, current: CurrentCharacterResult) -> 
         return
     requested = str(message or "").strip()
     view = current_game_services().world_view(overview.character_world)
-    if not requested:
-        await send_game_reply(
-            _ability_home(overview.inventory, overview.inscription_preference, view)
-        )
+    if not requested or (len(requested.split()) == 1 and requested.isdigit()):
+        try:
+            page = parse_page_number(requested)
+            await send_game_reply(
+                _ability_home(
+                    overview.inventory,
+                    overview.inscription_preference,
+                    view,
+                    page,
+                )
+            )
+        except ValueError as exc:
+            await send_game_reply(_invalid(str(exc)))
         return
     parts = requested.split(maxsplit=3)
     if len(parts) != 4:
@@ -99,23 +121,24 @@ async def inscription_ability(message: str, current: CurrentCharacterResult) -> 
     try:
         medium = _medium(overview.inventory, medium_ref)
         weapon = _weapon(overview.inventory, weapon_ref)
-        ability_id, ability_index = _ability(weapon, ability_token)
+        ability_id, _ = _ability(weapon, ability_token)
         custom_name = clean_inscription_name(custom_name)
     except (KeyError, TypeError, ValueError) as exc:
         await send_game_reply(_invalid(str(exc)))
         return
-    await send_game_reply(
-        _ability_preview(
-            overview.inventory,
-            medium,
-            weapon,
-            ability_id,
-            ability_index,
-            custom_name,
-            overview.inscription_preference,
-            view,
+    try:
+        await send_game_reply(
+            await _apply_ability_inscription(
+                character,
+                overview,
+                medium,
+                weapon,
+                ability_id,
+                custom_name,
+            )
         )
-    )
+    except Exception as exc:
+        await _failed("能力铭刻执行失败", character.id, exc)
 
 
 async def confirm_asset_inscription(
@@ -128,7 +151,12 @@ async def confirm_asset_inscription(
         return
     parts = str(message or "").strip().split(maxsplit=2)
     if len(parts) != 3:
-        await send_game_reply(_invalid("铭刻确认参数不完整"))
+        await send_game_reply(
+            _invalid(
+                "铭刻确认参数不完整",
+                Action("inscription.back", "返回铭刻", "铭刻", style="secondary"),
+            )
+        )
         return
     overview = await _load_overview(character)
     if overview is None:
@@ -138,31 +166,17 @@ async def confirm_asset_inscription(
         medium = _medium(overview.inventory, parts[0])
         target = _asset_target(overview.inventory, parts[1])
         custom_name = clean_inscription_name(parts[2])
-        command = InscriptionCommand(
-            _transaction_id("inscription:asset"),
-            character.id,
-            AssetInscriptionTarget(target.id),
-            medium.id,
+        reply = await _apply_asset_inscription(
+            character,
+            overview,
+            medium,
+            target,
             custom_name,
-            overview.inventory.revision,
-            target.revision,
-        )
-        outcome = await asyncio.to_thread(
-            current_game_services().inscriptions.apply,
-            command,
-            inventory_id=character.id,
-            context=game_operation_context(command.id, logical_time=command_time()),
         )
     except Exception as exc:
         await _failed("资产铭刻执行失败", character.id, exc)
         return
-    if outcome.failure:
-        await send_game_reply(_invalid(outcome.failure.message))
-        return
-    assert outcome.value is not None
-    await send_game_reply(
-        _success(outcome.value, current_game_services().world_view(overview.character_world))
-    )
+    await send_game_reply(reply)
 
 
 async def confirm_ability_inscription(
@@ -175,7 +189,17 @@ async def confirm_ability_inscription(
         return
     parts = str(message or "").strip().split(maxsplit=3)
     if len(parts) != 4:
-        await send_game_reply(_invalid("铭刻确认参数不完整"))
+        await send_game_reply(
+            _invalid(
+                "铭刻确认参数不完整",
+                Action(
+                    "inscription.ability.back",
+                    "返回能力铭刻",
+                    "铭刻能力",
+                    style="secondary",
+                ),
+            )
+        )
         return
     overview = await _load_overview(character)
     if overview is None:
@@ -186,31 +210,18 @@ async def confirm_ability_inscription(
         weapon = _weapon(overview.inventory, parts[1])
         ability_id, _ = _ability(weapon, parts[2])
         custom_name = clean_inscription_name(parts[3])
-        command = InscriptionCommand(
-            _transaction_id("inscription:ability"),
-            character.id,
-            WeaponAbilityInscriptionTarget(weapon.id, ability_id),
-            medium.id,
+        reply = await _apply_ability_inscription(
+            character,
+            overview,
+            medium,
+            weapon,
+            ability_id,
             custom_name,
-            overview.inventory.revision,
-            weapon.revision,
-        )
-        outcome = await asyncio.to_thread(
-            current_game_services().inscriptions.apply,
-            command,
-            inventory_id=character.id,
-            context=game_operation_context(command.id, logical_time=command_time()),
         )
     except Exception as exc:
         await _failed("能力铭刻执行失败", character.id, exc)
         return
-    if outcome.failure:
-        await send_game_reply(_invalid(outcome.failure.message))
-        return
-    assert outcome.value is not None
-    await send_game_reply(
-        _success(outcome.value, current_game_services().world_view(overview.character_world))
-    )
+    await send_game_reply(reply)
 
 
 async def inscription_original_name(
@@ -245,6 +256,80 @@ async def inscription_original_name(
     await send_game_reply(_preference_message(preference))
 
 
+async def _apply_asset_inscription(
+    character,
+    overview,
+    medium: ItemInstance,
+    target: ItemInstance,
+    custom_name: str,
+) -> DocumentMessage:
+    command = InscriptionCommand(
+        _transaction_id("inscription:asset"),
+        character.id,
+        AssetInscriptionTarget(target.id),
+        medium.id,
+        custom_name,
+        overview.inventory.revision,
+        target.revision,
+    )
+    outcome = await asyncio.to_thread(
+        current_game_services().inscriptions.apply,
+        command,
+        inventory_id=character.id,
+        context=game_operation_context(command.id, logical_time=command_time()),
+    )
+    if outcome.failure:
+        return _invalid(
+            outcome.failure.message,
+            Action("inscription.back", "重新选择", "铭刻", style="secondary"),
+        )
+    assert outcome.value is not None
+    return _success(
+        outcome.value,
+        current_game_services().world_view(overview.character_world),
+    )
+
+
+async def _apply_ability_inscription(
+    character,
+    overview,
+    medium: ItemInstance,
+    weapon: ItemInstance,
+    ability_id: str,
+    custom_name: str,
+) -> DocumentMessage:
+    command = InscriptionCommand(
+        _transaction_id("inscription:ability"),
+        character.id,
+        WeaponAbilityInscriptionTarget(weapon.id, ability_id),
+        medium.id,
+        custom_name,
+        overview.inventory.revision,
+        weapon.revision,
+    )
+    outcome = await asyncio.to_thread(
+        current_game_services().inscriptions.apply,
+        command,
+        inventory_id=character.id,
+        context=game_operation_context(command.id, logical_time=command_time()),
+    )
+    if outcome.failure:
+        return _invalid(
+            outcome.failure.message,
+            Action(
+                "inscription.ability.back",
+                "重新选择",
+                "铭刻能力",
+                style="secondary",
+            ),
+        )
+    assert outcome.value is not None
+    return _success(
+        outcome.value,
+        current_game_services().world_view(overview.character_world),
+    )
+
+
 async def _load_overview(character):
     try:
         result = await asyncio.to_thread(
@@ -259,7 +344,12 @@ async def _load_overview(character):
         return None
 
 
-def _inscription_home(inventory: InventoryState, preference, view) -> DocumentMessage:
+def _inscription_home(
+    inventory: InventoryState,
+    preference,
+    view,
+    page: int,
+) -> DocumentMessage:
     mediums = [
         value
         for value in inventory.instances.values()
@@ -271,118 +361,110 @@ def _inscription_home(inventory: InventoryState, preference, view) -> DocumentMe
         if _definition(value).tags.has("item.weapon")
         or _definition(value).tags.has("item.equipment")
     ]
+    entries = tuple(("medium", value) for value in _sorted(inventory, mediums)) + tuple(
+        ("target", value) for value in _sorted(inventory, targets)
+    )
+    window = paginate(entries, page, page_size=DEFAULT_PAGE_SIZE)
     builder = (
         M.document()
         .section("铭刻", icon="item")
         .field("世界", view.skin.name)
+        .row(("铭刻媒介", len(mediums)), ("可铭刻目标", len(targets)))
     )
     medium_name = view.projector.name(INSCRIPTION_FEATHER_ITEM_ID)
     if not mediums:
         builder.line(f"暂无{medium_name}")
-    else:
-        builder.field(medium_name, len(mediums))
-        for medium in _sorted(inventory, mediums)[:_LIST_LIMIT]:
+    if not targets:
+        builder.line("当前没有可铭刻目标")
+    current_kind = ""
+    for kind, value in window.values:
+        if kind != current_kind:
+            builder.section(
+                medium_name if kind == "medium" else "可铭刻目标",
+                icon="item" if kind == "medium" else "equipment",
+            )
+            current_kind = kind
+        reference = _reference(inventory, value)
+        if kind == "medium":
+            medium = value
             data = medium.data.get(INSCRIPTION_MEDIUM_DATA_KEY)
             title = data.title if isinstance(data, InscriptionMediumData) else "数据异常"
-            builder.line(f"{_reference(inventory, medium)} {title}")
-    if targets:
-        builder.field("可铭刻目标", len(targets))
-        for target in _sorted(inventory, targets)[:_LIST_LIMIT]:
             builder.line(
-                _reference(inventory, target),
-                FieldSeparator(),
-                _asset_name(target, preference, view),
+                M.command(
+                    f"{reference} {title}",
+                    f"铭刻 {reference} ",
+                    submit=False,
+                )
             )
+        else:
+            target = value
+            builder.line(
+                M.command(reference, f"查看 {reference}"),
+                FieldSeparator(),
+                M.command(_asset_name(target, preference, view), f"查看 {reference}"),
+            )
+    builder.row(("页码", window.label), ("总计", window.total)).actions(
+        pagination_actions("铭刻", window)
+    )
     return builder.note("发送: 铭刻 羽毛编号 目标编号 新名称").build()
 
 
-def _asset_preview(
+def _ability_home(
     inventory: InventoryState,
-    medium: ItemInstance,
-    target: ItemInstance,
-    custom_name: str,
     preference,
     view,
+    page: int,
 ) -> DocumentMessage:
-    data = _medium_data(medium)
-    medium_name = view.projector.name(INSCRIPTION_FEATHER_ITEM_ID)
-    intent = reply_intents.definition("inscription.confirm_asset")
-    assert intent is not None
-    command = intent.command(
-        {
-            "medium": _reference(inventory, medium),
-            "target": _reference(inventory, target),
-            "name": custom_name,
-        }
-    )
-    return (
-        M.document()
-        .section("铭刻预览", icon="item")
-        .field("世界", view.skin.name)
-        .field(medium_name, data.title)
-        .field("原名", _asset_name(target, preference, view))
-        .field("铭刻名", custom_name)
-        .note(f"铭刻成功后将永久消耗这枚{medium_name}。")
-        .actions((Action("inscription.confirm_asset", "确认铭刻", command),))
-        .build()
-    )
-
-
-def _ability_preview(
-    inventory: InventoryState,
-    medium: ItemInstance,
-    weapon: ItemInstance,
-    ability_id: str,
-    ability_index: int,
-    custom_name: str,
-    preference,
-    view,
-) -> DocumentMessage:
-    data = _medium_data(medium)
-    medium_name = view.projector.name(INSCRIPTION_FEATHER_ITEM_ID)
-    intent = reply_intents.definition("inscription.confirm_ability")
-    assert intent is not None
-    command = intent.command(
-        {
-            "medium": _reference(inventory, medium),
-            "weapon": _reference(inventory, weapon),
-            "ability": ability_index,
-            "name": custom_name,
-        }
-    )
-    return (
-        M.document()
-        .section("能力铭刻预览", icon="skill")
-        .field("世界", view.skin.name)
-        .field(medium_name, data.title)
-        .field("武器", _asset_name(weapon, preference, view))
-        .field("原能力名", _ability_name(weapon, ability_id, preference, view))
-        .field("铭刻名", custom_name)
-        .note("铭刻只改变展示名称，不改变能力机制与数值。")
-        .actions((Action("inscription.confirm_ability", "确认铭刻", command),))
-        .build()
-    )
-
-
-def _ability_home(inventory: InventoryState, preference, view) -> DocumentMessage:
     weapons = [
         value
         for value in inventory.instances.values()
         if _definition(value).tags.has("item.weapon")
     ]
+    mediums = [
+        value
+        for value in inventory.instances.values()
+        if _definition(value).tags.has("item.inscription_medium")
+    ]
+    medium = _sorted(inventory, mediums)[0] if mediums else None
+    entries = tuple(
+        (weapon, index, ability_id)
+        for weapon in _sorted(inventory, weapons)
+        for index, ability_id in enumerate(_weapon_abilities(weapon), start=1)
+    )
+    window = paginate(entries, page, page_size=DEFAULT_PAGE_SIZE)
     builder = (
         M.document()
         .section("铭刻能力", icon="skill")
         .field("世界", view.skin.name)
+        .row(("武器", len(weapons)), ("能力", len(entries)))
     )
-    if not weapons:
-        return builder.line("当前没有可以铭刻能力的武器").build()
-    for weapon in _sorted(inventory, weapons)[:_LIST_LIMIT]:
-        builder.line(
-            f"{_reference(inventory, weapon)} {_asset_name(weapon, preference, view)}"
+    if medium is None:
+        builder.line(f"暂无{view.projector.name(INSCRIPTION_FEATHER_ITEM_ID)}")
+    for weapon, index, ability_id in window.values:
+        weapon_reference = _reference(inventory, weapon)
+        ability_name = _ability_name(weapon, ability_id, preference, view)
+        ability_command = (
+            f"铭刻能力 {_reference(inventory, medium)} {weapon_reference} {index} "
+            if medium is not None
+            else f"查看 {weapon_reference}"
         )
-        for index, ability_id in enumerate(_weapon_abilities(weapon), start=1):
-            builder.line(f"[{index}] {_ability_name(weapon, ability_id, preference, view)}")
+        builder.line(
+            M.command(
+                f"{weapon_reference} {_asset_name(weapon, preference, view)}",
+                f"查看 {weapon_reference}",
+            ),
+            FieldSeparator(),
+            M.command(
+                f"[{index}] {ability_name}",
+                ability_command,
+                submit=medium is None,
+            ),
+        )
+    if not entries:
+        builder.line("当前没有可以铭刻能力的武器")
+    builder.row(("页码", window.label), ("总计", window.total)).actions(
+        pagination_actions("铭刻能力", window)
+    )
     return builder.note("发送: 铭刻能力 羽毛编号 武器编号 能力序号 新名称").build()
 
 
@@ -409,20 +491,14 @@ def _preference_message(preference, *, invalid: bool = False) -> DocumentMessage
     )
     if invalid:
         builder.line("铭刻原名只支持 开启 或 关闭。")
-    return (
-        builder.actions(
-            (
-                Action("inscription.original.enable", "开启", "铭刻原名 开启"),
-                Action(
-                    "inscription.original.disable",
-                    "关闭",
-                    "铭刻原名 关闭",
-                    style="secondary",
-                ),
-            )
+    enabled = preference.show_original_name
+    return builder.action(
+        Action(
+            "inscription.original.disable" if enabled else "inscription.original.enable",
+            "关闭" if enabled else "开启",
+            "铭刻原名 关闭" if enabled else "铭刻原名 开启",
         )
-        .build()
-    )
+    ).build()
 
 
 def _asset_usage() -> DocumentMessage:
@@ -437,8 +513,11 @@ def _ability_usage() -> DocumentMessage:
     ).build()
 
 
-def _invalid(message: str) -> DocumentMessage:
-    return M.document().section("铭刻未完成", icon="notice").line(message).build()
+def _invalid(message: str, recovery: Action | None = None) -> DocumentMessage:
+    builder = M.document().section("铭刻未完成", icon="notice").line(message)
+    if recovery is not None:
+        builder.action(recovery)
+    return builder.build()
 
 
 def _unavailable(title: str) -> DocumentMessage:

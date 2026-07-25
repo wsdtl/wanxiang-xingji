@@ -16,6 +16,7 @@ from game.rules.activity import resolve_global_activity_presentation
 from launch import C, logger
 from launch.adapter import MessageIdentity, current_message_context, manager
 from message import DocumentMessage, Message, rich
+from message.renderers.plain_text import render_plain_text
 from message.schema import (
     Document,
     FieldSeparator,
@@ -26,6 +27,7 @@ from message.schema import (
 
 from .presentation import character_header_color, character_header_parts
 from .command_helpers import command_time
+from .interaction import ordered_actions, retry_action
 from .reply_intents import (
     NOTIFICATIONS_INTENT,
     PENDING_ACTIONS_INTENT,
@@ -74,7 +76,7 @@ class GameReplyComposer:
         blocks.extend(
             block for block in body.blocks if not isinstance(block, HeaderBlock)
         )
-        return DocumentMessage(Document(tuple(blocks), body.actions))
+        return DocumentMessage(Document(tuple(blocks), ordered_actions(body.actions)))
 
 
 async def send_game_reply(message: Message) -> bool:
@@ -83,8 +85,13 @@ async def send_game_reply(message: Message) -> bool:
     context = current_message_context()
     if context is None:
         raise RuntimeError("游戏回复缺少当前消息上下文")
+    normalized = _normalize_game_reply(message)
+    normalized = _with_temporary_failure_retry(
+        normalized,
+        _context_command(context),
+    )
     decorated = await _decorate_current_player_reply(
-        message,
+        normalized,
         context.identity,
         logical_time=command_time(),
     )
@@ -102,7 +109,46 @@ async def send_command_failure(
     logger.opt(colors=True, exception=exc).error(
         C.join(C.fail(title), C.kv("character", character_id))
     )
-    await send_game_reply(fallback)
+    context = current_message_context()
+    command = _context_command(context) if context is not None else ""
+    await send_game_reply(_with_retry_action(fallback, command))
+
+
+def _normalize_game_reply(message: Message) -> Message:
+    if not isinstance(message, DocumentMessage):
+        return message
+    body = message.document
+    actions = ordered_actions(body.actions)
+    if actions == body.actions:
+        return message
+    return DocumentMessage(Document(body.blocks, actions))
+
+
+def _with_retry_action(message: Message, command: str) -> Message:
+    if not command or not isinstance(message, DocumentMessage):
+        return message
+    body = message.document
+    if any(action.id == "game.retry" for action in body.actions):
+        return message
+    return DocumentMessage(Document(body.blocks, (*body.actions, retry_action(command))))
+
+
+def _with_temporary_failure_retry(message: Message, command: str) -> Message:
+    if not command or not isinstance(message, DocumentMessage):
+        return message
+    body = message.document
+    if body.actions:
+        return message
+    content = render_plain_text(body)
+    if not any(marker in content for marker in ("稍后重试", "稍后再试")):
+        return message
+    return _with_retry_action(message, command)
+
+
+def _context_command(context) -> str:
+    return " ".join(
+        value for value in (context.command.strip(), context.message.strip()) if value
+    )
 
 
 async def _decorate_current_player_reply(

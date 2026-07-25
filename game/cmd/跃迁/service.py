@@ -7,12 +7,11 @@ import asyncio
 from game.app import CurrentCharacterResult, current_game_services
 from game.content import DIMENSION_SHIFT_ITEM_ID
 from game.rules.character import WorldShiftResult
-from launch import C, logger
 from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time
-from ..reply import send_game_reply
 from ..presentation import current_action_action
+from ..reply import send_command_failure, send_game_reply
 
 
 async def dimension_shift(
@@ -41,10 +40,12 @@ async def dimension_shift(
             logical_time=command_time(),
         )
     except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("角色跃迁失败"), C.kv("character", character.id))
+        await send_command_failure(
+            "角色跃迁失败",
+            character.id,
+            exc,
+            _unavailable(),
         )
-        await send_game_reply(_unavailable())
         return
     await send_game_reply(_result_message(result))
 
@@ -59,20 +60,17 @@ def _worlds_message(current_world_id: str, *, invalid: bool = False) -> Document
     )
     if invalid:
         builder.line("没有找到这个世界")
-    actions = []
     for index, view in enumerate(services.world_views.latest_views(), start=1):
         state = "已连接" if view.world.id == current.world.id else "可登录"
-        builder.item(index, f"{view.skin.icon} {view.skin.name} | {state}")
-        if view.world.id != current.world.id:
-            actions.append(
-                Action(
-                    f"dimension.shift.{view.world.id}",
-                    view.skin.name,
-                    f"跃迁 {view.world.id}",
-                    behavior="send",
-                )
-            )
-    return builder.actions(tuple(actions)).build()
+        label = f"{view.skin.icon} {view.skin.name}"
+        builder.item(
+            index,
+            M.command(label, f"跃迁 {view.world.id}")
+            if view.world.id != current.world.id
+            else label,
+            f" | {state}",
+        )
+    return builder.build()
 
 
 def _result_message(result: WorldShiftResult) -> DocumentMessage:
@@ -102,6 +100,14 @@ def _result_message(result: WorldShiftResult) -> DocumentMessage:
             .section("跃迁", icon="notice")
             .field("需要", f"{current.projector.name(DIMENSION_SHIFT_ITEM_ID)} x1")
             .line("纳戒中没有可用的跃迁凭证")
+            .action(
+                Action(
+                    "dimension.inventory",
+                    "查看纳戒",
+                    "纳戒",
+                    style="secondary",
+                )
+            )
             .build()
         )
     if result.status == "shifted" and result.previous_world_id is not None:

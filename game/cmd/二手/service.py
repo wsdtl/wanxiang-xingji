@@ -1,9 +1,8 @@
-"""归航市场列表、上架购买报价和税务展示。"""
+"""归航市场列表、直接上架购买和税务展示。"""
 
 from __future__ import annotations
 
 import asyncio
-from math import ceil
 
 from game.app import CharacterOverview, CharacterOverviewResult, current_game_services
 from game.content.catalog.foundation import PRIMARY_CURRENCY_ID
@@ -23,10 +22,27 @@ from game.rules.item import resolve_asset_reference
 from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time
+from ..interaction import (
+    DEFAULT_PAGE_SIZE,
+    paginate,
+    pagination_actions,
+    parse_page_number,
+)
 from ..reply import send_command_failure, send_game_reply
 
 
-PAGE_SIZE = 20
+PAGE_SIZE = DEFAULT_PAGE_SIZE
+_MARKET_CATEGORY_LABELS = (
+    "药品",
+    "特殊",
+    "成长",
+    "永久",
+    "铭刻",
+    "抽奖签",
+    "凭证",
+    "材料",
+    "图纸",
+)
 
 
 async def market(message: str, result: CharacterOverviewResult) -> None:
@@ -41,6 +57,7 @@ async def market(message: str, result: CharacterOverviewResult) -> None:
     slot_id = None
     category = None
     page = 1
+    page_command = "二手"
     try:
         if parts:
             slot_id = _slot_id(parts[0], overview)
@@ -48,8 +65,12 @@ async def market(message: str, result: CharacterOverviewResult) -> None:
                 category = _category_id(parts[0])
                 if category is None:
                     page = _page(parts[0])
+                else:
+                    page_command = f"二手 {parts[0]}"
             elif len(parts) > 1:
                 page = _page(parts[1])
+            if slot_id is not None:
+                page_command = f"二手 {parts[0]}"
             if category is not None and len(parts) > 1:
                 page = _page(parts[1])
         listings = await asyncio.to_thread(
@@ -58,7 +79,15 @@ async def market(message: str, result: CharacterOverviewResult) -> None:
             slot_id=slot_id,
             category=category,
         )
-        await send_game_reply(_listing_page(COVENANT_MARKET_NAME, listings, page, overview))
+        await send_game_reply(
+            _listing_page(
+                COVENANT_MARKET_NAME,
+                listings,
+                page,
+                overview,
+                page_command=page_command,
+            )
+        )
     except ValueError as exc:
         await send_game_reply(_failure(str(exc)))
 
@@ -75,7 +104,15 @@ async def my_listings(message: str, result: CharacterOverviewResult) -> None:
             logical_time=command_time(),
             seller_id=overview.character.id,
         )
-        await send_game_reply(_listing_page("我的上架", listings, page, overview))
+        await send_game_reply(
+            _listing_page(
+                "我的上架",
+                listings,
+                page,
+                overview,
+                page_command="我的上架",
+            )
+        )
     except ValueError as exc:
         await send_game_reply(_failure(str(exc)))
 
@@ -107,9 +144,22 @@ async def list_item(message: str, result: CharacterOverviewResult) -> None:
             price,
             quantity,
         )
-        await send_game_reply(_listing_quote_message(quoted, overview, parts[0]))
+        if quoted.quote is None:
+            await send_game_reply(
+                _failure(quoted.failure_message or "本次上架没有完成")
+            )
+            return
+        opened = await asyncio.to_thread(
+            current_game_services().economy.open_listing,
+            overview.character.id,
+            quoted.quote,
+            logical_time=command_time(),
+        )
+        await send_game_reply(_listing_result_message(opened, overview))
     except (KeyError, TypeError, ValueError) as exc:
         await send_game_reply(_failure(str(exc)))
+    except Exception as exc:
+        await _failed("二手上架失败", overview.character.id, exc)
 
 
 async def confirm_listing(message: str, result: CharacterOverviewResult) -> None:
@@ -119,7 +169,12 @@ async def confirm_listing(message: str, result: CharacterOverviewResult) -> None
         return
     parts = str(message or "").strip().split()
     if len(parts) not in {3, 4}:
-        await send_game_reply(_failure("上架确认已经失效"))
+        await send_game_reply(
+            _failure(
+                "上架确认已经失效",
+                Action("market.list.restart", "返回纳戒", "纳戒", style="secondary"),
+            )
+        )
         return
     services = current_game_services()
     try:
@@ -137,7 +192,16 @@ async def confirm_listing(message: str, result: CharacterOverviewResult) -> None
             1 if len(parts) == 3 else int(parts[1]),
         )
         if quoted.quote is None or quoted.quote.id != parts[-1]:
-            await send_game_reply(_failure("上架报价已经变化，请重新上架"))
+            await send_game_reply(
+                _failure(
+                    "上架报价已经变化，请重新上架",
+                    Action(
+                        "market.list.restart",
+                        "重新报价",
+                        f"上架 {' '.join(parts[:-1])}",
+                    ),
+                )
+            )
             return
         opened = await asyncio.to_thread(
             services.economy.open_listing,
@@ -145,17 +209,7 @@ async def confirm_listing(message: str, result: CharacterOverviewResult) -> None
             quoted.quote,
             logical_time=command_time(),
         )
-        builder = M.document().section("上架", icon="trade")
-        if opened.status == "listed" and opened.listing is not None:
-            builder.line(f"{opened.listing.id} 已进入{COVENANT_MARKET_NAME}")
-            builder.row(
-                ("物品", _market_asset_name(opened.listing.asset, overview)),
-                ("价格", opened.listing.list_price),
-                ("数量", _listing_quantity(opened.listing)),
-            )
-        else:
-            builder.line(opened.failure_message or "本次上架没有完成")
-        await send_game_reply(builder.build())
+        await send_game_reply(_listing_result_message(opened, overview))
     except (KeyError, TypeError, ValueError) as exc:
         await send_game_reply(_failure(str(exc)))
     except Exception as exc:
@@ -200,9 +254,22 @@ async def buy(message: str, result: CharacterOverviewResult) -> None:
             listing_id,
             logical_time=command_time(),
         )
-        await send_game_reply(_purchase_quote_message(quoted, overview))
+        if quoted.quote is None:
+            await send_game_reply(
+                _failure(quoted.failure_message or "本次购买没有完成")
+            )
+            return
+        purchased = await asyncio.to_thread(
+            current_game_services().economy.purchase,
+            overview.character.id,
+            quoted.quote,
+            logical_time=command_time(),
+        )
+        await send_game_reply(_purchase_result_message(purchased, overview))
     except ValueError as exc:
         await send_game_reply(_failure(str(exc)))
+    except Exception as exc:
+        await _failed("二手购买失败", overview.character.id, exc)
 
 
 async def confirm_purchase(message: str, result: CharacterOverviewResult) -> None:
@@ -212,7 +279,12 @@ async def confirm_purchase(message: str, result: CharacterOverviewResult) -> Non
         return
     parts = str(message or "").strip().split()
     if len(parts) != 2:
-        await send_game_reply(_failure("购买确认已经失效"))
+        await send_game_reply(
+            _failure(
+                "购买确认已经失效",
+                Action("market.buy.restart", "返回市场", "二手", style="secondary"),
+            )
+        )
         return
     services = current_game_services()
     try:
@@ -223,7 +295,12 @@ async def confirm_purchase(message: str, result: CharacterOverviewResult) -> Non
             logical_time=command_time(),
         )
         if quoted.quote is None or quoted.quote.id != parts[1]:
-            await send_game_reply(_failure("购买报价已经变化，请重新确认"))
+            await send_game_reply(
+                _failure(
+                    "购买报价已经变化，请重新确认",
+                    Action("market.buy.restart", "重新报价", f"购买 {parts[0]}"),
+                )
+            )
             return
         purchased = await asyncio.to_thread(
             services.economy.purchase,
@@ -231,17 +308,7 @@ async def confirm_purchase(message: str, result: CharacterOverviewResult) -> Non
             quoted.quote,
             logical_time=command_time(),
         )
-        builder = M.document().section("归航成交", icon="trade")
-        if purchased.status == "purchased" and purchased.quote is not None:
-            builder.line(_market_asset_name(purchased.quote.listing.asset, overview))
-            builder.field("数量", _listing_quantity(purchased.quote.listing))
-            builder.row(
-                ("支付", purchased.quote.tax.buyer_total),
-                ("税金", purchased.quote.tax.tax_amount),
-            )
-        else:
-            builder.line(purchased.failure_message or "本次购买没有完成")
-        await send_game_reply(builder.build())
+        await send_game_reply(_purchase_result_message(purchased, overview))
     except ValueError as exc:
         await send_game_reply(_failure(str(exc)))
     except Exception as exc:
@@ -292,76 +359,116 @@ async def _listing_detail(listing_id: str, overview: CharacterOverview) -> None:
     await send_game_reply(builder.build())
 
 
-def _listing_quote_message(result, overview, reference) -> DocumentMessage:
-    builder = M.document().section("上架报价", icon="trade")
-    quote = result.quote
-    if result.status != "quoted" or quote is None:
-        return builder.line(result.failure_message or "本次上架报价没有生成").build()
-    tax = quote_market_tax(
-        quote.price.reference_price,
-        quote.list_price,
-        minimum_price_bps=quote.price.minimum_price_bps,
-        maximum_price_bps=quote.price.maximum_price_bps,
-    )
-    builder.line(_market_asset_name(overview.inventory.asset(quote.asset_id), overview))
-    builder.field("数量", quote.quantity)
-    builder.row(("参考价", quote.price.reference_price), ("上架价", quote.list_price))
-    builder.row(("预计到手", tax.seller_proceeds), ("基础税", tax.tax_amount))
-    return builder.actions(
-        (
-            Action(
-                "market.list.confirm",
-                "确认上架",
-                f"economy_market_list_confirm {reference} {quote.quantity} {quote.list_price} {quote.id}",
-            ),
+def _listing_result_message(result, overview) -> DocumentMessage:
+    builder = M.document().section("上架", icon="trade")
+    if result.status == "listed" and result.listing is not None:
+        listing = result.listing
+        tax = quote_market_tax(
+            listing.price.reference_price,
+            listing.list_price,
+            minimum_price_bps=listing.price.minimum_price_bps,
+            maximum_price_bps=listing.price.maximum_price_bps,
         )
-    ).build()
-
-
-def _purchase_quote_message(result, overview) -> DocumentMessage:
-    builder = M.document().section("购买报价", icon="trade")
-    quote = result.quote
-    if result.status != "quoted" or quote is None:
-        return builder.line(result.failure_message or "本次购买报价没有生成").build()
-    builder.line(_market_asset_name(quote.listing.asset, overview))
-    builder.field("数量", _listing_quantity(quote.listing))
-    builder.row(("售价", quote.tax.list_price), ("参考价", quote.tax.reference_price))
-    builder.row(("实际支付", quote.tax.buyer_total), ("税金", quote.tax.tax_amount))
-    if quote.tax.low_price_surcharge:
-        builder.field("低价纠偏", quote.tax.low_price_surcharge)
-    if quote.tax.high_price_tax:
-        builder.field("高价纠偏", quote.tax.high_price_tax)
-    if quote.tax.risk_surcharge:
-        builder.field("交易风险税", quote.tax.risk_surcharge)
-    if quote.tax.repeated_pair_trades or quote.tax.repeated_asset_trades:
-        builder.field("常规税率", f"{quote.tax.normal_tax_rate_bps / 100:.0f}%")
-    return builder.actions(
-        (
+        builder.line(f"{listing.id} 已进入{COVENANT_MARKET_NAME}")
+        builder.field("物品", _market_asset_name(listing.asset, overview))
+        builder.field("数量", _listing_quantity(listing))
+        builder.row(("参考价", listing.price.reference_price), ("上架价", listing.list_price))
+        builder.row(("预计到手", tax.seller_proceeds), ("基础税", tax.tax_amount))
+        builder.action(
             Action(
-                "market.buy.confirm",
-                "确认购买",
-                f"economy_market_buy_confirm {quote.listing.id} {quote.id}",
-            ),
+                "market.listings.mine",
+                "我的上架",
+                "我的上架",
+                style="secondary",
+            )
         )
-    ).build()
+    else:
+        builder.line(result.failure_message or "本次上架没有完成")
+        builder.action(
+            Action("market.list.retry", "重新上架", "上架 ", behavior="fill")
+        )
+    return builder.build()
 
 
-def _listing_page(title, listings, page, overview) -> DocumentMessage:
-    total_pages = max(1, ceil(len(listings) / PAGE_SIZE))
-    if page > total_pages:
-        raise ValueError(f"页码超出范围，当前共 {total_pages} 页")
-    start = (page - 1) * PAGE_SIZE
+def _purchase_result_message(result, overview) -> DocumentMessage:
+    builder = M.document().section("归航成交", icon="trade")
+    if result.status == "purchased" and result.quote is not None:
+        quote = result.quote
+        builder.line(_market_asset_name(quote.listing.asset, overview))
+        builder.field("数量", _listing_quantity(quote.listing))
+        builder.row(("售价", quote.tax.list_price), ("参考价", quote.tax.reference_price))
+        builder.row(
+            ("实际支付", quote.tax.buyer_total),
+            ("税金", quote.tax.tax_amount),
+        )
+        if quote.tax.low_price_surcharge:
+            builder.field("低价纠偏", quote.tax.low_price_surcharge)
+        if quote.tax.high_price_tax:
+            builder.field("高价纠偏", quote.tax.high_price_tax)
+        if quote.tax.risk_surcharge:
+            builder.field("交易风险税", quote.tax.risk_surcharge)
+        if quote.tax.repeated_pair_trades or quote.tax.repeated_asset_trades:
+            builder.field("常规税率", f"{quote.tax.normal_tax_rate_bps / 100:.0f}%")
+        builder.action(
+            Action("market.purchase.back", "返回市场", "二手", style="secondary")
+        )
+    else:
+        builder.line(result.failure_message or "本次购买没有完成")
+        builder.action(
+            Action("market.purchase.back", "返回市场", "二手", style="secondary")
+        )
+    return builder.build()
+
+
+def _listing_page(
+    title,
+    listings,
+    page,
+    overview,
+    *,
+    page_command: str,
+) -> DocumentMessage:
+    window = paginate(listings, page, page_size=PAGE_SIZE)
     builder = M.document().section(title, icon="trade")
-    current = listings[start : start + PAGE_SIZE]
-    if not current:
-        return builder.line("当前没有符合条件的归航挂单").build()
-    for index, listing in enumerate(current, start=start + 1):
+    if page_command == "二手":
+        _append_market_filters(builder, overview)
+    if not window.values:
+        builder.line("当前没有符合条件的归航挂单")
+    for index, listing in enumerate(window.values, start=window.start + 1):
         builder.item(
             index,
-            f"[{listing.id}] {_market_asset_name(listing.asset, overview)} x{_listing_quantity(listing)} | {listing.list_price}",
+            M.command(
+                f"[{listing.id}] {_market_asset_name(listing.asset, overview)}",
+                f"二手 {listing.id}",
+            ),
+            f" x{_listing_quantity(listing)} | {listing.list_price}",
         )
-    builder.field("页码", f"{page}/{total_pages}")
+    builder.row(("页码", window.label), ("总计", window.total)).actions(
+        pagination_actions(page_command, window)
+    )
     return builder.build()
+
+
+def _append_market_filters(builder, overview: CharacterOverview) -> None:
+    view = _view(overview)
+    builder.section("筛选", icon="inventory")
+    slot_filters = tuple(
+        (view.projector.name(slot_id), f"二手 {slot_id}")
+        for slot_id in STANDARD_LOADOUT_SLOT_ORDER
+    )
+    category_filters = tuple((label, f"二手 {label}") for label in _MARKET_CATEGORY_LABELS)
+    for values in (
+        slot_filters[:4],
+        slot_filters[4:],
+        category_filters[:5],
+        category_filters[5:],
+    ):
+        parts = []
+        for index, (label, command) in enumerate(values):
+            if index:
+                parts.append(" | ")
+            parts.append(M.command(label, command))
+        builder.line(*parts)
 
 
 def _market_asset_name(asset, overview: CharacterOverview) -> str:
@@ -408,13 +515,7 @@ def _slot_id(value: str, overview: CharacterOverview) -> str | None:
 
 
 def _page(value: str) -> int:
-    try:
-        page = int(str(value).strip() or "1")
-    except ValueError as exc:
-        raise ValueError("页码必须是正整数") from exc
-    if page < 1:
-        raise ValueError("页码必须是正整数")
-    return page
+    return parse_page_number(value)
 
 
 def _looks_like_listing(value: str) -> bool:
@@ -439,8 +540,11 @@ async def _failed(title: str, character_id: str, exc: Exception) -> None:
     )
 
 
-def _failure(message: str) -> DocumentMessage:
-    return M.document().section(COVENANT_MARKET_NAME, icon="notice").line(message).build()
+def _failure(message: str, recovery: Action | None = None) -> DocumentMessage:
+    builder = M.document().section(COVENANT_MARKET_NAME, icon="notice").line(message)
+    if recovery is not None:
+        builder.action(recovery)
+    return builder.build()
 
 
 __all__ = [

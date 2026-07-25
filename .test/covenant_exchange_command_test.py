@@ -60,27 +60,26 @@ async def _main() -> None:
             )
             home = await _dispatch("exchange-user", "归航兑换", "exchange-home")
             assert "定相尘" in home.replies[0].message.content
+            assert "套装图纸" in home.replies[0].message.content
+            assert not home.replies[0].message.actions
             page = await _dispatch(
                 "exchange-user",
-                home.replies[0].message.actions[0].data,
+                "归航兑换 套装",
                 "exchange-page",
             )
-            assert "套装 1/3" in page.replies[0].message.content
-            assert len(page.replies[0].message.actions) == 7
-            detail = await _dispatch(
+            assert "归航兑换·套装" in page.replies[0].message.content
+            assert "页码: _1/1_" in page.replies[0].message.content
+            assert f"总计: _{len(services.content.catalog.equipment.sets.ids())}_" in page.replies[0].message.content
+            assert not page.replies[0].message.actions
+            set_id = services.content.catalog.equipment.sets.ids()[0]
+            completed = await _dispatch(
                 "exchange-user",
-                page.replies[0].message.actions[0].data,
-                "exchange-detail",
+                f"归航兑换 {set_id}",
+                "exchange-direct",
             )
-            assert "2件" in detail.replies[0].message.content
-            assert "3件" in detail.replies[0].message.content
-            assert "4件" in detail.replies[0].message.content
-            confirmed = await _dispatch(
-                "exchange-user",
-                detail.replies[0].message.actions[0].data,
-                "exchange-confirm",
-            )
-            assert "归航兑换·完成" in confirmed.replies[0].message.content
+            assert "归航兑换·完成" in completed.replies[0].message.content
+            assert completed.replies[0].message.actions[1].data == "归航兑换 套装"
+            assert all("确认" not in action.label for action in completed.replies[0].message.actions)
 
             inventory = _inventory(services, character.id)
             blueprint = next(

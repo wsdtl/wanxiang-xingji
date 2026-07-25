@@ -145,7 +145,15 @@ def _status_message(
             ("今日讨伐", f"{attempts}/{DIMENSIONAL_DISASTER_DAILY_ATTEMPTS}"),
         )
     builder.line(event.narrative.story)
-    actions = [Action("disaster.ranking", "排行", "灾厄排行", behavior="send")]
+    actions = [
+        Action(
+            "disaster.ranking",
+            "排行",
+            "灾厄排行",
+            behavior="send",
+            style="secondary",
+        )
+    ]
     if (
         result.active
         and event.status is DimensionalDisasterStatus.OPEN
@@ -153,7 +161,16 @@ def _status_message(
         and attempts < DIMENSIONAL_DISASTER_DAILY_ATTEMPTS
         and character.resources.get(HEALTH_CURRENT, 0) > 0
     ):
-        actions.insert(0, Action("disaster.challenge", "讨伐", "讨伐灾厄", behavior="send"))
+        remaining = DIMENSIONAL_DISASTER_DAILY_ATTEMPTS - attempts
+        actions.insert(
+            0,
+            Action(
+                "disaster.challenge",
+                f"讨伐（剩余{remaining}次）",
+                "讨伐灾厄",
+                behavior="send",
+            ),
+        )
     return builder.actions(tuple(actions)).build()
 
 
@@ -189,12 +206,29 @@ def _challenge_message(result: DimensionalDisasterChallengeResult, projector) ->
             builder.line("跨界灾厄已经被击破，活动结束时将封榜并产生本期唯一遗羽。")
         elif result.status == "replayed":
             builder.note("本次为重复消息，已经返回原挑战结果。")
-        actions = [Action("disaster.ranking", "排行", "灾厄排行", behavior="send")]
+        actions = [
+            Action(
+                "disaster.ranking",
+                "排行",
+                "灾厄排行",
+                behavior="send",
+                style="secondary",
+            )
+        ]
         if (
             result.status == "resolved"
             and receipt.attempts_today < DIMENSIONAL_DISASTER_DAILY_ATTEMPTS
         ):
-            actions.insert(0, Action("disaster.challenge", "再次讨伐", "讨伐灾厄", behavior="send"))
+            remaining = DIMENSIONAL_DISASTER_DAILY_ATTEMPTS - receipt.attempts_today
+            actions.insert(
+                0,
+                Action(
+                    "disaster.challenge",
+                    f"再次讨伐（剩余{remaining}次）",
+                    "讨伐灾厄",
+                    behavior="send",
+                ),
+            )
         return builder.actions(tuple(actions)).build()
     messages = {
         "no_active": "当前没有灾厄降临",

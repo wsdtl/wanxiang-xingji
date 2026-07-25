@@ -269,10 +269,22 @@ class EconomyFeature:
             uow.commit()
             return RecycleOperationResult("recycled", quote)
 
+    def quote_trophies(self, owner_id: str) -> TrophyRecycleResult:
+        with self.database.unit_of_work(write=False) as uow:
+            inventory = self.snapshots.require(
+                uow,
+                self.storage.inventory,
+                owner_id,
+                InventoryState,
+            )
+        quote = quote_trophy_recycle(inventory, self.content.items, owner_id)
+        return TrophyRecycleResult("quoted" if quote.lines else "empty", quote)
+
     def recycle_trophies(
         self,
         owner_id: str,
         *,
+        expected_quote_id: str | None = None,
         logical_time: datetime,
     ) -> TrophyRecycleResult:
         with self.database.unit_of_work() as uow:
@@ -285,6 +297,8 @@ class EconomyFeature:
             quote = quote_trophy_recycle(inventory, self.content.items, owner_id)
             if not quote.lines:
                 return TrophyRecycleResult("empty", quote)
+            if expected_quote_id is not None and quote.id != expected_quote_id:
+                return TrophyRecycleResult("stale", quote)
             context = _context(quote.id, logical_time, "trophy_recycle")
             inventory_operations = [
                 ConsumeStack(line.asset_id, line.quantity) for line in quote.lines

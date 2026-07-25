@@ -15,7 +15,13 @@ from . import service
     help=HelpSpec(
         category="资产",
         summary="浏览归航市场或查看指定挂单",
-        usage=("二手", "二手 页码", "二手 挂单编号"),
+        usage=(
+            "二手",
+            "二手 页码",
+            "二手 部位 [页码]",
+            "二手 类别 [页码]",
+            "二手 挂单编号",
+        ),
         order=150,
     ),
 )
@@ -27,9 +33,9 @@ async def market(message: str = "", overview=Depends(current_character_overview)
     cmd="上架",
     help=HelpSpec(
         category="资产",
-        summary="按指定价格预览上架可交易物品",
+        summary="按指定价格直接上架可交易物品",
         usage=("上架 物品编号 价格", "上架 物品编号 数量 价格"),
-        side_effect="确认后物品进入挂单并暂时不能装配或回收",
+        side_effect="物品会直接进入挂单并暂时不能装配或回收",
         order=160,
     ),
 )
@@ -54,9 +60,9 @@ async def cancel_listing(message: str = "", overview=Depends(current_character_o
     cmd="购买",
     help=HelpSpec(
         category="资产",
-        summary="预览购买一份二手挂单",
+        summary="直接购买一份二手挂单",
         usage=("购买 挂单编号",),
-        side_effect="确认后扣除货币并取得物品，卖方获得税后收入",
+        side_effect="直接扣除货币并取得物品，卖方获得税后收入",
         order=180,
     ),
 )

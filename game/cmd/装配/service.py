@@ -28,10 +28,11 @@ from message import DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
+from ..interaction import DEFAULT_PAGE_SIZE
 from ..reply import send_game_reply
 
 
-_CANDIDATE_LIMIT = 12
+_CANDIDATE_LIMIT = DEFAULT_PAGE_SIZE
 
 
 async def view_loadout(current: CurrentCharacterResult) -> None:
@@ -206,11 +207,14 @@ def _loadout_message(
             value = "空"
         else:
             instance = inventory.instances.get(asset_id)
-            value = (
-                f"{_reference(inventory, instance)} {_name(instance, preference, view)}"
-                if instance is not None
-                else "数据异常"
-            )
+            if instance is None:
+                value = "数据异常"
+            else:
+                reference = _reference(inventory, instance)
+                value = M.command(
+                    f"{reference} {_name(instance, preference, view)}",
+                    f"查看 {reference}",
+                )
         builder.field(view.projector.name(slot_id), value)
 
     candidates = _candidates(loadout, inventory)
@@ -228,7 +232,10 @@ def _loadout_message(
                 reference,
             )
         if len(candidates) > _CANDIDATE_LIMIT:
-            builder.line(f"另有 {len(candidates) - _CANDIDATE_LIMIT} 件未展示")
+            builder.line(
+                f"另有 {len(candidates) - _CANDIDATE_LIMIT} 件，",
+                M.command("查看完整武库", "武库"),
+            )
     return builder.build()
 
 

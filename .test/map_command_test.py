@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 
@@ -35,11 +36,13 @@ from game.core.persistence import CHARACTER_AGGREGATE, INVENTORY_AGGREGATE  # no
 from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules import game_operation_context  # noqa: E402
 from game.cmd import 地图 as map_component  # noqa: E402,F401
+from game.cmd.地图 import service as map_service  # noqa: E402
 from game.cmd import 角色 as character_component  # noqa: E402,F401
 from game.cmd import 跃迁 as shift_component  # noqa: E402,F401
 from game.cmd import 探险 as exploration_component  # noqa: E402,F401
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
+from launch.adapter.qq.render import render_qq_message  # noqa: E402
 
 
 TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -78,7 +81,8 @@ async def _main() -> None:
                     assert "目标世界已完成化身重构" in _content(shifted)
                     if old_action is not None:
                         stale = await _dispatch(old_action.data, f"map-stale-{index}")
-                        assert "地点按钮已经失效" in _content(stale)
+                        assert "地点入口已经失效" in _content(stale)
+                        assert stale.replies[0].message.actions[0].data == "探险"
 
                 overview = services.load_character_overview(character).overview
                 assert overview is not None
@@ -97,6 +101,26 @@ async def _main() -> None:
                     assert view.projector.name(resolved.display_id) in text
                     assert f"({resolved.position.x}, {resolved.position.y})" in text
                     assert binding.anchor_id not in text
+
+                companion_view = services.companions.view(
+                    character.id,
+                    logical_time=NOW,
+                )
+                progress = services.world_progress.view(character.id, world_id)
+                qq_listing = render_qq_message(
+                    map_service._map_overview(
+                        overview,
+                        companion_view.roster,
+                        view,
+                        {value.region_id: value for value in progress.regions},
+                    )
+                )
+                qq_content = qq_listing["content"]
+                assert qq_content.count("mqqapi://aio/inlinecmd") == len(bindings)
+                for binding in bindings:
+                    resolved = services.content.worlds.resolve(world_id, binding.anchor_id)
+                    location_name = view.projector.name(resolved.display_id)
+                    assert f"command={quote(f'地图 {location_name}', safe='')}" in qq_content
 
                 presence = next(
                     value

@@ -131,8 +131,8 @@ class MessageConsoleService:
                 pass
             logger.opt(colors=True).warning(C.warn("Web 游戏台消息队列已满，已淘汰最旧待写事件"))
 
-    def recent(self, *, limit: int = 100, before_id: int | None = None) -> list[ConsoleFlowRecord]:
-        count = max(1, min(int(limit), 200))
+    def recent(self, *, limit: int = 50, before_id: int | None = None) -> list[ConsoleFlowRecord]:
+        count = max(1, min(int(limit), 50))
         return [
             _record_from_row(row)
             for row in self.storage.recent(limit=count, before_id=before_id)

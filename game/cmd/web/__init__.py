@@ -2,21 +2,12 @@
 
 from __future__ import annotations
 
-from ..command import GameCommand, HelpSpec
+from ..command import GameCommand
 from . import entry, runtime
 from .site import router
 
 
-@GameCommand.handler(
-    cmd="web",
-    access="public",
-    help=HelpSpec(
-        category="角色",
-        summary="打开受密码保护的 Web 游戏台",
-        usage=("web",),
-        order=10,
-    ),
-)
+@GameCommand.handler(cmd="web", access="public", hidden=True)
 async def web_console() -> None:
     await entry.show_entry()
 

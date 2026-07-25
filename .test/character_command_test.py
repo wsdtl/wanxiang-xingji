@@ -186,6 +186,7 @@ async def _main() -> None:
                 "**未入道 云舟客 Lv1**"
             )
             assert "当前状态: _关闭_" in _content(mood_status)
+            assert {action.label for action in mood_status.replies[0].message.actions} == {"开启"}
 
             mood_enabled = await dispatch(
                 client_id="local-user-a",
@@ -195,6 +196,7 @@ async def _main() -> None:
             )
             assert mood_enabled.replies[0].message.content.startswith(r"$\textcolor{#")
             assert "当前状态: _开启_" in _content(mood_enabled)
+            assert {action.label for action in mood_enabled.replies[0].message.actions} == {"关闭"}
             character_id = _character_ids(services)[0]
             settings = services.load_character_settings(character_id)
             assert settings.mood_header_enabled and settings.revision == 1
@@ -206,6 +208,7 @@ async def _main() -> None:
                 event_id="local-auto-medicine-disable",
             )
             assert "当前状态: _关闭_" in _content(auto_medicine)
+            assert {action.label for action in auto_medicine.replies[0].message.actions} == {"开启"}
             settings = services.load_character_settings(character_id)
             assert not settings.auto_use_medicine and settings.revision == 2
 

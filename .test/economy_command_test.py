@@ -22,7 +22,11 @@ from game.cmd import 二手 as market_component  # noqa: E402,F401
 from game.cmd import 回收 as recycle_component  # noqa: E402,F401
 from game.cmd import 角色 as character_component  # noqa: E402,F401
 from game.content.catalog.item import SMALL_HEALTH_MEDICINE_ITEM_ID  # noqa: E402
-from game.core.gameplay import InventoryState  # noqa: E402
+from game.core.gameplay import (  # noqa: E402
+    STANDARD_LOADOUT_SLOT_ORDER,
+    WEAPON_SLOT_ID,
+    InventoryState,
+)
 from game.core.persistence import CHARACTER_AGGREGATE  # noqa: E402
 from game.rules.item import asset_reference  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
@@ -75,47 +79,41 @@ async def _main() -> None:
             assert "回收所得" in quoted.replies[0].message.content
             assert "永久注销物品档案" in quoted.replies[0].message.content
             assert "不动用归航库" in quoted.replies[0].message.content
+            assert quoted.replies[0].message.actions[0].label == "确认回收"
             confirm = quoted.replies[0].message.actions[0].data
             recycled = await _dispatch("seller", confirm, "economy-recycle-confirm")
             assert "归航回收·完成" in recycled.replies[0].message.content
 
             batch = await _dispatch("seller", "批量回收", "economy-batch-home")
-            assert len(batch.replies[0].message.actions) == 7
+            assert not batch.replies[0].message.actions
+            assert "选择要回收的武库部位" in batch.replies[0].message.content
+            equipment_slot = STANDARD_LOADOUT_SLOT_ORDER[1]
             quality = await _dispatch(
                 "seller",
-                batch.replies[0].message.actions[1].data,
+                f"批量回收 {equipment_slot}",
                 "economy-batch-quality",
             )
-            assert len(quality.replies[0].message.actions) == 5
+            assert not quality.replies[0].message.actions
+            assert "选择品阶" in quality.replies[0].message.content
 
-            weapon_slot = batch.replies[0].message.actions[0].data
             weapon_quality_page = await _dispatch(
                 "seller",
-                weapon_slot,
+                f"批量回收 {WEAPON_SLOT_ID}",
                 "economy-batch-weapon-quality",
             )
-            assert len(weapon_quality_page.replies[0].message.actions) == 5
+            assert not weapon_quality_page.replies[0].message.actions
             weapon = _grant_weapon(services, seller.id, "cmd-batch-weapon", seed=303, level=10)
             weapon_quality = services.economy.prices.quote(weapon).quality_id
-            weapon_quality_action = next(
-                action
-                for action in weapon_quality_page.replies[0].message.actions
-                if weapon_quality in action.data
-            )
             weapon_levels = await _dispatch(
                 "seller",
-                weapon_quality_action.data,
+                f"批量回收 {WEAPON_SLOT_ID} {weapon_quality}",
                 "economy-batch-levels",
             )
             assert "等级上限" in weapon_levels.replies[0].message.content
-            level_action = next(
-                action
-                for action in weapon_levels.replies[0].message.actions
-                if action.data.endswith(" 10")
-            )
+            assert not weapon_levels.replies[0].message.actions
             weapon_quote = await _dispatch(
                 "seller",
-                level_action.data,
+                f"批量回收 {WEAPON_SLOT_ID} {weapon_quality} 10",
                 "economy-batch-quote-level",
             )
             assert "回收所得" in weapon_quote.replies[0].message.content
@@ -128,30 +126,22 @@ async def _main() -> None:
                 market_asset,
                 services.content.catalog.items,
             )
-            listing_quote = await _dispatch(
-                "seller",
-                f"上架 {market_reference} 1",
-                "economy-list-quote",
-            )
-            assert "预计到手" in listing_quote.replies[0].message.content
             listed = await _dispatch(
                 "seller",
-                listing_quote.replies[0].message.actions[0].data,
-                "economy-list-confirm",
+                f"上架 {market_reference} 1",
+                "economy-list-direct",
             )
             assert "M1 已进入归航市场" in listed.replies[0].message.content
+            assert "预计到手" in listed.replies[0].message.content
+            assert all("确认" not in action.label for action in listed.replies[0].message.actions)
 
             detail = await _dispatch("buyer", "二手 M1", "economy-market-detail")
             assert detail.replies[0].message.actions[0].data == "购买 M1"
             _fund(services, buyer.id, 100_000)
-            purchase_quote = await _dispatch("buyer", "购买 M1", "economy-buy-quote")
-            assert "低价纠偏" in purchase_quote.replies[0].message.content
-            purchased = await _dispatch(
-                "buyer",
-                purchase_quote.replies[0].message.actions[0].data,
-                "economy-buy-confirm",
-            )
+            purchased = await _dispatch("buyer", "购买 M1", "economy-buy-direct")
+            assert "低价纠偏" in purchased.replies[0].message.content
             assert "归航成交" in purchased.replies[0].message.content
+            assert all("确认" not in action.label for action in purchased.replies[0].message.actions)
             assert market_asset.id in _inventory(services, buyer.id).instances
 
             medicine = next(
@@ -164,26 +154,20 @@ async def _main() -> None:
                 medicine,
                 services.content.catalog.items,
             )
-            medicine_quote = await _dispatch(
-                "seller",
-                f"上架 {medicine_reference} 2 30",
-                "economy-list-medicine-quote",
-            )
-            assert "数量" in medicine_quote.replies[0].message.content
-            assert f" {medicine_reference} 2 30 " in medicine_quote.replies[0].message.actions[0].data
             medicine_listed = await _dispatch(
                 "seller",
-                medicine_quote.replies[0].message.actions[0].data,
-                "economy-list-medicine-confirm",
+                f"上架 {medicine_reference} 2 30",
+                "economy-list-medicine-direct",
             )
+            assert "数量" in medicine_listed.replies[0].message.content
             assert "M2 已进入归航市场" in medicine_listed.replies[0].message.content
+            assert all("确认" not in action.label for action in medicine_listed.replies[0].message.actions)
             medicine_page = await _dispatch("buyer", "二手 药品", "economy-market-medicine")
             assert "x2" in medicine_page.replies[0].message.content
-            medicine_buy = await _dispatch("buyer", "购买 M2", "economy-buy-medicine")
             medicine_purchased = await _dispatch(
                 "buyer",
-                medicine_buy.replies[0].message.actions[0].data,
-                "economy-buy-medicine-confirm",
+                "购买 M2",
+                "economy-buy-medicine-direct",
             )
             assert "归航成交" in medicine_purchased.replies[0].message.content
             buyer_medicine_total = sum(

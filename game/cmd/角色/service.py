@@ -61,6 +61,7 @@ from game.app import (
     message_identity_evidence,
 )
 from game.rules.character import CharacterCreationReceipt, CharacterSettingsState
+from game.rules.item import asset_reference
 from launch import C, logger
 from launch.adapter import current_message_context
 from message import Action, DocumentMessage, M
@@ -347,6 +348,12 @@ def _created_message(receipt: CharacterCreationReceipt) -> DocumentMessage:
             ),
         )
         .note("这是你在《万象行纪》中的第一条记录。")
+        .section("下一步", icon="world")
+        .line(
+            M.command("查看当前世界地图", "地图"),
+            " | ",
+            M.command("选择探险区域", "探险"),
+        )
         .build()
     )
 
@@ -390,26 +397,15 @@ def _mood_message(
         builder.line("心情只支持 开启 或 关闭。")
     else:
         builder.line("开启后，回复顶部的人物头会按星期轮换颜色。")
-    return (
-        builder.actions(
-            (
-                Action(
-                    "character.mood.enable",
-                    "开启",
-                    "心情 开启",
-                    behavior="send",
-                ),
-                Action(
-                    "character.mood.disable",
-                    "关闭",
-                    "心情 关闭",
-                    behavior="send",
-                    style="secondary",
-                ),
-            )
+    enabled = settings.mood_header_enabled
+    return builder.action(
+        Action(
+            "character.mood.disable" if enabled else "character.mood.enable",
+            "关闭" if enabled else "开启",
+            "心情 关闭" if enabled else "心情 开启",
+            behavior="send",
         )
-        .build()
-    )
+    ).build()
 
 
 def _mood_unavailable_message() -> DocumentMessage:
@@ -436,26 +432,15 @@ def _auto_medicine_message(
         builder.line("自动用药只支持 开启 或 关闭。")
     else:
         builder.line("开启后，探险会在批次之间按浪费最少原则使用恢复药。")
-    return (
-        builder.actions(
-            (
-                Action(
-                    "character.auto_medicine.enable",
-                    "开启",
-                    "自动用药 开启",
-                    behavior="send",
-                ),
-                Action(
-                    "character.auto_medicine.disable",
-                    "关闭",
-                    "自动用药 关闭",
-                    behavior="send",
-                    style="secondary",
-                ),
-            )
+    enabled = settings.auto_use_medicine
+    return builder.action(
+        Action(
+            "character.auto_medicine.disable" if enabled else "character.auto_medicine.enable",
+            "关闭" if enabled else "开启",
+            "自动用药 关闭" if enabled else "自动用药 开启",
+            behavior="send",
         )
-        .build()
-    )
+    ).build()
 
 
 def _setting_unavailable_message(title: str) -> DocumentMessage:
@@ -520,6 +505,7 @@ def _character_overview_message(overview: CharacterOverview) -> DocumentMessage:
         None,
     )
     location = "未知"
+    location_command = ""
     if presence is not None:
         position = presence.position
         anchor_id = current_game_services().content.worlds.anchor_at(
@@ -537,6 +523,8 @@ def _character_overview_message(overview: CharacterOverview) -> DocumentMessage:
             if anchor_id
             else f"({position.x}, {position.y})"
         )
+        if anchor_id:
+            location_command = f"地图 {location}"
     builder = (
         M.document()
         .section("角色状态", icon="profile")
@@ -567,8 +555,11 @@ def _character_overview_message(overview: CharacterOverview) -> DocumentMessage:
     return (
         builder.section("当前状态", icon="world")
         .row(("世界", view.skin.name), ("归属", COVENANT_NAME))
-        .row(("位置", location), (projector.name(PRIMARY_CURRENCY_ID), wallet.balance if wallet else 0))
-        .field("行动", _action_text(overview, view))
+        .row(
+            ("位置", M.command(location, location_command) if location_command else location),
+            (projector.name(PRIMARY_CURRENCY_ID), wallet.balance if wallet else 0),
+        )
+        .field("行动", _action_value(overview, view))
         .actions(
             (
                 Action(
@@ -661,7 +652,7 @@ def _equipped_name(
     overview: CharacterOverview,
     slot_id: str,
     view,
-) -> str:
+):
     asset_id = overview.loadout.slots.get(slot_id)
     if asset_id is None:
         return "未装备"
@@ -675,13 +666,20 @@ def _equipped_name(
             instance,
             inscription_preference=overview.inscription_preference,
         ).name
-        return f"{name} | Lv{weapon.level}"
-    equipment = equipment_state_from_instance(instance)
-    return view.gear_projector.equipment(
-        equipment,
+        display = f"{name} | Lv{weapon.level}"
+    else:
+        equipment = equipment_state_from_instance(instance)
+        display = view.gear_projector.equipment(
+            equipment,
+            instance,
+            inscription_preference=overview.inscription_preference,
+        ).name
+    reference = asset_reference(
+        overview.inventory,
         instance,
-        inscription_preference=overview.inscription_preference,
-    ).name
+        current_game_services().content.catalog.items,
+    )
+    return M.command(display, f"查看 {reference}")
 
 
 def _ability_names(ability_ids, view) -> tuple[str, ...]:
@@ -795,6 +793,13 @@ def _action_text(overview: CharacterOverview, view) -> str:
     if completed:
         return f"{len(completed)} 项待领取"
     return "空闲"
+
+
+def _action_value(overview: CharacterOverview, view):
+    text = _action_text(overview, view)
+    if overview.action is None or (not overview.action.running() and not overview.action.completed()):
+        return text
+    return M.command(text, "结束休息")
 
 
 def _number(value: float) -> str:

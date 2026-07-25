@@ -111,6 +111,7 @@ async def _main() -> None:
             assert character is not None
             initial_overview = services.load_character_overview(character).overview
             assert initial_overview is not None
+            initial_view = services.world_views.require(initial_overview.character_world.world_id)
             starter_weapon_id = initial_overview.loadout.slots[WEAPON_SLOT_ID]
             starter_weapon_ref = initial_overview.inventory.reference_number(starter_weapon_id)
             starter_weapon_detail = await dispatch(
@@ -138,19 +139,16 @@ async def _main() -> None:
             )
             assert "太玄界" in worlds.replies[0].message.content
             assert "魔法世界" in worlds.replies[0].message.content
-            target_action = next(
-                action
-                for action in worlds.replies[0].message.actions
-                if action.label == target_view.skin.name
-            )
-            assert target_action.data == f"跃迁 {target_world_id}"
+            assert not worlds.replies[0].message.actions
+            target_command = f"跃迁 {target_world_id}"
             missing_shift = await dispatch(
                 client_id="small-command-player",
-                raw_message=target_action.data,
+                raw_message=target_command,
                 sender_name="试剑客",
                 event_id="small-command-shift-missing-item",
             )
             assert "纳戒中没有可用的跃迁凭证" in missing_shift.replies[0].message.content
+            assert missing_shift.replies[0].message.actions[0].data == "纳戒"
             unchanged = services.load_character_overview(character).overview
             assert unchanged is not None
             assert unchanged.character_world == initial_overview.character_world
@@ -189,22 +187,30 @@ async def _main() -> None:
                 sender_name="试剑客",
                 event_id="small-command-old-armory",
             )
-            old_weapon_button = old_armory.replies[0].message.actions[0]
-            assert old_weapon_button.data == f"武库 {WEAPON_SLOT_ID}"
+            old_weapon_command = f"武库 {WEAPON_SLOT_ID}"
+            assert target_view.projector.name(WEAPON_SLOT_ID) not in old_armory.replies[0].message.content
+            assert initial_view.projector.name(WEAPON_SLOT_ID) in old_armory.replies[0].message.content
             old_people = await dispatch(
                 client_id="small-command-player",
                 raw_message="人物",
                 sender_name="试剑客",
                 event_id="small-command-old-people",
             )
-            old_location_button = old_people.replies[0].message.actions[0]
+            assert not old_people.replies[0].message.actions
             person_location = services.content.companions.people_for_world(
                 initial_overview.character_world.world_id
             )[0].location_id
-            person_anchor = services.content.worlds.require_binding_for_display(
+            person_binding = services.content.worlds.require_binding_for_display(
                 initial_overview.character_world.world_id,
                 person_location,
-            ).anchor_id
+            )
+            person_anchor = person_binding.anchor_id
+            old_location_command = WorldLocationIntent(
+                initial_overview.character_world.world_id,
+                person_anchor,
+                person_binding.function_id,
+                person_binding.version,
+            ).command()
             stale_version = services.world_travel.move(
                 character.id,
                 person_anchor,
@@ -219,7 +225,7 @@ async def _main() -> None:
             assert stale_version.status == "stale_binding"
             shifted_world = await dispatch(
                 client_id="small-command-player",
-                raw_message=target_action.data,
+                raw_message=target_command,
                 sender_name="试剑客",
                 event_id="small-command-shift-world",
             )
@@ -261,7 +267,7 @@ async def _main() -> None:
             ) == 1
             old_button_after_shift = await dispatch(
                 client_id="small-command-player",
-                raw_message=old_weapon_button.data,
+                raw_message=old_weapon_command,
                 sender_name="试剑客",
                 event_id="small-command-old-button-after-shift",
             )
@@ -271,11 +277,12 @@ async def _main() -> None:
             )
             stale_location = await dispatch(
                 client_id="small-command-player",
-                raw_message=old_location_button.data,
+                raw_message=old_location_command,
                 sender_name="试剑客",
                 event_id="small-command-stale-location",
             )
-            assert "地点按钮已经失效" in stale_location.replies[0].message.content
+            assert "地点入口已经失效" in stale_location.replies[0].message.content
+            assert stale_location.replies[0].message.actions[0].data == "探险"
 
             _injure_character(services, character.id)
             await dispatch(
@@ -337,6 +344,7 @@ async def _main() -> None:
                 event_id="small-command-auto-status",
             )
             assert "当前状态: _开启_" in auto_medicine.replies[0].message.content
+            assert {action.label for action in auto_medicine.replies[0].message.actions} == {"关闭"}
 
             disabled = await dispatch(
                 client_id="small-command-player",
@@ -345,6 +353,7 @@ async def _main() -> None:
                 event_id="small-command-auto-disable",
             )
             assert "当前状态: _关闭_" in disabled.replies[0].message.content
+            assert {action.label for action in disabled.replies[0].message.actions} == {"开启"}
 
             inscription = await dispatch(
                 client_id="small-command-player",
@@ -365,6 +374,7 @@ async def _main() -> None:
                 event_id="small-command-original-disable",
             )
             assert "当前状态: _关闭_" in original.replies[0].message.content
+            assert {action.label for action in original.replies[0].message.actions} == {"开启"}
 
             loadout = await dispatch(
                 client_id="small-command-player",
@@ -460,24 +470,16 @@ async def _main() -> None:
             )
             assert "当前装配" in unequipped.replies[0].message.content
 
-            preview = await dispatch(
+            completed = await dispatch(
                 client_id="small-command-player",
                 raw_message=f"铭刻 I{feather_ref} E{equipment_ref} 照夜",
                 sender_name="试剑客",
-                event_id="small-command-inscription-preview",
-            )
-            assert "铭刻预览" in preview.replies[0].message.content
-            assert "世界:" in preview.replies[0].message.content
-            confirm_command = preview.replies[0].message.actions[0].data
-            completed = await dispatch(
-                client_id="small-command-player",
-                raw_message=confirm_command,
-                sender_name="试剑客",
-                event_id="small-command-inscription-confirm",
+                event_id="small-command-inscription-direct",
             )
             assert "铭刻完成" in completed.replies[0].message.content
             assert "照夜" in completed.replies[0].message.content
             assert "世界:" in completed.replies[0].message.content
+            assert not completed.replies[0].message.actions
 
             overview = services.load_character_overview(character).overview
             assert overview is not None

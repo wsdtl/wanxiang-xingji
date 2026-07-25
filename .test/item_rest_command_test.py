@@ -1,4 +1,4 @@
-"""物品查询、百件分页、手动用药与休息恢复闭环测试。"""
+"""物品查询、五十件分页、手动用药与休息恢复闭环测试。"""
 
 from __future__ import annotations
 
@@ -123,7 +123,8 @@ async def _main() -> None:
             _grant_weapons(services, character.id, 101)
             armory = await _dispatch("武库", "item-rest-armory")
             slot_name = view.projector.name(WEAPON_SLOT_ID)
-            assert f"{slot_name}: _102_" in armory.replies[0].message.content
+            assert slot_name in armory.replies[0].message.content
+            assert "102 件" in armory.replies[0].message.content
             first_page = await _dispatch(f"武库 {slot_name}", "item-rest-armory-page-1")
             overview = services.load_character_overview(character).overview
             assert overview is not None
@@ -161,7 +162,7 @@ async def _main() -> None:
                 for action in detail.replies[0].message.actions
             )
             protected_page = await _dispatch(
-                f"武库 {slot_name}",
+                f"武库 {slot_name} 3",
                 "item-rest-protected-page",
             )
             assert "珍藏" in protected_page.replies[0].message.content
@@ -171,7 +172,7 @@ async def _main() -> None:
             )
             assert "已取消珍藏" in unprotected.replies[0].message.content
             first_page_count = first_page.replies[0].message.content.count(starter_name)
-            assert first_page_count == 100, (
+            assert first_page_count == 50, (
                 first_page_count,
                 first_page.replies[0].message.content[:500],
             )
@@ -186,13 +187,15 @@ async def _main() -> None:
                     page_command=f"武库 {slot_name}",
                 )
             )
-            assert qq_payload["markdown"]["content"].count("mqqapi://aio/inlinecmd") == 200
+            assert qq_payload["markdown"]["content"].count("mqqapi://aio/inlinecmd") == 100
             assert sum(
                 len(row["buttons"])
                 for row in qq_payload["keyboard"]["content"]["rows"]
             ) == 2
             second_page = await _dispatch(f"武库 {slot_name} 2", "item-rest-armory-page-2")
-            assert second_page.replies[0].message.content.count(starter_name) == 2
+            assert second_page.replies[0].message.content.count(starter_name) == 50
+            third_page = await _dispatch(f"武库 {slot_name} 3", "item-rest-armory-page-3")
+            assert third_page.replies[0].message.content.count(starter_name) == 2
             backpack = await _dispatch("背包", "item-rest-backpack")
             assert "空间: _0/40_" in backpack.replies[0].message.content
 

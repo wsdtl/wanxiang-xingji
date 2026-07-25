@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from game.app import CurrentCharacterResult, current_game_services
 from game.core.account import ExternalIdentity
-from launch import C, logger
 from launch.adapter import current_message_context
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 
-from ..reply import send_game_reply
 from ..command_helpers import command_time
+from ..reply import send_command_failure
 
 
 def character(current: CurrentCharacterResult):
@@ -50,18 +49,23 @@ def operation_id(prefix: str) -> str:
 
 
 async def failed(title: str, character_id: str, exc: Exception) -> None:
-    logger.opt(colors=True, exception=exc).error(
-        C.join(C.fail(title), C.kv("character", character_id))
+    await send_command_failure(
+        title,
+        character_id,
+        exc,
+        failure("当前操作没有完成，请稍后重试"),
     )
-    await send_game_reply(failure("当前操作没有完成，请稍后重试"))
 
 
 def success(title: str, text: str) -> DocumentMessage:
     return M.document().section(title, icon="player").line(text).build()
 
 
-def failure(text: str) -> DocumentMessage:
-    return M.document().section("组队", icon="notice").line(text).build()
+def failure(text: str, recovery: Action | None = None) -> DocumentMessage:
+    builder = M.document().section("组队", icon="notice").line(text)
+    if recovery is not None:
+        builder.action(recovery)
+    return builder.build()
 
 
 __all__ = [

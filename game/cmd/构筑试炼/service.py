@@ -5,23 +5,23 @@ from __future__ import annotations
 import asyncio
 
 from game.app import CurrentCharacterResult, current_game_services
-from launch import C, logger
 from launch.adapter import current_message_context
 from launch.paths import public_url
 from message import Action, M
+from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
-from ..reply import send_game_reply
+from ..reply import send_command_failure, send_game_reply
 
 
 async def view_trials() -> None:
     services = current_game_services()
     modes = services.content.build_trials.definitions()
     builder = M.document().section("构筑试炼", icon="combat")
-    for mode in modes:
-        builder.field(mode.name, mode.summary)
+    for mode, link in zip(modes, _mode_links(modes), strict=True):
+        builder.line(link, FieldSeparator(), mode.summary)
     builder.note("试炼使用当前配装与伙伴，不消耗资源，也不会产生任何收益。")
-    await send_game_reply(builder.actions(_mode_actions(modes)).build())
+    await send_game_reply(builder.build())
 
 
 async def start_trial(message: str, current: CurrentCharacterResult) -> None:
@@ -33,12 +33,13 @@ async def start_trial(message: str, current: CurrentCharacterResult) -> None:
     modes = services.content.build_trials.definitions()
     mode = services.content.build_trials.resolve(message)
     if mode is None:
+        builder = M.document().section("构筑试炼", icon="combat").line(
+            f"请选择{_mode_names(modes)}模式"
+        )
+        for link in _mode_links(modes):
+            builder.line(link)
         await send_game_reply(
-            M.document()
-            .section("构筑试炼", icon="combat")
-            .line(f"请选择{_mode_names(modes)}模式")
-            .actions(_mode_actions(modes))
-            .build()
+            builder.build()
         )
         return
     context = current_message_context()
@@ -53,14 +54,12 @@ async def start_trial(message: str, current: CurrentCharacterResult) -> None:
             logical_time=command_time(),
         )
     except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(
-                C.fail("构筑试炼执行失败"),
-                C.kv("character", character.id),
-                C.kv("mode", mode.id),
-            )
+        await send_command_failure(
+            "构筑试炼执行失败",
+            character.id,
+            exc,
+            _failure("试炼执行失败，请稍后重试"),
         )
-        await send_game_reply(_failure("试炼执行失败，请稍后重试"))
         return
     await send_game_reply(_result_message(result))
 
@@ -101,20 +100,14 @@ def _result_message(result):
     ).build()
 
 
-def _mode_actions(modes) -> tuple[Action, ...]:
+def _mode_links(modes):
     return tuple(
-        Action(
-            _mode_action_id(mode.id),
+        M.command(
             mode.name,
             f"开始试炼 {mode.name}",
         )
         for mode in modes
     )
-
-
-def _mode_action_id(mode_id) -> str:
-    token = str(mode_id)
-    return f"build_trial.{token.removeprefix('trial.mode.')}"
 
 
 def _mode_names(modes) -> str:

@@ -1,4 +1,4 @@
-"""伙伴命令解析、确认和协议中立展示。"""
+"""伙伴命令解析、直接操作和协议中立展示。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
-from ..reply import send_game_reply
+from ..reply import send_command_failure, send_game_reply
 
 
 _APTITUDE_NAMES = {
@@ -84,12 +84,9 @@ async def bind_companion(message: str, result: CharacterOverviewResult) -> None:
             operation_id,
             overview.character.id,
             reference,
-            allow_transfer=False,
+            allow_transfer=True,
             logical_time=command_time(),
         )
-        if outcome.status == "transfer_required" and outcome.roster is not None:
-            await send_game_reply(_transfer_confirmation(outcome, overview))
-            return
         await send_game_reply(_bind_result(outcome))
     except Exception as exc:
         await _logged_failure("伙伴出战失败", overview.character.id, exc)
@@ -102,7 +99,12 @@ async def confirm_bind_transfer(message: str, result: CharacterOverviewResult) -
         return
     parts = str(message or "").split()
     if len(parts) != 2:
-        await send_game_reply(_failure("出战确认已经失效"))
+        await send_game_reply(
+            _failure(
+                "出战确认已经失效",
+                Action("companion.bind.back", "返回伙伴", "伙伴", style="secondary"),
+            )
+        )
         return
     try:
         revision = int(parts[1])
@@ -117,7 +119,12 @@ async def confirm_bind_transfer(message: str, result: CharacterOverviewResult) -
         )
         await send_game_reply(_bind_result(outcome))
     except (TypeError, ValueError):
-        await send_game_reply(_failure("出战确认已经失效"))
+        await send_game_reply(
+            _failure(
+                "出战确认已经失效",
+                Action("companion.bind.back", "返回伙伴", "伙伴", style="secondary"),
+            )
+        )
     except Exception as exc:
         await _logged_failure("伙伴转移失败", overview.character.id, exc)
 
@@ -247,7 +254,7 @@ async def join_person(result: CharacterOverviewResult) -> None:
         await _logged_failure("人物结交失败", overview.character.id, exc)
 
 
-async def preview_farewell(message: str, result: CharacterOverviewResult) -> None:
+async def farewell_companion(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     reference = str(message or "").strip().upper()
     if overview is None:
@@ -262,31 +269,19 @@ async def preview_farewell(message: str, result: CharacterOverviewResult) -> Non
         companion = view.roster.by_reference(reference)
         if companion is None:
             raise ValueError("找不到要告别的伙伴")
-        is_person = companion.kind is CompanionKind.PERSON
-        reply = (
-            M.document()
-            .section("确认告别", icon="notice")
-            .line(f"{companion.reference} {_companion_name(companion)} 将离开当前名册。")
-            .note(
-                "人物的成长记录会保留，回到原地点后可以再次结交。"
-                if is_person
-                else "宠物实例会永久离开，以后捕获的是新的随机实例。"
-            )
-            .actions((
-                Action(
-                    "companion.farewell.confirm",
-                    "确认告别",
-                    f"companion_farewell_confirm {companion.reference} {view.roster.revision}",
-                    behavior="send",
-                    style="secondary",
-                ),
-            ))
-            .build()
+        outcome = await asyncio.to_thread(
+            current_game_services().companions.farewell,
+            _operation_id("companion-farewell"),
+            overview.character.id,
+            companion.reference,
+            view.roster.revision,
+            logical_time=command_time(),
         )
+        reply = _farewell_result(outcome)
     except (KeyError, ValueError) as exc:
         reply = _failure(str(exc))
     except Exception as exc:
-        await _logged_failure("伙伴告别预览失败", overview.character.id, exc)
+        await _logged_failure("伙伴告别失败", overview.character.id, exc)
         return
     await send_game_reply(reply)
 
@@ -298,7 +293,12 @@ async def confirm_farewell(message: str, result: CharacterOverviewResult) -> Non
         return
     parts = str(message or "").split()
     if len(parts) != 2:
-        await send_game_reply(_failure("告别确认已经失效"))
+        await send_game_reply(
+            _failure(
+                "告别确认已经失效",
+                Action("companion.farewell.back", "返回伙伴", "伙伴", style="secondary"),
+            )
+        )
         return
     try:
         outcome = await asyncio.to_thread(
@@ -324,12 +324,17 @@ async def confirm_farewell(message: str, result: CharacterOverviewResult) -> Non
         )
         await send_game_reply(reply)
     except (TypeError, ValueError):
-        await send_game_reply(_failure("告别确认已经失效"))
+        await send_game_reply(
+            _failure(
+                "告别确认已经失效",
+                Action("companion.farewell.back", "返回伙伴", "伙伴", style="secondary"),
+            )
+        )
     except Exception as exc:
         await _logged_failure("伙伴告别失败", overview.character.id, exc)
 
 
-async def preview_abandon(result: CharacterOverviewResult) -> None:
+async def abandon_sanctuary(result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
         await send_game_reply(_unavailable())
@@ -343,26 +348,22 @@ async def preview_abandon(result: CharacterOverviewResult) -> None:
         sanctuary = view.sanctuary
         if sanctuary is None or not sanctuary.active:
             raise ValueError("当前没有可以放弃的宠物秘境")
+        outcome = await asyncio.to_thread(
+            current_game_services().companions.abandon,
+            _operation_id("companion-abandon"),
+            overview.character.id,
+            sanctuary.revision,
+            logical_time=command_time(),
+        )
         reply = (
-            M.document()
-            .section("确认放弃秘境", icon="notice")
-            .line("当前踪迹和已锁定目标都会永久消失。")
-            .note("开启秘境消耗的万灵引不会返还。")
-            .actions((
-                Action(
-                    "companion.abandon.confirm",
-                    "确认放弃",
-                    f"companion_abandon_confirm {sanctuary.revision}",
-                    behavior="send",
-                    style="secondary",
-                ),
-            ))
-            .build()
+            M.document().section("宠物秘境", icon="explore").line("秘境已经关闭").build()
+            if outcome.status == "abandoned"
+            else _failure(outcome.failure_message or "放弃秘境没有完成")
         )
     except ValueError as exc:
         reply = _failure(str(exc))
     except Exception as exc:
-        await _logged_failure("宠物秘境放弃预览失败", overview.character.id, exc)
+        await _logged_failure("宠物秘境放弃失败", overview.character.id, exc)
         return
     await send_game_reply(reply)
 
@@ -387,7 +388,12 @@ async def confirm_abandon(message: str, result: CharacterOverviewResult) -> None
         )
         await send_game_reply(reply)
     except (TypeError, ValueError):
-        await send_game_reply(_failure("放弃确认已经失效"))
+        await send_game_reply(
+            _failure(
+                "放弃确认已经失效",
+                Action("companion.abandon.back", "返回秘境", "宠物秘境", style="secondary"),
+            )
+        )
     except Exception as exc:
         await _logged_failure("宠物秘境放弃失败", overview.character.id, exc)
 
@@ -432,6 +438,11 @@ def _people_message(roster, overview: CharacterOverview) -> DocumentMessage:
     for person in people:
         binding = binding_by_content[person.id]
         display_id = binding.display_ref or binding.anchor_id
+        location_command = _location_command(
+            overview.character_world.world_id,
+            binding.anchor_id,
+            "location.function.companion_person",
+        )
         active = roster.active_by_definition(person.id)
         bond = roster.person_bonds.get(person.id)
         if active is not None:
@@ -445,22 +456,9 @@ def _people_message(roster, overview: CharacterOverview) -> DocumentMessage:
         builder.line(
             person.name,
             FieldSeparator(),
-            projector.name(display_id),
+            M.command(projector.name(display_id), location_command),
             FieldSeparator(),
             status,
-        )
-        actions.append(
-            Action(
-                f"person.location.{person.id}",
-                projector.name(display_id),
-                _location_command(
-                    overview.character_world.world_id,
-                    binding.anchor_id,
-                    "location.function.companion_person",
-                ),
-                behavior="send",
-                style="secondary",
-            )
         )
     local = None
     if anchor_id is not None:
@@ -670,13 +668,12 @@ def _sanctuary_message(sanctuary, overview: CharacterOverview) -> DocumentMessag
             species = current_game_services().content.companions.species.require(trace.definition_id)
             builder.item(
                 trace.index,
-                species.name,
+                M.command(species.name, f"秘境追踪 {trace.index}"),
                 FieldSeparator(),
                 _ROLE_NAMES[species.role],
                 FieldSeparator(),
                 "危险相当",
             )
-            actions.append(Action(f"companion.trace.{trace.index}", f"追踪 {trace.index}", f"秘境追踪 {trace.index}", behavior="send"))
         actions.append(Action("companion.abandon", "放弃", "放弃秘境", behavior="send", style="secondary"))
     return builder.actions(actions).build()
 
@@ -702,26 +699,28 @@ def _hunt_result(outcome) -> DocumentMessage:
     return _failure(outcome.failure_message or "伙伴追踪没有完成")
 
 
-def _transfer_confirmation(outcome, overview: CharacterOverview) -> DocumentMessage:
-    companion = outcome.companion
-    assert companion is not None and outcome.roster is not None
-    previous = _preset_index(outcome.previous_preset_id)
-    current = _preset_index(overview.loadout.active_preset_id)
-    return (
-        M.document()
-        .section("确认转移伙伴", icon="notice")
-        .line(f"{_companion_name(companion)} 当前属于配装 {previous}，将转移到配装 {current}。")
-        .actions((Action("companion.bind.transfer", "确认转移", f"companion_bind_transfer_confirm {companion.reference} {outcome.roster.revision}", behavior="send"),))
-        .build()
-    )
-
-
 def _bind_result(outcome) -> DocumentMessage:
     if outcome.status in {"bound", "transferred", "already_bound"} and outcome.companion is not None:
         action = _companion_projector(outcome.companion).name("term.companion_bind")
         text = "已经随当前配装出战" if outcome.status != "already_bound" else "本就属于当前配装"
         return M.document().section(f"伙伴{action}", icon="player").line(f"{_companion_name(outcome.companion)} {text}").build()
     return _failure(outcome.failure_message or "伙伴出战没有完成")
+
+
+def _farewell_result(outcome) -> DocumentMessage:
+    if outcome.status not in {"person_departed", "pet_departed"}:
+        return _failure(outcome.failure_message or "告别没有完成")
+    return (
+        M.document()
+        .section("告别", icon="player")
+        .line(f"{_outcome_companion_name(outcome)} 已离开名册")
+        .note(
+            "人物的成长记录会保留，回到原地点后可以再次结交。"
+            if outcome.status == "person_departed"
+            else "宠物实例已经永久离开，以后可以在宠物秘境捕获新的随机实例。"
+        )
+        .build()
+    )
 
 
 def _companion_definition(companion):
@@ -817,14 +816,19 @@ def _operation_id(prefix: str) -> str:
 
 
 async def _logged_failure(title: str, character_id: str, exc: Exception) -> None:
-    logger.opt(colors=True, exception=exc).error(
-        C.join(C.fail(title), C.kv("character", character_id))
+    await send_command_failure(
+        title,
+        character_id,
+        exc,
+        _failure("当前操作没有完成，请稍后重试"),
     )
-    await send_game_reply(_failure("当前操作没有完成，请稍后重试"))
 
 
-def _failure(message: str) -> DocumentMessage:
-    return M.document().section("伙伴", icon="notice").line(message).build()
+def _failure(message: str, recovery: Action | None = None) -> DocumentMessage:
+    builder = M.document().section("伙伴", icon="notice").line(message)
+    if recovery is not None:
+        builder.action(recovery)
+    return builder.build()
 
 
 def _unavailable() -> DocumentMessage:
@@ -836,15 +840,15 @@ def _number(value: float) -> str:
 
 
 __all__ = [
+    "abandon_sanctuary",
     "bind_companion",
     "confirm_abandon",
     "confirm_bind_transfer",
     "confirm_farewell",
+    "farewell_companion",
     "gift_person",
     "hunt_companion",
     "join_person",
-    "preview_abandon",
-    "preview_farewell",
     "unbind_companion",
     "view_companions",
     "view_people",

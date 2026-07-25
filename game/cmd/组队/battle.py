@@ -37,11 +37,17 @@ async def set_ready(current: CurrentCharacterResult, ready: bool) -> None:
             ready,
             logical_time=shared.command_time(),
         )
-        text = "已标记为准备" if ready else "已取消准备"
         reply = (
-            shared.success("组队", text)
+            _challenge_message(
+                party_view.party,
+                result.challenge,
+                character.id,
+            )
             if result.status in {"ready", "unready", "replayed"}
-            else shared.failure(result.failure_message or "准备状态没有更新")
+            else shared.failure(
+                result.failure_message or "准备状态没有更新",
+                Action("party-battle.back", "返回挑战", "组队挑战", style="secondary"),
+            )
         )
         await send_game_reply(reply)
     except Exception as exc:
@@ -107,9 +113,21 @@ async def select(message: str, current: CurrentCharacterResult) -> None:
             logical_time=shared.command_time(),
         )
         reply = (
-            shared.success("组队挑战", _selection_text(result.challenge))
+            _challenge_message(
+                party_view.party,
+                result.challenge,
+                character.id,
+            )
             if result.status in {"selected", "replayed"}
-            else shared.failure(result.failure_message or "组队首领选择没有完成")
+            else shared.failure(
+                result.failure_message or "组队首领选择没有完成",
+                Action(
+                    "party-battle.select.retry",
+                    "重新选择",
+                    "选择组队挑战 ",
+                    behavior="fill",
+                ),
+            )
         )
         await send_game_reply(reply)
     except Exception as exc:
@@ -162,6 +180,22 @@ async def start(current: CurrentCharacterResult) -> None:
                     "战报",
                     M.link("查看完整战报", public_url("battle", result.share_id)),
                 )
+            builder.actions(
+                (
+                    Action(
+                        "party-battle.select.next",
+                        "选择下一场",
+                        "选择组队挑战 ",
+                        behavior="fill",
+                    ),
+                    Action(
+                        "party-battle.party",
+                        "返回队伍",
+                        "队伍",
+                        style="secondary",
+                    ),
+                )
+            )
             reply = builder.build()
         else:
             reply = shared.failure(result.failure_message or "组队挑战没有开始")
@@ -179,7 +213,18 @@ def _challenge_message(
     if challenge is None:
         builder.line("当前没有锁定的组队首领")
         if party.leader_id == character_id:
-            builder.line("队长可发送：选择组队挑战 等级")
+            builder.action(
+                Action(
+                    "party-battle.select",
+                    "选择首领",
+                    "选择组队挑战 ",
+                    behavior="fill",
+                )
+            )
+        else:
+            builder.action(
+                Action("party-battle.party", "返回队伍", "队伍", style="secondary")
+            )
         return builder.build()
     services = current_game_services()
     view = services.world_views.require(challenge.source_world_id)
@@ -204,17 +249,10 @@ def _challenge_message(
             ready,
         )
     if challenge.status == "selected":
-        actions = [
-            Action("party-battle.ready", "准备", "准备", behavior="send"),
-            Action(
-                "party-battle.unready",
-                "取消准备",
-                "取消准备",
-                behavior="send",
-                style="secondary",
-            ),
-        ]
-        if party.leader_id == character_id:
+        ready = character_id in challenge.ready_fingerprints
+        all_ready = set(party.members) <= set(challenge.ready_fingerprints)
+        actions = []
+        if party.leader_id == character_id and all_ready:
             actions.append(
                 Action(
                     "party-battle.start",
@@ -223,6 +261,18 @@ def _challenge_message(
                     behavior="send",
                 )
             )
+        actions.append(
+            Action(
+                "party-battle.unready" if ready else "party-battle.ready",
+                "取消准备" if ready else "准备",
+                "取消准备" if ready else "准备",
+                behavior="send",
+                style="secondary" if ready else "primary",
+            )
+        )
+        actions.append(
+            Action("party-battle.party", "返回队伍", "队伍", style="secondary")
+        )
         return builder.actions(actions).build()
     if challenge.report_id:
         report = services.battle_reports.reference(challenge.report_id)
@@ -232,15 +282,6 @@ def _challenge_message(
                 M.link("查看完整战报", public_url("battle", report.share_id)),
             )
     return builder.build()
-
-
-def _selection_text(challenge) -> str:
-    if challenge is None:
-        return "已锁定组队首领，所有成员发送“准备”后由队长发起挑战"
-    return (
-        f"已锁定组队首领，来源世界：{shared.world_name(challenge.source_world_id)}。"
-        "所有成员发送“准备”后由队长发起挑战"
-    )
 
 
 __all__ = ["select", "set_ready", "start", "view"]

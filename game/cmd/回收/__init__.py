@@ -42,13 +42,16 @@ async def recycle_batch(message: str = "", overview=Depends(current_character_ov
     help=HelpSpec(
         category="资产",
         summary="一次出售背包中的全部战利品",
-        usage=("回收战利品",),
-        side_effect="直接注销全部可回收战利品并按类型化名录产出结算",
+        usage=("回收战利品", "回收战利品 页码"),
+        side_effect="确认报价后注销全部可回收战利品并按类型化名录产出结算",
         order=140,
     ),
 )
-async def recycle_trophies(current=Depends(current_character)) -> None:
-    await service.recycle_trophies(current)
+async def recycle_trophies(
+    message: str = "",
+    current=Depends(current_character),
+) -> None:
+    await service.recycle_trophies(message, current)
 
 
 @GameCommand.handler(cmd="economy_recycle_confirm", hidden=True)

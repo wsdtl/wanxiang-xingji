@@ -31,6 +31,7 @@ from game.core.gameplay import (  # noqa: E402
     SourceReceipt,
 )
 from game.core.persistence import CHARACTER_AGGREGATE, INVENTORY_AGGREGATE  # noqa: E402
+from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules.item import asset_reference  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
@@ -124,20 +125,16 @@ async def _main() -> None:
             bound = await _dispatch("伙伴出战 C1", "companion-bind")
             assert "随当前配装出战" in bound.replies[0].message.content
             await _dispatch("配装 1", "companion-preset-one")
-            transfer = await _dispatch("伙伴出战 C1", "companion-transfer-preview")
-            transfer_action = transfer.replies[0].message.actions[0]
-            assert transfer_action.data.startswith("companion_bind_transfer_confirm C1 ")
-            transferred = await _dispatch(transfer_action.data, "companion-transfer-confirm")
+            transferred = await _dispatch("伙伴出战 C1", "companion-transfer-direct")
             assert "随当前配装出战" in transferred.replies[0].message.content
+            assert not transferred.replies[0].message.actions
 
             unbound = await _dispatch("伙伴休战", "companion-unbind")
             assert "已离开当前配装" in unbound.replies[0].message.content
 
-            release_preview = await _dispatch("告别 C1", "companion-farewell-preview")
-            release_action = release_preview.replies[0].message.actions[0]
-            assert release_action.data.startswith("companion_farewell_confirm C1 ")
-            released = await _dispatch(release_action.data, "companion-farewell-confirm")
+            released = await _dispatch("告别 C1", "companion-farewell-direct")
             assert "已离开名册" in released.replies[0].message.content
+            assert not released.replies[0].message.actions
             final_roster = services.companions.view(character.id, logical_time=_now()).roster
             assert not final_roster.instances
             assert final_roster.captured_definition_ids
@@ -151,13 +148,19 @@ async def _main() -> None:
             people_content = people.replies[0].message.content
             assert person.name in people_content
             assert "世界:" in people_content
-            move_action = next(
-                action
-                for action in people.replies[0].message.actions
-                if action.id == f"person.location.{person.id}"
+            assert not people.replies[0].message.actions
+            binding = services.content.worlds.require_binding_for_display(
+                overview.character_world.world_id,
+                person.location_id,
             )
+            move_command = WorldLocationIntent(
+                overview.character_world.world_id,
+                binding.anchor_id,
+                binding.function_id,
+                binding.version,
+            ).command()
             moved = await _dispatch(
-                move_action.data,
+                move_command,
                 "companion-person-move",
             )
             assert "抵达" in moved.replies[0].message.content, moved.replies[0].message.content
@@ -182,8 +185,8 @@ async def _main() -> None:
             assert "类型: _人物_" in person_detail.replies[0].message.content
             person_farewell = await _dispatch("告别 C2", "companion-person-farewell")
             assert "成长记录会保留" in person_farewell.replies[0].message.content
-            person_farewell_action = person_farewell.replies[0].message.actions[0]
-            await _dispatch(person_farewell_action.data, "companion-person-farewell-confirm")
+            assert "已离开名册" in person_farewell.replies[0].message.content
+            assert not person_farewell.replies[0].message.actions
             rejoined = await _dispatch("结交", "companion-person-rejoin")
             assert "重新回到了你的名册" in rejoined.replies[0].message.content
         finally:

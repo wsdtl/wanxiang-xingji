@@ -124,12 +124,16 @@ async def _main() -> None:
                 "选择组队挑战 1",
                 "party-battle-select",
             )
-            assert "已锁定组队首领" in selected.replies[0].message.content
+            assert "组队挑战" in selected.replies[0].message.content
             assert "来源世界" in selected.replies[0].message.content
+            assert selected.replies[0].message.content.count("未准备") == 3
 
-            for client in ("party-a", "party-b", "party-c"):
+            for ready_count, client in enumerate(("party-a", "party-b", "party-c"), start=1):
                 ready = await _dispatch(client, "准备", f"party-ready-{client}")
-                assert "已标记为准备" in ready.replies[0].message.content
+                assert ready.replies[0].message.content.count("已准备") == ready_count
+                labels = {action.label for action in ready.replies[0].message.actions}
+                assert "取消准备" in labels
+                assert "准备" not in labels
             roster = await _dispatch("party-a", "组队", "party-roster")
             content = roster.replies[0].message.content
             assert "人数: _3/3_" in content
@@ -154,14 +158,9 @@ async def _main() -> None:
             assert "已经退出队伍" in left.replies[0].message.content
             kicked = await _dispatch("party-b", "请离队伍 party-c", "party-kick-c")
             assert "已将成员请离队伍" in kicked.replies[0].message.content
-            disband_preview = await _dispatch("party-b", "解散队伍", "party-disband-preview")
-            disband_confirm = next(
-                value.data
-                for value in disband_preview.replies[0].message.actions
-                if value.label == "确认解散"
-            )
-            disbanded = await _dispatch("party-b", disband_confirm, "party-disband-confirm")
+            disbanded = await _dispatch("party-b", "解散队伍", "party-disband-direct")
             assert "队伍已经解散" in disbanded.replies[0].message.content
+            assert not disbanded.replies[0].message.actions
             final = await _dispatch("party-b", "组队", "party-final")
             assert "当前没有加入队伍" in final.replies[0].message.content
         finally:

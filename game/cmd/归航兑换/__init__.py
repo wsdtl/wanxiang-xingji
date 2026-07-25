@@ -15,7 +15,7 @@ from . import service
         category="资产",
         summary="使用定相尘兑换套装图纸",
         usage=("归航兑换", "归航兑换 套装", "归航兑换 套装编号"),
-        side_effect="预览不消耗材料，确认兑换后扣除定相尘并发放图纸",
+        side_effect="选择套装后直接扣除定相尘并发放图纸",
         order=170,
     ),
 )

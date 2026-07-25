@@ -193,34 +193,64 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
         else ()
     )
     regions = tuple(
-        services.content.exploration_regions.require(binding.content_ref)
+        (
+            services.content.exploration_regions.require(binding.content_ref),
+            binding,
+        )
         for binding in bindings
         if binding.content_ref is not None
     )
     regular = [
         value
         for value in regions
-        if value.kind.value == "regular"
+        if value[0].kind.value == "regular"
     ]
-    for index, region in enumerate(regular, start=1):
+    for index, (region, binding) in enumerate(regular, start=1):
         builder.item(
             index,
-            f"{projector.name(region.location_id)} | {_levels(region.minimum_enemy_level, region.maximum_enemy_level)}",
+            M.command(
+                projector.name(region.location_id),
+                WorldLocationIntent(
+                    view.world.id,
+                    binding.anchor_id,
+                    binding.function_id,
+                    binding.version,
+                ).command(),
+            ),
+            f" | {_levels(region.minimum_enemy_level, region.maximum_enemy_level)}",
         )
     builder.section("特殊区域", icon="notice")
     special = [
         value
         for value in regions
-        if value.kind.value != "regular"
+        if value[0].kind.value != "regular"
     ]
-    for index, region in enumerate(special, start=1):
+    for index, (region, binding) in enumerate(special, start=1):
         builder.item(
             index,
-            f"{projector.name(region.location_id)} | {_focus(region.kind.value)} | {_levels(region.minimum_enemy_level, region.maximum_enemy_level)}",
+            M.command(
+                projector.name(region.location_id),
+                WorldLocationIntent(
+                    view.world.id,
+                    binding.anchor_id,
+                    binding.function_id,
+                    binding.version,
+                ).command(),
+            ),
+            f" | {_focus(region.kind.value)} | {_levels(region.minimum_enemy_level, region.maximum_enemy_level)}",
         )
     actions = []
     if result.state is not None and result.state.status is ExplorationStatus.RUNNING:
         actions.append(Action("exploration.stop", "停止", "停止探险", behavior="send"))
+        actions.append(
+            Action(
+                "exploration.summary",
+                "查看总结",
+                "探险总结",
+                behavior="send",
+                style="secondary",
+            )
+        )
     elif anchor_id is not None:
         try:
             resolved = services.content.worlds.resolve(
@@ -239,9 +269,18 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
 def _movement_message(result: WorldTravelResult, view) -> DocumentMessage:
     builder = M.document().section(f"前往·{view.skin.name}", icon="world")
     if result.status == "moved":
-        return builder.field("抵达", _anchor_name(result.anchor_id, view)).build()
+        return (
+            builder.field("抵达", _anchor_name(result.anchor_id, view))
+            .action(Action("exploration.start", "开始探险", "开始探险"))
+            .build()
+        )
     if result.status == "already_there":
-        return builder.field("位置", _anchor_name(result.anchor_id, view)).line("已经在这里").build()
+        return (
+            builder.field("位置", _anchor_name(result.anchor_id, view))
+            .line("已经在这里")
+            .action(Action("exploration.start", "开始探险", "开始探险"))
+            .build()
+        )
     if result.status == "main_action_occupied":
         return (
             builder.line("当前主要行动进行中，结束后才能移动")
@@ -249,7 +288,11 @@ def _movement_message(result: WorldTravelResult, view) -> DocumentMessage:
             .build()
         )
     if result.status in {"stale_world", "stale_binding"}:
-        return builder.line("这条地点按钮已经失效，请重新打开当前世界页面").build()
+        return (
+            builder.line("这条地点入口已经失效，请重新打开当前区域")
+            .action(Action("exploration.regions", "重新选择", "探险"))
+            .build()
+        )
     if result.status == "unavailable":
         return builder.line("当前世界没有这个地点").build()
     return builder.line("本次移动没有完成").build()
@@ -262,11 +305,36 @@ def _start_message(result: ExplorationOperationResult, view) -> DocumentMessage:
             builder.field("区域", _name(result.state.location_id, view))
             .field("首次结算", _time(result.state.next_batch_at))
             .line(f"之后每 10 分钟自动结算，最多 {MAX_EXPLORATION_BATCHES} 批，或直到停止、战败、容量已满。")
-            .actions((Action("exploration.stop", "停止", "停止探险", behavior="send"),))
+            .actions(
+                (
+                    Action("exploration.stop", "停止", "停止探险", behavior="send"),
+                    Action(
+                        "exploration.summary",
+                        "查看总结",
+                        "探险总结",
+                        behavior="send",
+                        style="secondary",
+                    ),
+                )
+            )
             .build()
         )
     if result.status == "already_running":
-        return builder.line("当前已经在探险").build()
+        return (
+            builder.line("当前已经在探险")
+            .actions(
+                (
+                    Action("exploration.stop", "停止", "停止探险"),
+                    Action(
+                        "exploration.summary",
+                        "查看总结",
+                        "探险总结",
+                        style="secondary",
+                    ),
+                )
+            )
+            .build()
+        )
     if result.status == "health_depleted":
         return (
             builder.line("血气已经归零，恢复后才能开始探险")
@@ -299,12 +367,21 @@ def _stop_message(result: ExplorationOperationResult, view) -> DocumentMessage:
         return (
             builder.field("已结算", f"{result.state.completed_batches} 批")
             .line("已经停止")
+            .action(Action("exploration.summary", "探险总结", "探险总结"))
             .build()
         )
     if result.status == "already_stopped":
-        return builder.line("当前探险已经停止").build()
+        return (
+            builder.line("当前探险已经停止")
+            .action(Action("exploration.summary", "探险总结", "探险总结"))
+            .build()
+        )
     if result.status == "not_started":
-        return builder.line("当前没有探险记录").build()
+        return (
+            builder.line("当前没有探险记录")
+            .action(Action("exploration.regions", "查看区域", "探险"))
+            .build()
+        )
     return builder.line("本次停止没有完成").build()
 
 
@@ -319,6 +396,7 @@ def _summary_message(
             M.document()
             .section("探险总结", icon="combat")
             .line("还没有探险记录")
+            .action(Action("exploration.regions", "查看区域", "探险"))
             .build()
         )
     state = result.state
@@ -374,9 +452,27 @@ def _summary_message(
                 )
     if state.medicine_drops:
         builder.note("药物数量为累计掉落；开启自动用药时，批次间消耗后可能不再留存在纳戒。")
-    return builder.actions(
-        (Action("exploration.recycle_trophies", "回收", "回收战利品", behavior="send"),)
-    ).build()
+    actions = []
+    if state.status is ExplorationStatus.RUNNING:
+        actions.append(Action("exploration.stop", "停止探险", "停止探险"))
+    else:
+        actions.extend(
+            (
+                Action(
+                    "exploration.recycle_trophies",
+                    "回收",
+                    "回收战利品",
+                    behavior="send",
+                ),
+                Action(
+                    "exploration.regions",
+                    "查看区域",
+                    "探险",
+                    style="secondary",
+                ),
+            )
+        )
+    return builder.actions(actions).build()
 
 
 def _status_text(result: ExplorationOperationResult) -> str:

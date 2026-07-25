@@ -137,7 +137,7 @@
 
   async function loadRecent() {
     setConnection("读取中", "is-waiting");
-    const data = await requestJson("/game-console/api/messages?limit=100");
+    const data = await requestJson("/game-console/api/messages?limit=50");
     resetMessages();
     (data.records || []).forEach((record) => appendRecord(record, false));
     state.hasMore = Boolean(data.has_more);

@@ -28,7 +28,7 @@ async def companion(message: str = "", overview=Depends(current_character_overvi
         category="角色",
         summary="让一只伙伴随当前配装出战",
         usage=("伙伴出战 C1",),
-        side_effect="同一只伙伴只能属于一套配装，转移时需要确认",
+        side_effect="同一只伙伴只能属于一套配装，出战时会直接转移到当前配装",
         order=90,
     ),
 )
@@ -82,12 +82,12 @@ async def hunt_companion(message: str = "", overview=Depends(current_character_o
         category="世界",
         summary="永久结束当前宠物秘境",
         usage=("放弃秘境",),
-        side_effect="确认后当前全部踪迹消失，万灵引不会返还",
+        side_effect="当前全部踪迹会直接消失，万灵引不会返还",
         order=100,
     ),
 )
 async def abandon_sanctuary(overview=Depends(current_character_overview)) -> None:
-    await service.preview_abandon(overview)
+    await service.abandon_sanctuary(overview)
 
 
 @GameCommand.handler(
@@ -101,7 +101,7 @@ async def abandon_sanctuary(overview=Depends(current_character_overview)) -> Non
     ),
 )
 async def farewell_companion(message: str = "", overview=Depends(current_character_overview)) -> None:
-    await service.preview_farewell(message, overview)
+    await service.farewell_companion(message, overview)
 
 
 @GameCommand.handler(

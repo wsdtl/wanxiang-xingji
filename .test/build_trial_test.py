@@ -62,22 +62,21 @@ async def _main() -> None:
                 20,
                 "build-trial.extension-check",
             )
-            extended_actions = build_trial_command_service._mode_actions(
+            extended_links = build_trial_command_service._mode_links(
                 (*services.content.build_trials.definitions(), extension_mode)
             )
-            assert extended_actions[-1].id == "build_trial.extension_check"
-            assert extended_actions[-1].label == "扩展校验"
-            assert extended_actions[-1].data == "开始试炼 扩展校验"
+            assert extended_links[-1].label[0].value == "扩展校验"
+            assert extended_links[-1].command == "开始试炼 扩展校验"
 
             menu = await _dispatch("构筑试炼", "build-trial-menu")
             menu_message = menu.replies[0].message
             assert all(value in menu_message.content for value in ("单体", "群体", "持久"))
-            assert {value.label for value in menu_message.actions} == {"单体", "群体", "持久"}
+            assert not menu_message.actions
 
             invalid = await _dispatch("开始试炼 未知模式", "build-trial-invalid")
             invalid_message = invalid.replies[0].message
             assert "请选择单体、群体、持久模式" in invalid_message.content
-            assert {value.label for value in invalid_message.actions} == {"单体", "群体", "持久"}
+            assert not invalid_message.actions
 
             await _dispatch("休息", "build-trial-rest")
             snapshots_before = _snapshot_rows(services)

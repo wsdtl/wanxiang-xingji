@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 
 def world_lore_overview_message(lore, world_name: str) -> DocumentMessage:
     builder = M.document().section(f"世界志·{world_name}", icon="world")
     if not lore.available:
-        return builder.line("尚未在这个世界留下可阅读的行纪").build()
+        return (
+            builder.line("尚未在这个世界留下可阅读的行纪")
+            .action(Action("world-lore.progress", "查看行纪", "行纪", style="secondary"))
+            .build()
+        )
     builder.row(
         ("世界进度", f"{lore.percent}%"),
         ("已知记录", f"{len(lore.unlocked_records)}/{len(lore.definition.records)}"),
@@ -25,7 +29,10 @@ def world_lore_overview_message(lore, world_name: str) -> DocumentMessage:
         else:
             status = "新录"
         builder.line(
-            f"{index}. {record.title}",
+            f"{index}. ",
+            M.command(record.title, f"世界志 {world_name} {index}")
+            if record.id in unlocked_ids
+            else record.title,
             FieldSeparator(),
             status,
         )
@@ -40,11 +47,28 @@ def world_lore_record_message(definition, record, world_name: str) -> DocumentMe
     )
     for paragraph in record.paragraphs:
         builder.line(paragraph)
-    return builder.note("世界志记录").build()
+    return (
+        builder.note("世界志记录")
+        .action(
+            Action(
+                "world-lore.back",
+                "返回世界志",
+                f"世界志 {world_name}",
+                style="secondary",
+            )
+        )
+        .build()
+    )
 
 
-def world_lore_failure_message(message: str) -> DocumentMessage:
-    return M.document().section("世界志", icon="notice").line(message).build()
+def world_lore_failure_message(
+    message: str,
+    recovery: Action | None = None,
+) -> DocumentMessage:
+    builder = M.document().section("世界志", icon="notice").line(message)
+    if recovery is not None:
+        builder.action(recovery)
+    return builder.build()
 
 
 __all__ = [

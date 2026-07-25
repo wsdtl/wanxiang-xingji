@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from math import ceil
 from zoneinfo import ZoneInfo
 
 from game.app import (
@@ -60,10 +59,16 @@ from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
+from ..interaction import (
+    DEFAULT_PAGE_SIZE,
+    paginate,
+    pagination_actions,
+    parse_page_number,
+)
 from ..reply import send_game_reply
 
 
-PAGE_SIZE = 100
+PAGE_SIZE = DEFAULT_PAGE_SIZE
 _MEDICINE_RESOURCE = {
     SMALL_HEALTH_MEDICINE_ITEM_ID: (HEALTH_CURRENT, HEALTH_MAXIMUM, SMALL_MEDICINE_RECOVERY_RATIO),
     MEDIUM_HEALTH_MEDICINE_ITEM_ID: (HEALTH_CURRENT, HEALTH_MAXIMUM, MEDIUM_MEDICINE_RECOVERY_RATIO),
@@ -264,13 +269,15 @@ def _armory_home(overview: CharacterOverview) -> DocumentMessage:
             continue
         counts[next(iter(component.allowed_slot_ids))] += 1
     builder = M.document().section("武库", icon="equipment")
-    actions = []
     projector = _view(overview).projector
     for slot_id in STANDARD_LOADOUT_SLOT_ORDER:
         name = projector.name(slot_id)
-        builder.field(name, counts[slot_id])
-        actions.append(Action(f"armory.{slot_id}", name, f"武库 {slot_id}"))
-    return builder.field("合计", sum(counts.values())).actions(actions).build()
+        builder.line(
+            M.command(name, f"武库 {slot_id}"),
+            FieldSeparator(),
+            f"{counts[slot_id]} 件",
+        )
+    return builder.field("合计", sum(counts.values())).build()
 
 
 def _asset_page(
@@ -282,11 +289,11 @@ def _asset_page(
     *,
     page_command: str | None = None,
 ) -> DocumentMessage:
-    values, pages = _slice_page(assets, page)
+    window = paginate(assets, page, page_size=PAGE_SIZE)
     builder = M.document().section(title, icon=icon)
-    if not values:
+    if not window.values:
         builder.line("当前没有物品")
-    for asset in values:
+    for asset in window.values:
         reference = _reference(overview.inventory, asset)
         builder.line(
             M.command(reference, f"查看 {reference}"),
@@ -297,14 +304,21 @@ def _asset_page(
             " ",
             _protection_control(asset, overview),
         )
-    if pages > 1:
-        builder.field("页码", f"{page}/{pages}")
-        builder.actions(_page_actions(page_command or title, page, pages))
+    command = page_command or title
+    back = (
+        Action("page.armory", "返回武库", "武库", style="secondary")
+        if command.startswith("武库 ")
+        else None
+    )
+    builder.row(("页码", window.label), ("总计", window.total))
+    actions = pagination_actions(command, window, back=back)
+    if actions:
+        builder.actions(actions)
     return builder.build()
 
 
 def _backpack_page(assets, page: int, overview: CharacterOverview) -> DocumentMessage:
-    values, pages = _slice_page(assets, page)
+    window = paginate(assets, page, page_size=PAGE_SIZE)
     inventory = overview.inventory
     container = _container(inventory, "container.backpack")
     used = _used_space(inventory, container.id)
@@ -313,10 +327,10 @@ def _backpack_page(assets, page: int, overview: CharacterOverview) -> DocumentMe
         .section("背包", icon="inventory")
         .field("空间", f"{used}/{container.maximum_space}" if container.maximum_space else used)
     )
-    if not values:
+    if not window.values:
         builder.line("当前没有物品")
     total_value = 0
-    for asset in values:
+    for asset in window.values:
         reference = _reference(inventory, asset)
         definition = current_game_services().content.catalog.items.require(asset.definition_id)
         quantity = asset.quantity if isinstance(asset, ItemStack) else 1
@@ -341,10 +355,9 @@ def _backpack_page(assets, page: int, overview: CharacterOverview) -> DocumentMe
         )
     if total_value:
         builder.field("本页估价", total_value)
-    if pages > 1:
-        builder.field("页码", f"{page}/{pages}").actions(
-            _page_actions("背包", page, pages)
-        )
+    builder.row(("页码", window.label), ("总计", window.total)).actions(
+        pagination_actions("背包", window)
+    )
     return builder.build()
 
 
@@ -717,36 +730,8 @@ def _sorted_assets(inventory: InventoryState, values):
     return sorted(values, key=lambda value: inventory.reference_number(value.id), reverse=True)
 
 
-def _slice_page(values, page: int):
-    pages = max(1, ceil(len(values) / PAGE_SIZE))
-    if page > pages:
-        raise ValueError(f"页码不能超过 {pages}")
-    start = (page - 1) * PAGE_SIZE
-    return values[start : start + PAGE_SIZE], pages
-
-
-def _page_actions(command: str, page: int, pages: int):
-    actions = []
-    if page > 1:
-        actions.append(Action(f"page.{page - 1}", "上一页", f"{command} {page - 1}"))
-    if page < pages:
-        actions.append(Action(f"page.{page + 1}", "下一页", f"{command} {page + 1}"))
-    if command.startswith("武库 "):
-        actions.append(Action("page.armory", "返回武库", "武库"))
-    return actions
-
-
 def _page_number(value: object) -> int:
-    text = str(value or "").strip()
-    if not text:
-        return 1
-    try:
-        page = int(text)
-    except ValueError as exc:
-        raise ValueError("页码必须是数字") from exc
-    if page < 1:
-        raise ValueError("页码必须大于 0")
-    return page
+    return parse_page_number(value)
 
 
 def _asset_name(asset, overview: CharacterOverview) -> str:

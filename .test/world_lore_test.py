@@ -8,6 +8,7 @@ from importlib import import_module
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 
@@ -110,6 +111,17 @@ async def _main() -> None:
             other_name = services.world_views.require(other_world_id).skin.name
             locked = await _dispatch(f"世界志 {other_name}", "lore-locked-world")
             assert "尚未在这个世界留下" in _single_content(locked)
+            assert locked.replies[0].message.actions[0].label == "查看行纪"
+            assert locked.replies[0].message.actions[0].data == "行纪"
+
+            with patch.object(
+                type(services.world_lore),
+                "view",
+                side_effect=RuntimeError("injected world lore failure"),
+            ):
+                failed = await _dispatch("世界志", "lore-injected-failure")
+            assert failed.replies[0].message.actions[0].label == "重试"
+            assert failed.replies[0].message.actions[0].data == "世界志"
 
             _set_world_progress(services, character, character_world.world_id, 50)
             advanced = await _dispatch("世界志", "lore-progress-advanced")

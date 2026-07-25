@@ -114,13 +114,13 @@ async def logout(
 @router.get("/api/messages")
 async def recent_messages(
     _: Annotated[ConsoleSession, Depends(current_session)],
-    limit: int = 100,
+    limit: int = 50,
     before_id: int | None = None,
 ) -> dict[str, object]:
     records = service.recent(limit=limit, before_id=before_id)
     return {
         "records": [record_payload(record) for record in records],
-        "has_more": len(records) >= max(1, min(limit, 200)),
+        "has_more": len(records) >= max(1, min(limit, 50)),
     }
 
 
