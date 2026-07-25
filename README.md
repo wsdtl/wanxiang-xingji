@@ -1,8 +1,7 @@
 # 万象行纪
 
-《万象行纪》是一款以无穷世界、界门登录和玩家历史为核心的多人异步 QQ 聊天文游。`xiuxian4` 是内部
-开发代号；当前公共底座版本为 `public-foundation.v11`，已经建立真实世界身份、独立空间、跨世界角色档案和首批可反复
-游玩的玩家闭环。
+《万象行纪》是一款以无穷世界、界门登录和玩家历史为核心的多人异步 QQ 聊天文游。当前公共底座版本为
+`public-foundation.v11`，已经建立真实世界身份、独立空间、跨世界角色档案和可反复游玩的玩家闭环。
 
 玩家通过界门维系一具唯一化身，在独立世界中探险、战斗、收集装备并参与跨界灾厄。世界可以按当地
 法则重构角色和资产的形态，但等级、所有权、战斗机制、铭刻与已经发生的历史不会被改写。
@@ -13,6 +12,16 @@
 当前正式业务及其状态所有权以
 [业务框架与功能规划](game/features/业务框架与功能规划.md)和
 `game/features/catalog.py` 的显式 `FeatureManifest` 为准；README 与各底座说明不再各自维护另一份完成度台账。
+
+## 正式项目身份
+
+- 正式名称：`万象行纪`
+- 技术标识：`wanxiang_xingji`
+- 权威数据库：`game/database/wanxiang_xingji.db`
+- 唯一装配入口：`game.app`
+- 项目根目录：`C:\Users\16841\Desktop\万象行纪`
+
+旧开发项目不参与运行、导包、配置、测试或部署。Git 历史只承担工程追溯，不构成运行时兼容边界。
 
 ## 当前地基
 
@@ -109,7 +118,7 @@ SERVER_SSL_CERTFILE=certs/example_bundle.pem
 SERVER_SSL_KEYFILE=certs/example.key
 QQ_BOT_APP_ID=机器人应用ID
 QQ_BOT_SECRET=机器人密钥
-DATABASE_PATH=game/database/xiuxian4.db
+DATABASE_PATH=game/database/wanxiang_xingji.db
 ```
 
 `.env`、证书、私钥和机器人密钥禁止提交到 Git。
@@ -315,6 +324,7 @@ Get-ChildItem .test\*_test.py | Sort-Object Name | ForEach-Object {
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\ruff.exe check game launch message auto main.py
 .venv\Scripts\vulture.exe game launch message auto main.py --exclude .venv,__pycache__ --min-confidence 100
+.venv\Scripts\python.exe -X utf8 .ops audit-extension --all
 git diff --check
 ```
 
@@ -323,6 +333,7 @@ git diff --check
 - [《万象行纪》世界设定](design/万象行纪世界设定.md)
 - [游戏核心边界](game/core/核心边界说明.md)
 - [核心架构门禁](design/核心架构门禁说明.md)
+- [代码结构与维护准则](design/代码结构与维护准则.md)
 - [正式内容层](game/content/正式内容层说明.md)
 - [具体游戏规则](game/rules/具体游戏规则说明.md)
 - [业务框架与功能规划](game/features/业务框架与功能规划.md)
@@ -347,7 +358,7 @@ git diff --check
 - [队伍正式业务](game/features/party/说明.md)
 - [伙伴正式内容](game/content/catalog/companion/伙伴正式内容说明.md)
 - [公共底座封板说明](design/公共底座封板说明.md)
-- [真正核心封板清单](design/真正核心封板清单.md)
+- [核心封板基线](design/核心封板基线.md)
 - [游戏设计宪章](design/游戏设计宪章.md)
 - [Gameplay 规则内核](game/core/gameplay/规则内核说明.md)
 - [战斗底座封板说明](game/core/gameplay/combat/战斗底座封板说明.md)
@@ -401,7 +412,7 @@ git diff --check
 - `game/cmd/` 承接命令与对应组件入口；二级组件的 `service.py` 负责命令，`jobs.py` 负责定时触发，真正业务仍归 `features`。
 - 只有 `game/cmd/` 的二级组件目录使用中文；Python 文件名和代码标识符统一使用英文。
 - `组件测试/` 只存放可删除的联调与协议测试，禁止依赖游戏代码。
-- `launch/` 只负责应用运行与通信基础设施，不能导入未来修仙业务包。
+- `launch/` 只负责应用运行与通信基础设施，不能导入游戏业务包。
 - 未来业务组件通过 `MessageHandler` 注册命令，通过公共 `manager` 发送统一消息对象。
 - 平台身份、原始事件、原生 payload 和发送目标只能存在于对应驱动器包内。
 - 脱离当前消息上下文发送时必须提供明确 `ReplyTarget`，框架不会根据历史消息猜测目标。

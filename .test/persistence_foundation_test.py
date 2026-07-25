@@ -104,7 +104,7 @@ def _assert_atomic_persisted_settlement(directory: Path) -> None:
         character_ids=("character-a",),
         weapon_ids=("weapon-a",),
     )
-    database = SqliteDatabase(directory / "xiuxian4-test.db")
+    database = SqliteDatabase(directory / "wanxiang-xingji-test.db")
     database.initialize()
     database.initialize()
     service = PersistedRewardSettlementService(database, engine)

@@ -134,7 +134,6 @@ def _assert_physical_layout() -> None:
         assert (core / name / "__init__.py").is_file()
         assert not (ROOT / name).exists(), f"禁止保留旧顶层兼容包：{name}"
     assert (core / "gameplay" / "grants" / "__init__.py").is_file()
-    assert not (ROOT / "xiuxian_core").exists(), "禁止保留旧核心目录"
 
     commands = game / "cmd"
     assert (commands / "__init__.py").is_file()
@@ -325,7 +324,7 @@ def _assert_physical_layout() -> None:
         assert (component / "说明.md").is_file()
 
     assert (ROOT / "组件测试" / "QQ协议测试" / "__init__.py").is_file()
-    for legacy in ("src", "components", "xiuxian_game"):
+    for legacy in ("src", "components"):
         assert not (ROOT / legacy).exists(), f"禁止保留旧目录：{legacy}"
 
 

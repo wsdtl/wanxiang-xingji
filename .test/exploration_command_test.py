@@ -116,7 +116,7 @@ async def _main() -> None:
                     "exploration-summary-regression",
                     ExternalIdentity(
                         "platform.local",
-                        config.project.name,
+                        config.project.id,
                         "identity.local_user",
                         "",
                         "exploration-player",

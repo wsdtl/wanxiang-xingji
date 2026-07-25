@@ -10,12 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-OPS_SPEC = spec_from_file_location("xiuxian_ops", ROOT / ".ops" / "__main__.py")
+OPS_SPEC = spec_from_file_location("wanxiang_xingji_ops", ROOT / ".ops" / "__main__.py")
 assert OPS_SPEC is not None and OPS_SPEC.loader is not None
 OPS_MODULE = module_from_spec(OPS_SPEC)
 OPS_SPEC.loader.exec_module(OPS_MODULE)
 scaffold_extension = OPS_MODULE.scaffold_extension
 audit_extension = OPS_MODULE.audit_extension
+audit_all_extensions = OPS_MODULE.audit_all_extensions
 
 
 def main() -> None:
@@ -52,6 +53,13 @@ def main() -> None:
         content_audit = audit_extension(content, root=root)
         assert world_audit["valid"] and world_audit["draft"]
         assert content_audit["valid"] and content_audit["draft"]
+        all_audit = audit_all_extensions(root=root)
+        assert all_audit["valid"]
+        assert all_audit["count"] == 2
+        assert {report["path"] for report in all_audit["extensions"]} == {
+            "game/content/extensions/official/_fourth_world",
+            "game/content/extensions/official_content/_new_armaments",
+        }
 
         for invalid in ("FourthWorld", "fourth-world", "_hidden", "class", "世界"):
             try:

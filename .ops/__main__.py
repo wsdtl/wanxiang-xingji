@@ -38,7 +38,9 @@ def main(argv: list[str] | None = None) -> int:
         "audit-extension",
         help="在扩展启用前检查结构，启用后验证完整内容装配",
     )
-    audit.add_argument("--path", required=True, help="扩展目录的仓库相对或绝对路径")
+    audit_target = audit.add_mutually_exclusive_group(required=True)
+    audit_target.add_argument("--path", help="扩展目录的仓库相对或绝对路径")
+    audit_target.add_argument("--all", action="store_true", help="审计全部正式扩展")
     args = parser.parse_args(argv)
 
     if args.command == "scaffold-extension":
@@ -48,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "audit-extension":
-        report = audit_extension(args.path)
+        report = audit_all_extensions() if args.all else audit_extension(args.path)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if report["valid"] else 2
 
@@ -197,7 +199,7 @@ def audit_extension(path: str | Path, *, root: Path = ROOT) -> dict[str, object]
             runtime_error = f"{type(error).__name__}: {error}"
     valid = not missing and not syntax_errors and export_declared and runtime_error is None
     return {
-        "path": str(resolved.relative_to(root.resolve())),
+        "path": resolved.relative_to(root.resolve()).as_posix(),
         "kind": kind,
         "draft": draft,
         "valid": valid,
@@ -208,6 +210,28 @@ def audit_extension(path: str | Path, *, root: Path = ROOT) -> dict[str, object]
         "export_declared": export_declared,
         "assembly_fingerprint": assembly_fingerprint,
         "runtime_error": runtime_error,
+    }
+
+
+def audit_all_extensions(*, root: Path = ROOT) -> dict[str, object]:
+    """审计全部世界与通用内容扩展，返回可供 CI 判定的汇总。"""
+
+    extension_roots = (
+        root / "game" / "content" / "extensions" / "official",
+        root / "game" / "content" / "extensions" / "official_content",
+    )
+    candidates = [
+        path
+        for extension_root in extension_roots
+        if extension_root.is_dir()
+        for path in sorted(extension_root.iterdir(), key=lambda value: value.name)
+        if path.is_dir() and path.name != "__pycache__"
+    ]
+    reports = [audit_extension(path, root=root) for path in candidates]
+    return {
+        "valid": bool(reports) and all(bool(report["valid"]) for report in reports),
+        "count": len(reports),
+        "extensions": reports,
     }
 
 

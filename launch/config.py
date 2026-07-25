@@ -35,7 +35,13 @@ ENV_FILE = BASE_DIR / ".env"
 
 
 # 项目基础配置在 .env 里的键名。
-PROJECT_ENV_KEYS = {"PROJECT_NAME", "PROJECT_DEBUG", "PROJECT_TIMEZONE", "PROJECT_DOMAIN"}
+PROJECT_ENV_KEYS = {
+    "PROJECT_ID",
+    "PROJECT_NAME",
+    "PROJECT_DEBUG",
+    "PROJECT_TIMEZONE",
+    "PROJECT_DOMAIN",
+}
 
 
 # 服务监听配置在 .env 里的键名。
@@ -94,7 +100,8 @@ def read_env_file(path: Path = ENV_FILE) -> dict[str, str]:
 
     支持写法：
 
-        PROJECT_NAME=xiuxian
+        PROJECT_ID=wanxiang_xingji
+        PROJECT_NAME=万象行纪
         ROUTER_GROUPS=["示例路由组"]
         zdy1=hello
 
@@ -226,6 +233,7 @@ def apply_project_timezone(timezone_name: str) -> None:
 class ProjectConfig:
     """项目基础配置。"""
 
+    id: str
     name: str
     debug: bool
     timezone: str
@@ -292,6 +300,7 @@ class Config:
 
         from launch import config
 
+        print(config.project.id)
         print(config.project.name)
         print(config.project.debug)
         print(config.project.timezone)
@@ -355,8 +364,16 @@ def load_config() -> Config:
     env = Env(raw)
 
     # 项目基础配置。
+    project_id = env.get("PROJECT_ID", "wanxiang_xingji").strip()
+    project_name = env.get("PROJECT_NAME", "万象行纪").strip()
+    if not project_id or not project_id.isascii():
+        raise ValueError("PROJECT_ID 必须是非空 ASCII 技术标识")
+    if not project_name:
+        raise ValueError("PROJECT_NAME 不能为空")
+
     project = ProjectConfig(
-        name=env.get("PROJECT_NAME", "xiuxian"),
+        id=project_id,
+        name=project_name,
         debug=env.get_bool("PROJECT_DEBUG", False),
         timezone=env.get("PROJECT_TIMEZONE", "Asia/Shanghai"),
         domain=env.get("PROJECT_DOMAIN", ""),
@@ -395,7 +412,7 @@ def load_config() -> Config:
     )
 
     database = DatabaseConfig(
-        path=env.get_path("DATABASE_PATH", BASE_DIR / "data" / "xiuxian4.db"),
+        path=env.get_path("DATABASE_PATH", BASE_DIR / "data" / "wanxiang_xingji.db"),
         message_console_path=env.get_path(
             "MESSAGE_CONSOLE_DATABASE_PATH",
             BASE_DIR / "data" / "message_console.db",

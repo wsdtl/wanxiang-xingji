@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--password", required=True)
     args = parser.parse_args()
 
-    with TemporaryDirectory(prefix="xiuxian4-web-console-") as tmpdir:
+    with TemporaryDirectory(prefix="wanxiang-xingji-web-console-") as tmpdir:
         root = Path(tmpdir)
 
         from launch import config

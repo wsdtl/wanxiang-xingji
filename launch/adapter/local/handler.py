@@ -267,7 +267,7 @@ class LocalEventHandler(BaseMessageHandler):
             conversation_type=event.conversation_type,
             reply_target=reply_target,
             capabilities=LocalEventHandler.CAPABILITIES,
-            identity=local_message_identity(event, tenant_id=config.project.name),
+            identity=local_message_identity(event, tenant_id=config.project.id),
             driver_context=event,
             sender_name=event.sender_name,
         )

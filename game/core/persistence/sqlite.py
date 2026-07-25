@@ -708,7 +708,7 @@ class SqliteDatabase:
             if "persistence_metadata" not in tables:
                 if tables:
                     raise SchemaVersionError(
-                        "数据库包含未知旧结构，拒绝把它当作 xiuxian4 新数据库"
+                        "数据库包含未知结构，拒绝按万象行纪正式数据库初始化"
                     )
                 try:
                     connection.executescript(

@@ -263,7 +263,7 @@ def _evidence(logical_time: datetime) -> IdentityEvidence:
         "new-player-journey-evidence",
         ExternalIdentity(
             "platform.local",
-            config.project.name,
+            config.project.id,
             "identity.local_user",
             "",
             CLIENT_ID,

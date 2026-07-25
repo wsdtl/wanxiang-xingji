@@ -1,4 +1,4 @@
-name: xiuxian4-ci
+name: wanxiang-xingji-ci
 
 on:
   push:
@@ -33,5 +33,6 @@ jobs:
           python .test/core_governance_test.py
           python .test/content_extension_contract_test.py
           python .test/world_extension_contract_test.py
+          python .ops audit-extension --all
       - name: Check patch whitespace
         run: git diff --check

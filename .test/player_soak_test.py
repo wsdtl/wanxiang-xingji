@@ -344,7 +344,7 @@ def _evidence(client_id: str, logical_time: datetime) -> IdentityEvidence:
         f"soak-evidence:{client_id}:{logical_time.isoformat()}",
         ExternalIdentity(
             "platform.local",
-            config.project.name,
+            config.project.id,
             "identity.local_user",
             "",
             client_id,
