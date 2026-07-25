@@ -266,30 +266,34 @@ COMPANION_GROWTH = CompanionGrowthDefinition(
     disaster_damage_tiers=((0.0, 10), (0.001, 20), (0.005, 40)),
 )
 
+CULTIVATION_COMPANION_SANCTUARY = CompanionSanctuaryDefinition(
+    "companion_sanctuary.cultivation",
+    TAIXUAN_WORLD_ID,
+    "万灵秘境",
+    "隐于太玄界灵脉夹层中的古老生灵栖地。",
+    tuple(value.id for value in CULTIVATION_COMPANIONS),
+)
+MAGIC_COMPANION_SANCTUARY = CompanionSanctuaryDefinition(
+    "companion_sanctuary.magic",
+    MAGIC_WORLD_ID,
+    "幻兽庭",
+    "漂流在魔力潮汐间、收容异界生灵的隐秘庭域。",
+    tuple(value.id for value in MAGIC_COMPANIONS),
+)
+STELLAR_RING_COMPANION_SANCTUARY = CompanionSanctuaryDefinition(
+    "companion_sanctuary.stellar_ring",
+    STELLAR_RING_WORLD_ID,
+    "回声育成舱",
+    "被遗忘的生态舱层，古代造物与适应环城环境的生灵在此繁衍。",
+    tuple(value.id for value in STELLAR_RING_COMPANIONS),
+)
+
 COMPANION_CATALOG = CompanionCatalog(
     (*CULTIVATION_COMPANIONS, *MAGIC_COMPANIONS, *STELLAR_RING_COMPANIONS),
     (
-        CompanionSanctuaryDefinition(
-            "companion_sanctuary.cultivation",
-            TAIXUAN_WORLD_ID,
-            "万灵秘境",
-            "隐于太玄界灵脉夹层中的古老生灵栖地。",
-            tuple(value.id for value in CULTIVATION_COMPANIONS),
-        ),
-        CompanionSanctuaryDefinition(
-            "companion_sanctuary.magic",
-            MAGIC_WORLD_ID,
-            "幻兽庭",
-            "漂流在魔力潮汐间、收容异界生灵的隐秘庭域。",
-            tuple(value.id for value in MAGIC_COMPANIONS),
-        ),
-        CompanionSanctuaryDefinition(
-            "companion_sanctuary.stellar_ring",
-            STELLAR_RING_WORLD_ID,
-            "回声育成舱",
-            "被遗忘的生态舱层，古代造物与适应环城环境的生灵在此繁衍。",
-            tuple(value.id for value in STELLAR_RING_COMPANIONS),
-        ),
+        CULTIVATION_COMPANION_SANCTUARY,
+        MAGIC_COMPANION_SANCTUARY,
+        STELLAR_RING_COMPANION_SANCTUARY,
     ),
     COMPANION_BALANCE,
     COMPANION_GROWTH,

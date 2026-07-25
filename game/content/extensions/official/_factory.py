@@ -1,17 +1,11 @@
-"""把现有世界内容分区装入统一世界扩展契约。"""
+"""把一个世界自有内容装入统一世界扩展契约。"""
 
 from __future__ import annotations
 
 from game.core.gameplay import ContentVersion
 
-from ...catalog.companion import COMPANION_CATALOG
-from ...catalog.disaster.combat import DISASTER_ENEMY_DEFINITIONS
-from ...catalog.enemy import (
-    ENEMY_BEHAVIOR_PROFILE_CATALOG,
-    PARTY_BOSS_SOURCE_CATALOG,
-)
-from ...catalog.item import PARTY_BOSS_TROPHY_ITEM_IDS
-from ...catalog.world import WORLD_SPACES
+from ...catalog.disaster.combat import build_disaster_enemy_definitions
+from ...catalog.enemy.party import PartyBossSourceDefinition
 from ..models import WorldExtension
 
 
@@ -19,45 +13,48 @@ def build_world_extension(
     *,
     order: int,
     bundle,
+    space,
     skin,
     gear_presentation,
     enemy_presentation,
     companion_species,
+    companion_sanctuary,
     people,
+    enemy_behavior_profile,
     party_bosses,
     disasters,
     lore,
+    content_extensions=(),
 ) -> WorldExtension:
     world_id = bundle.world.id
-    disaster_ids = {value.enemy_definition_id for value in disasters}
+    party_values = tuple(party_bosses)
+    disaster_values = tuple(disasters)
     return WorldExtension(
         id=world_id,
         version=ContentVersion(1, 0, 0),
         order=order,
-        space=next(
-            value for value in WORLD_SPACES if value.id == bundle.world.space_id
-        ),
+        space=space,
         bundle=bundle,
         skin=skin,
         gear_presentation=gear_presentation,
         enemy_presentation=enemy_presentation,
         companion_species=tuple(companion_species),
-        companion_sanctuary=COMPANION_CATALOG.require_sanctuary(world_id),
+        companion_sanctuary=companion_sanctuary,
         people=tuple(people),
-        enemy_behavior_profile=ENEMY_BEHAVIOR_PROFILE_CATALOG.require(world_id),
-        party_bosses=tuple(party_bosses),
-        party_boss_source=PARTY_BOSS_SOURCE_CATALOG.require(world_id),
-        party_boss_trophy_item_ids={
-            value.id: PARTY_BOSS_TROPHY_ITEM_IDS[value.id]
-            for value in party_bosses
-        },
-        disasters=tuple(disasters),
-        disaster_enemies=tuple(
-            value
-            for value in DISASTER_ENEMY_DEFINITIONS
-            if value.id in disaster_ids
+        enemy_behavior_profile=enemy_behavior_profile,
+        party_bosses=party_values,
+        party_boss_source=PartyBossSourceDefinition(
+            world_id,
+            frozenset(value.id for value in party_values),
         ),
+        party_boss_trophy_item_ids={
+            value.id: f"item.trophy.party_boss.{value.id.removeprefix('enemy.boss.party.')}"
+            for value in party_values
+        },
+        disasters=disaster_values,
+        disaster_enemies=build_disaster_enemy_definitions(disaster_values),
         lore=lore,
+        content_extensions=tuple(content_extensions),
     )
 
 

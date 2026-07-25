@@ -116,7 +116,12 @@ class WeaponMechanicRegistry:
         except KeyError as error:
             raise ValueError(f"武器 {blueprint.key} 引用了未注册机制：{error.args[0]}") from error
 
-    def validate_blueprints(self, blueprints) -> None:
+    def validate_blueprints(
+        self,
+        blueprints,
+        *,
+        require_all_registered_used: bool = True,
+    ) -> None:
         values = tuple(blueprints)
         recipes = tuple(self.resolve(value) for value in values)
         recipe_ids = tuple(value.recipe_id for value in recipes)
@@ -125,13 +130,14 @@ class WeaponMechanicRegistry:
         used_primary = {value.primary.key for value in recipes}
         used_support = {value.support.key for value in recipes}
         used_targeting = {value.targeting.key for value in recipes}
-        unused = (
-            set(self.primaries) - used_primary,
-            set(self.supports) - used_support,
-            set(self.targeting) - used_targeting,
-        )
-        if any(unused):
-            raise ValueError(f"正式机制注册存在未使用项：{unused}")
+        if require_all_registered_used:
+            unused = (
+                set(self.primaries) - used_primary,
+                set(self.supports) - used_support,
+                set(self.targeting) - used_targeting,
+            )
+            if any(unused):
+                raise ValueError(f"正式机制注册存在未使用项：{unused}")
 
 
 def _indexed(values, label: str):

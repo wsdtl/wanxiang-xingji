@@ -1,0 +1,9 @@
+"""星环界皮肤与展示投影入口。"""
+
+from ....world_skins.stellar_ring import (
+    STELLAR_RING_ENEMY_PRESENTATION as ENEMY_PRESENTATION,
+    STELLAR_RING_GEAR_PRESENTATION as GEAR_PRESENTATION,
+    STELLAR_RING_SKIN as SKIN,
+)
+
+__all__ = ["ENEMY_PRESENTATION", "GEAR_PRESENTATION", "SKIN"]

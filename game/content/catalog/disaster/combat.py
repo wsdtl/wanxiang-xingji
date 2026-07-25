@@ -19,11 +19,6 @@ from game.core.gameplay import (
 
 from ..combat.definitions import BASIC_ATTACK_ABILITY_ID
 from ..combat.stats import COMBAT_CONTROL_RESISTANCE, COMBAT_TENACITY
-from .cultivation import CULTIVATION_DISASTERS
-from .magic import MAGIC_DISASTERS
-from .stellar_ring import STELLAR_RING_DISASTERS
-
-
 DISASTER_ENEMY_LEVEL_PROFILE_ID = "enemy.level.dimensional_disaster"
 DISASTER_ENEMY_REWARD_PROFILE_ID = "enemy.reward.dimensional_disaster"
 
@@ -84,9 +79,21 @@ def _enemy(definition) -> EnemyDefinition:
     )
 
 
-DISASTER_ENEMY_DEFINITIONS = tuple(
-    _enemy(value)
-    for value in (*CULTIVATION_DISASTERS, *MAGIC_DISASTERS, *STELLAR_RING_DISASTERS)
+def build_disaster_enemy_definitions(disasters) -> tuple[EnemyDefinition, ...]:
+    values = tuple(disasters)
+    ids = tuple(value.enemy_definition_id for value in values)
+    if len(ids) != len(set(ids)):
+        raise ValueError("灾厄战斗敌人定义 ID 重复")
+    return tuple(_enemy(value) for value in values)
+
+
+from .cultivation import CULTIVATION_DISASTERS
+from .magic import MAGIC_DISASTERS
+from .stellar_ring import STELLAR_RING_DISASTERS
+
+
+DISASTER_ENEMY_DEFINITIONS = build_disaster_enemy_definitions(
+    (*CULTIVATION_DISASTERS, *MAGIC_DISASTERS, *STELLAR_RING_DISASTERS)
 )
 
 

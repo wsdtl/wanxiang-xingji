@@ -4,11 +4,17 @@
 应在这里统一收紧来源，而不是让业务路由各自添加 CORS。
 """
 
-from fastapi import FastAPI
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from fastapi.middleware.cors import CORSMiddleware
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
-def FastAPIAllowed(app: "FastAPI") -> None:
+
+def FastAPIAllowed(app: FastAPI) -> None:
     """配置 FastAPI 跨域。"""
 
     app.add_middleware(

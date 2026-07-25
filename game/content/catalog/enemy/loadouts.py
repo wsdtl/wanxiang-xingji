@@ -96,7 +96,10 @@ _ALL_BEHAVIOR_KEYS = tuple(
 )
 
 
-def _profile(world_id: str, preferred: frozenset[str]) -> EnemyBehaviorProfileDefinition:
+def enemy_behavior_profile(
+    world_id: str,
+    preferred: frozenset[str],
+) -> EnemyBehaviorProfileDefinition:
     unknown = preferred - set(_ALL_BEHAVIOR_KEYS)
     if unknown:
         raise KeyError("世界敌人行为倾向引用未知行为：" + ", ".join(sorted(unknown)))
@@ -109,20 +112,24 @@ def _profile(world_id: str, preferred: frozenset[str]) -> EnemyBehaviorProfileDe
     )
 
 
+TAIXUAN_ENEMY_BEHAVIOR_PROFILE = enemy_behavior_profile(
+    TAIXUAN_WORLD_ID,
+    frozenset({"poison", "bleed", "mark_detonation", "counter", "lifesteal", "sleep", "slow", "sunder", "sacrifice"}),
+)
+MAGIC_ENEMY_BEHAVIOR_PROFILE = enemy_behavior_profile(
+    MAGIC_WORLD_ID,
+    frozenset({"burn", "freeze", "area_attack", "resource_drain", "shield", "regeneration", "stun", "cooldown_lock", "charged_burst"}),
+)
+STELLAR_RING_ENEMY_BEHAVIOR_PROFILE = enemy_behavior_profile(
+    STELLAR_RING_WORLD_ID,
+    frozenset({"rapid_attack", "combo", "follow_up", "true_damage", "splash", "shield", "evasion", "mark_detonation", "cooldown_lock"}),
+)
+
 ENEMY_BEHAVIOR_PROFILE_CATALOG = EnemyBehaviorProfileCatalog(
     (
-        _profile(
-            TAIXUAN_WORLD_ID,
-            frozenset({"poison", "bleed", "mark_detonation", "counter", "lifesteal", "sleep", "slow", "sunder", "sacrifice"}),
-        ),
-        _profile(
-            MAGIC_WORLD_ID,
-            frozenset({"burn", "freeze", "area_attack", "resource_drain", "shield", "regeneration", "stun", "cooldown_lock", "charged_burst"}),
-        ),
-        _profile(
-            STELLAR_RING_WORLD_ID,
-            frozenset({"rapid_attack", "combo", "follow_up", "true_damage", "splash", "shield", "evasion", "mark_detonation", "cooldown_lock"}),
-        ),
+        TAIXUAN_ENEMY_BEHAVIOR_PROFILE,
+        MAGIC_ENEMY_BEHAVIOR_PROFILE,
+        STELLAR_RING_ENEMY_BEHAVIOR_PROFILE,
     )
 )
 
@@ -132,4 +139,8 @@ __all__ = [
     "EnemyBehaviorProfileCatalog",
     "EnemyBehaviorProfileDefinition",
     "EnemyBehaviorWeightPolicy",
+    "MAGIC_ENEMY_BEHAVIOR_PROFILE",
+    "STELLAR_RING_ENEMY_BEHAVIOR_PROFILE",
+    "TAIXUAN_ENEMY_BEHAVIOR_PROFILE",
+    "enemy_behavior_profile",
 ]

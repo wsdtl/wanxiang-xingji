@@ -303,6 +303,21 @@ def _assert_physical_layout() -> None:
     assert not (game / "runtime").exists(), "应用装配不得再使用 runtime 目录"
     assert not (ROOT / "auto" / "game").exists(), "游戏组合根不得放回 auto/"
 
+    world_extensions = content / "extensions" / "official"
+    required_world_modules = {
+        "__init__.py",
+        "extension.py",
+        "world.py",
+        "companions.py",
+        "enemies.py",
+        "disasters.py",
+        "lore.py",
+        "skin.py",
+    }
+    for name in ("taixuan", "magic", "stellar_ring"):
+        extension = world_extensions / name
+        assert {value.name for value in extension.glob("*.py")} == required_world_modules
+
     for component_name in ("活动", "提醒", "角色"):
         component = commands / component_name
         assert (component / "__init__.py").is_file()
@@ -334,7 +349,14 @@ def _assert_application_assembly_boundaries() -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     functions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     assert "build_game_services" in functions
-    assert {"_assemble_content", "_assemble_foundation"}.issubset(functions)
+    assert {
+        "_assemble_content",
+        "_assemble_foundation",
+        "_assemble_world_features",
+        "_assemble_economy_features",
+        "_assemble_player_features",
+        "_assemble_social_features",
+    }.issubset(functions)
     assert not (ROOT / "game" / "runtime").exists()
     exploration_reporting = ROOT / "game" / "features" / "exploration" / "reporting.py"
     reporting_source = exploration_reporting.read_text(encoding="utf-8")
@@ -556,6 +578,27 @@ def _assert_content_registration_boundaries() -> None:
         '"WORLD_EXTENSION"',
     ):
         assert required in discovery, f"扩展发现契约缺少：{required}"
+
+    authoring = (ROOT / "game" / "content" / "extensions" / "authoring.py").read_text(encoding="utf-8")
+    for required in (
+        "build_weapon_content_extension",
+        "build_equipment_content_extension",
+        "build_equipment_mechanic_content_extension",
+        "build_weapon_mechanic_content",
+        "build_equipment_catalog_content",
+    ):
+        assert required in authoring, f"扩展作者入口缺少：{required}"
+    world_factory = (
+        ROOT / "game" / "content" / "extensions" / "official" / "_factory.py"
+    ).read_text(encoding="utf-8")
+    for forbidden in (
+        "COMPANION_CATALOG",
+        "ENEMY_BEHAVIOR_PROFILE_CATALOG",
+        "PARTY_BOSS_SOURCE_CATALOG",
+        "PARTY_BOSS_TROPHY_ITEM_IDS",
+        "WORLD_SPACES",
+    ):
+        assert forbidden not in world_factory, f"世界扩展工厂仍隐式查询中央目录：{forbidden}"
 
     forbidden_imports: list[str] = []
     for path in (ROOT / "game").rglob("*.py"):

@@ -1,0 +1,9 @@
+"""太玄界皮肤与展示投影入口。"""
+
+from ....world_skins.cultivation import (
+    CULTIVATION_ENEMY_PRESENTATION as ENEMY_PRESENTATION,
+    CULTIVATION_GEAR_PRESENTATION as GEAR_PRESENTATION,
+    CULTIVATION_SKIN as SKIN,
+)
+
+__all__ = ["ENEMY_PRESENTATION", "GEAR_PRESENTATION", "SKIN"]

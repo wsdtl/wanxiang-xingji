@@ -51,9 +51,10 @@ from ..combat.stats import (
 )
 from .blueprints import (
     EQUIPMENT_PROPERTY_BLUEPRINTS,
+    EquipmentPropertyBlueprint,
 )
 from .ids import equipment_trigger_id
-from .mechanisms import OFFICIAL_EQUIPMENT_MECHANICS
+from .mechanisms import EquipmentMechanicRegistry, OFFICIAL_EQUIPMENT_MECHANICS
 
 
 EQUIPMENT_GENERATION_PROFILE_ID = "generation.equipment.open"
@@ -244,7 +245,10 @@ NUMERIC_PROPERTY_SPECS = {
 }
 
 
-def _numeric_property(key: str) -> PropertyDefinition:
+def _numeric_property(
+    key: str,
+    blueprints: tuple[EquipmentPropertyBlueprint, ...],
+) -> PropertyDefinition:
     specs = NUMERIC_PROPERTY_SPECS[key]
     tiers = []
     for tier_index in range(3):
@@ -266,7 +270,7 @@ def _numeric_property(key: str) -> PropertyDefinition:
                 parameters=parameters,
             )
         )
-    blueprint = next(value for value in EQUIPMENT_PROPERTY_BLUEPRINTS if value.key == key)
+    blueprint = next(value for value in blueprints if value.key == key)
     return PropertyDefinition(
         equipment_property_id(key),
         10,
@@ -280,13 +284,15 @@ def _numeric_property(key: str) -> PropertyDefinition:
 
 def _mechanic_property(
     key: str,
+    registry: EquipmentMechanicRegistry,
+    blueprints: tuple[EquipmentPropertyBlueprint, ...],
 ) -> tuple[
     PropertyDefinition,
     tuple[EffectDefinition, ...],
     tuple[TriggerDefinition, ...],
     tuple[ReferenceValuationDefinition, ...],
 ]:
-    mechanism = OFFICIAL_EQUIPMENT_MECHANICS.require(key)
+    mechanism = registry.require(key)
     effects = []
     triggers = []
     valuations = []
@@ -310,7 +316,7 @@ def _mechanic_property(
                 mechanism.base_value.scaled((0.65, 1.0, 1.45)[tier - 1]),
             )
         )
-    blueprint = next(value for value in EQUIPMENT_PROPERTY_BLUEPRINTS if value.key == key)
+    blueprint = next(value for value in blueprints if value.key == key)
     definition = PropertyDefinition(
         equipment_property_id(key),
         8,
@@ -324,14 +330,30 @@ def _mechanic_property(
     return definition, tuple(effects), tuple(triggers), tuple(valuations)
 
 
-def build_equipment_property_content() -> EquipmentPropertyContent:
+def build_equipment_property_content(
+    blueprints: tuple[EquipmentPropertyBlueprint, ...] = EQUIPMENT_PROPERTY_BLUEPRINTS,
+    registry: EquipmentMechanicRegistry = OFFICIAL_EQUIPMENT_MECHANICS,
+    *,
+    profile_id: str = EQUIPMENT_GENERATION_PROFILE_ID,
+    inherited_property_ids: frozenset[str] = frozenset(),
+) -> EquipmentPropertyContent:
+    values = tuple(blueprints)
+    if not values:
+        raise ValueError("装备词条扩展至少需要一份蓝图")
+    keys = tuple(value.key for value in values)
+    if len(keys) != len(set(keys)):
+        raise ValueError("装备词条扩展蓝图稳定键重复")
     properties = []
     effects: dict[str, EffectDefinition] = {}
     triggers: dict[str, TriggerDefinition] = {}
     valuations = []
-    for blueprint in EQUIPMENT_PROPERTY_BLUEPRINTS:
-        if blueprint.key in OFFICIAL_EQUIPMENT_MECHANICS.definitions:
-            definition, generated_effects, generated_triggers, generated_values = _mechanic_property(blueprint.key)
+    for blueprint in values:
+        if blueprint.key in registry.definitions:
+            definition, generated_effects, generated_triggers, generated_values = _mechanic_property(
+                blueprint.key,
+                registry,
+                values,
+            )
             for effect in generated_effects:
                 if effect.id in effects and effects[effect.id] != effect:
                     raise ValueError(f"装备 Effect 定义冲突：{effect.id}")
@@ -342,12 +364,12 @@ def build_equipment_property_content() -> EquipmentPropertyContent:
                 triggers[trigger.id] = trigger
             valuations.extend(generated_values)
         else:
-            definition = _numeric_property(blueprint.key)
+            definition = _numeric_property(blueprint.key, values)
         properties.append(definition)
     profile = GenerationProfileDefinition(
-        EQUIPMENT_GENERATION_PROFILE_ID,
+        profile_id,
         ItemizationKind.EQUIPMENT,
-        frozenset(value.id for value in properties),
+        frozenset({*(value.id for value in properties), *inherited_property_ids}),
         2,
         5,
         EQUIPMENT_QUALITY_BANDS,

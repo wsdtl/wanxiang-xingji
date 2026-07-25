@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Mapping
 
 from game.core.gameplay import (
@@ -85,6 +86,17 @@ class WorldViewCatalog:
         self._world_ids = self.extensions.world_ids()
         if set(self.worlds.world_ids()) != set(self._world_ids):
             raise ValueError("正式世界定义必须完整覆盖扩展目录")
+        aliases = {}
+        for world_id in self._world_ids:
+            world = self.worlds.require_world(world_id)
+            skin = self.catalog.skins.require(world.skin_id)
+            for alias in (world.id, skin.id, skin.name):
+                token = self._alias_key(alias)
+                owner = aliases.get(token)
+                if owner is not None and owner != world.id:
+                    raise ValueError(f"世界解析别名冲突：{alias}")
+                aliases[token] = world.id
+        self._aliases = MappingProxyType(aliases)
         self._views: dict[tuple[StableId, int], OfficialContent] = {}
 
     def require(
@@ -120,18 +132,15 @@ class WorldViewCatalog:
     def resolve(self, value: object) -> OfficialContent | None:
         """按 world_id、skin_id 或玩家可见世界名解析真实世界视图。"""
 
-        token = " ".join(str(value or "").strip().casefold().split())
+        token = self._alias_key(value)
         if not token:
             return None
-        for world_id in self.world_ids():
-            view = self.require(world_id)
-            if token in {
-                view.world.id.casefold(),
-                view.skin.id.casefold(),
-                view.skin.name.casefold(),
-            }:
-                return view
-        return None
+        world_id = self._aliases.get(token)
+        return self.require(world_id) if world_id is not None else None
+
+    @staticmethod
+    def _alias_key(value: object) -> str:
+        return " ".join(str(value or "").strip().casefold().split())
 
     def world_ids(self) -> tuple[StableId, ...]:
         return self._world_ids
@@ -150,7 +159,7 @@ def assemble_official_catalog() -> ContentRuntime:
     """装配全部官方内容；应用组合根应在启动时只调用一次。"""
 
     runtime = ContentAssembler().assemble(OFFICIAL_PACKAGES)
-    OFFICIAL_EXTENSION_CATALOG.validate_runtime(runtime)
+    _validate_catalog_runtime(runtime)
     audit_market_prices(
         runtime.items,
         DRAW_CATALOG_CONTENT,
@@ -179,14 +188,6 @@ def select_world_skin(
         raise ValueError("正式内容没有装配真实世界目录")
     selected_world = world or runtime.world_for_skin(skin.id)
     projector = SkinProjector(skin)
-    EXPLORATION_REGION_CATALOG.validate(catalog, runtime)
-    OFFICIAL_EXTENSION_CATALOG.companions.validate(catalog, runtime)
-    OFFICIAL_EXTENSION_CATALOG.party_bosses.validate(catalog, runtime.world_ids())
-    OFFICIAL_EXTENSION_CATALOG.enemy_behavior_profiles.validate(
-        runtime.world_ids(),
-        catalog.enemies.behaviors.ids(),
-    )
-    OFFICIAL_EXTENSION_CATALOG.validate_runtime(catalog)
     validate_enemy_narrative_identities(projector, selected_world.id, skin.id)
     return OfficialContent(
         catalog,
@@ -210,6 +211,23 @@ def select_world_skin(
         selected_world,
         runtime,
     )
+
+
+def _validate_catalog_runtime(catalog: ContentRuntime) -> None:
+    runtime = catalog.world_runtime
+    if runtime is None:
+        raise ValueError("正式内容没有装配真实世界目录")
+    EXPLORATION_REGION_CATALOG.validate(catalog, runtime)
+    OFFICIAL_EXTENSION_CATALOG.companions.validate(catalog, runtime)
+    OFFICIAL_EXTENSION_CATALOG.party_bosses.validate(
+        catalog,
+        runtime.world_ids(),
+    )
+    OFFICIAL_EXTENSION_CATALOG.enemy_behavior_profiles.validate(
+        runtime.world_ids(),
+        catalog.enemies.behaviors.ids(),
+    )
+    OFFICIAL_EXTENSION_CATALOG.validate_runtime(catalog)
 
 
 def build_official_content(

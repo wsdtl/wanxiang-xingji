@@ -1,0 +1,9 @@
+"""魔法世界皮肤与展示投影入口。"""
+
+from ....world_skins.magic import (
+    MAGIC_ENEMY_PRESENTATION as ENEMY_PRESENTATION,
+    MAGIC_GEAR_PRESENTATION as GEAR_PRESENTATION,
+    MAGIC_SKIN as SKIN,
+)
+
+__all__ = ["ENEMY_PRESENTATION", "GEAR_PRESENTATION", "SKIN"]

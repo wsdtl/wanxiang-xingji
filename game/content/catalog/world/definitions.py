@@ -43,7 +43,7 @@ HEAVENLY_CRAFT_RELIC_ID = "location.exploration_equipment_focus"
 RETURNING_RUIN_ABYSS_ID = "location.exploration_boss_focus"
 
 
-def _space(space_id: str) -> WorldSpaceDefinition:
+def world_space_definition(space_id: str) -> WorldSpaceDefinition:
     return WorldSpaceDefinition(
         space_id,
         WorldTopologyKind.GRID,
@@ -55,10 +55,12 @@ def _space(space_id: str) -> WorldSpaceDefinition:
 
 
 WORLD_SPACES = (
-    _space(TAIXUAN_WORLD_SPACE_ID),
-    _space(MAGIC_WORLD_SPACE_ID),
-    _space(STELLAR_RING_WORLD_SPACE_ID),
+    world_space_definition(TAIXUAN_WORLD_SPACE_ID),
+    world_space_definition(MAGIC_WORLD_SPACE_ID),
+    world_space_definition(STELLAR_RING_WORLD_SPACE_ID),
 )
+
+TAIXUAN_WORLD_SPACE, MAGIC_WORLD_SPACE, STELLAR_RING_WORLD_SPACE = WORLD_SPACES
 
 
 EXPLORATION_LOCATION_IDS = (

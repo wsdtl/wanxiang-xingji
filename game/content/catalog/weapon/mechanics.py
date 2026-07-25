@@ -384,8 +384,19 @@ def _quality_profiles() -> dict[str, WeaponQualityProfile]:
     }
 
 
-def build_weapon_mechanic_content() -> WeaponMechanicContent:
-    OFFICIAL_WEAPON_MECHANICS.validate_blueprints(WEAPON_BLUEPRINTS)
+def build_weapon_mechanic_content(
+    blueprints: tuple[WeaponBlueprint, ...] = WEAPON_BLUEPRINTS,
+    registry=OFFICIAL_WEAPON_MECHANICS,
+    *,
+    require_all_registered_used: bool = True,
+) -> WeaponMechanicContent:
+    values = tuple(blueprints)
+    if not values:
+        raise ValueError("武器机制内容至少需要一份蓝图")
+    registry.validate_blueprints(
+        values,
+        require_all_registered_used=require_all_registered_used,
+    )
     effects: dict[str, EffectDefinition] = {
         WEAPON_MARK_EFFECT_ID: EffectDefinition(
             WEAPON_MARK_EFFECT_ID,
@@ -418,11 +429,11 @@ def build_weapon_mechanic_content() -> WeaponMechanicContent:
     valuations = []
     display_ids: set[str] = set()
     qualities = _quality_profiles()
-    for blueprint in WEAPON_BLUEPRINTS:
+    for blueprint in values:
         key = blueprint.key
         ability_id = f"ability.weapon.{key}"
         strike_id = f"effect.weapon.{key}.strike"
-        recipe = OFFICIAL_WEAPON_MECHANICS.resolve(blueprint)
+        recipe = registry.resolve(blueprint)
         primary = recipe.primary.compile(blueprint)
         support = recipe.support.compile(blueprint, ability_id)
         effects[strike_id] = EffectDefinition(
@@ -504,7 +515,7 @@ def build_weapon_mechanic_content() -> WeaponMechanicContent:
             ReferenceValuationDefinition(
                 ReferenceValueKind.ABILITY,
                 ability_id,
-                estimate_weapon_value(blueprint).estimated,
+                estimate_weapon_value(blueprint, registry).estimated,
             )
         )
         for trigger_id in support.granted_triggers:

@@ -4,10 +4,14 @@
 执行业务回调；关闭时按相反职责清理。这里负责顺序，不包含任何业务规则。
 """
 
+from __future__ import annotations
+
 import inspect
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Callable, Iterable, List
+from typing import TYPE_CHECKING, AsyncGenerator, Callable, Iterable, List
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 from .log import C, logger
 from .on_event import OnEvent
@@ -17,7 +21,7 @@ from .runtime_guard import runtime_guard
 
 
 @asynccontextmanager
-async def lifespan(app: "FastAPI") -> AsyncGenerator:
+async def lifespan(app: FastAPI) -> AsyncGenerator:
     """FastAPI 生命周期。
 
     启动：挂载适配器、启动调度器、按优先级运行启动回调。
@@ -46,7 +50,7 @@ async def lifespan(app: "FastAPI") -> AsyncGenerator:
             runtime_guard.release()
 
 
-async def _mount_app(app: "FastAPI") -> List[type]:
+async def _mount_app(app: FastAPI) -> List[type]:
     """挂载静态文件和 Adapter，并返回需要启动/关闭的 Adapter 列表。"""
 
     await FastAPIMount(app)

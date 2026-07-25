@@ -15,6 +15,7 @@ assert OPS_SPEC is not None and OPS_SPEC.loader is not None
 OPS_MODULE = module_from_spec(OPS_SPEC)
 OPS_SPEC.loader.exec_module(OPS_MODULE)
 scaffold_extension = OPS_MODULE.scaffold_extension
+audit_extension = OPS_MODULE.audit_extension
 
 
 def main() -> None:
@@ -31,6 +32,26 @@ def main() -> None:
         assert content.name == "_new_armaments"
         assert "WORLD_EXTENSION" in (world / "extension.py").read_text(encoding="utf-8")
         assert "CONTENT_EXTENSION" in (content / "extension.py").read_text(encoding="utf-8")
+        assert {value.name for value in world.iterdir()} == {
+            "__init__.py",
+            "extension.py",
+            "world.py",
+            "companions.py",
+            "enemies.py",
+            "disasters.py",
+            "lore.py",
+            "skin.py",
+        }
+        assert {value.name for value in content.iterdir()} == {
+            "__init__.py",
+            "extension.py",
+            "content.py",
+            "presentation.py",
+        }
+        world_audit = audit_extension(world, root=root)
+        content_audit = audit_extension(content, root=root)
+        assert world_audit["valid"] and world_audit["draft"]
+        assert content_audit["valid"] and content_audit["draft"]
 
         for invalid in ("FourthWorld", "fourth-world", "_hidden", "class", "世界"):
             try:

@@ -15,7 +15,7 @@ from game.core.gameplay import (
     stable_id,
 )
 
-from ..equipment.blueprints import EQUIPMENT_SET_BLUEPRINTS
+from ..equipment.blueprints import EQUIPMENT_SET_BLUEPRINTS, EquipmentSetBlueprint
 from ..equipment.definitions import equipment_set_id
 from .classification import CONSUMABLE_ITEM_TAG, SPECIAL_STORAGE_TAG
 
@@ -64,25 +64,37 @@ EXCHANGE_MATERIAL_ITEM = ItemDefinition(
     {ITEM_STORAGE_COMPONENT_ID: ItemStorageComponent(1)},
 )
 
-EQUIPMENT_SET_BLUEPRINT_ITEMS = tuple(
-    ItemDefinition(
-        equipment_set_blueprint_item_id(blueprint.key),
-        ItemAssetKind.STACK,
-        TagSet.of(
-            CONSUMABLE_ITEM_TAG,
-            BLUEPRINT_ITEM_TAG,
-            EQUIPMENT_SET_BLUEPRINT_ITEM_TAG,
-            SPECIAL_STORAGE_TAG,
-        ),
-        EQUIPMENT_SET_BLUEPRINT_STACK_LIMIT,
-        {
-            ITEM_STORAGE_COMPONENT_ID: ItemStorageComponent(1),
-            EQUIPMENT_SET_BLUEPRINT_COMPONENT_ID: EquipmentSetBlueprintItemComponent(
-                equipment_set_id(blueprint.key)
+def build_equipment_set_blueprint_items(
+    blueprints: tuple[EquipmentSetBlueprint, ...],
+) -> tuple[ItemDefinition, ...]:
+    values = tuple(blueprints)
+    keys = tuple(value.key for value in values)
+    if len(keys) != len(set(keys)):
+        raise ValueError("套装图纸蓝图稳定键重复")
+    return tuple(
+        ItemDefinition(
+            equipment_set_blueprint_item_id(blueprint.key),
+            ItemAssetKind.STACK,
+            TagSet.of(
+                CONSUMABLE_ITEM_TAG,
+                BLUEPRINT_ITEM_TAG,
+                EQUIPMENT_SET_BLUEPRINT_ITEM_TAG,
+                SPECIAL_STORAGE_TAG,
             ),
-        },
+            EQUIPMENT_SET_BLUEPRINT_STACK_LIMIT,
+            {
+                ITEM_STORAGE_COMPONENT_ID: ItemStorageComponent(1),
+                EQUIPMENT_SET_BLUEPRINT_COMPONENT_ID: EquipmentSetBlueprintItemComponent(
+                    equipment_set_id(blueprint.key)
+                ),
+            },
+        )
+        for blueprint in values
     )
-    for blueprint in EQUIPMENT_SET_BLUEPRINTS
+
+
+EQUIPMENT_SET_BLUEPRINT_ITEMS = build_equipment_set_blueprint_items(
+    EQUIPMENT_SET_BLUEPRINTS
 )
 
 EQUIPMENT_SET_BLUEPRINT_ITEM_IDS = tuple(
@@ -103,5 +115,6 @@ __all__ = [
     "EXCHANGE_MATERIAL_ITEM_TAG",
     "EXCHANGE_MATERIAL_STACK_LIMIT",
     "EquipmentSetBlueprintItemComponent",
+    "build_equipment_set_blueprint_items",
     "equipment_set_blueprint_item_id",
 ]

@@ -4,15 +4,21 @@
 但没有 HTTP mount，例如本地驱动器不会暴露调试接口。
 """
 
-from fastapi import FastAPI
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from fastapi.staticfiles import StaticFiles
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 from .log import C, logger
 from .adapter import BaseAdapter, enabled_adapter_specs
 from .paths import STATIC_DIR
 
 
-async def FastAPIMount(app: "FastAPI") -> None:
+async def FastAPIMount(app: FastAPI) -> None:
     """挂载 FastAPI 全局资源。"""
 
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -23,7 +29,7 @@ async def FastAPIMount(app: "FastAPI") -> None:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-async def AdapterMount(app: "FastAPI") -> list[type[BaseAdapter]]:
+async def AdapterMount(app: FastAPI) -> list[type[BaseAdapter]]:
     """挂载通信适配器，并返回需要启动/关闭的处理器。"""
 
     adapters: list[type[BaseAdapter]] = []

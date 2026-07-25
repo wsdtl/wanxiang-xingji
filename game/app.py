@@ -537,6 +537,47 @@ class _FoundationAssembly:
     reward_settlement: PersistedRewardSettlementService
 
 
+@dataclass(frozen=True)
+class _WorldFeatureAssembly:
+    world_progress: WorldProgressFeature
+    world_lore: WorldLoreFeature
+    battle_reports: BattleReportService
+    data_lifecycle: DataLifecycleFeature
+    build_trials: BuildTrialFeature
+    companions: CompanionFeature
+    world_travel: WorldTravelFeature
+    exploration: ExplorationFeature
+    dimensional_disasters: DimensionalDisasterFeature
+
+
+@dataclass(frozen=True)
+class _EconomyFeatureAssembly:
+    economy: EconomyFeature
+    lottery: LotteryFeature
+    draw: DrawFeature
+    rest: RestFeature
+
+
+@dataclass(frozen=True)
+class _PlayerFeatureAssembly:
+    accounts: PersistedAccountService
+    characters: PersistedCharacterService
+    character_creation: PersistedCharacterCreationService
+    notifications: NotificationInboxService
+    activities: PersistedActivityService
+    player: PlayerFeature
+    dimension_shift: DimensionShiftFeature
+    breakthrough: BreakthroughFeature
+
+
+@dataclass(frozen=True)
+class _SocialFeatureAssembly:
+    party: PartyFeature
+    party_battles: PartyBattleFeature
+    party_sparring: PartySparringFeature
+    sparring: SparringFeature
+
+
 def _assemble_content(world_id: str) -> _ContentAssembly:
     catalog = assemble_official_catalog()
     world_views = WorldViewCatalog(catalog, PLAYABLE_WORLD_DEFINITIONS)
@@ -727,6 +768,400 @@ def _assemble_foundation(
     )
 
 
+def _assemble_world_features(
+    database: SqliteDatabase,
+    content_assembly: _ContentAssembly,
+    foundation: _FoundationAssembly,
+) -> _WorldFeatureAssembly:
+    content = content_assembly.content
+    world_views = content_assembly.world_views
+    snapshots = content_assembly.snapshots
+    world_progress = WorldProgressFeature(
+        database,
+        content,
+        world_views,
+        snapshots,
+        foundation.reward_settlement,
+        ProjectionStore(database, snapshots),
+        WorldProgressStorageKinds(
+            progress=WORLD_PROGRESS_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+            ledger=LEDGER_AGGREGATE,
+            reward_claim=REWARD_CLAIM_AGGREGATE,
+        ),
+        RewardSettlementStorageKeys,
+    )
+    world_lore = WorldLoreFeature(
+        database,
+        WORLD_LORE_CATALOG,
+        snapshots,
+        world_progress.view,
+        world_views.world_ids(),
+    )
+    battle_reports = BattleReportService(
+        database,
+        BattleReportStore(database),
+        BattleReportBuilder(content, world_views),
+    )
+    persistence_retention = PersistenceRetentionService(database)
+    data_lifecycle = DataLifecycleFeature(
+        (
+            DataLifecycleTask(
+                "data.battle_reports",
+                lambda logical_time: battle_reports.cleanup(logical_time=logical_time),
+            ),
+            DataLifecycleTask(
+                "data.persistence",
+                lambda logical_time: persistence_retention.cleanup(logical_time=logical_time),
+            ),
+        )
+    )
+    build_trials = BuildTrialFeature(
+        database,
+        content,
+        world_views,
+        snapshots,
+        battle_reports,
+        foundation.player_lineup,
+        BuildTrialStorageKinds(
+            character=CHARACTER_AGGREGATE,
+            character_world=CHARACTER_WORLD_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+            loadout=LOADOUT_AGGREGATE,
+            companion_roster=COMPANION_ROSTER_AGGREGATE,
+            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+    )
+    companions = CompanionFeature(
+        database,
+        content,
+        world_views,
+        snapshots,
+        foundation.inventory_engine,
+        battle_reports,
+        foundation.companion_engine,
+        CompanionSanctuaryBattleSimulator(
+            content.catalog,
+            foundation.player_lineup,
+            foundation.companion_combat,
+        ),
+        CompanionStorageKinds(
+            action=ACTION_AGGREGATE,
+            character=CHARACTER_AGGREGATE,
+            character_world=CHARACTER_WORLD_AGGREGATE,
+            exploration=EXPLORATION_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+            loadout=LOADOUT_AGGREGATE,
+            roster=COMPANION_ROSTER_AGGREGATE,
+            sanctuary=COMPANION_SANCTUARY_AGGREGATE,
+            world=WORLD_AGGREGATE,
+            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+        foundation.companion_growth,
+    )
+    world_travel = WorldTravelFeature(
+        database,
+        content,
+        snapshots,
+        WorldTravelStorageKinds(
+            action=ACTION_AGGREGATE,
+            exploration=EXPLORATION_AGGREGATE,
+            world=WORLD_AGGREGATE,
+            character_world=CHARACTER_WORLD_AGGREGATE,
+        ),
+    )
+    exploration = ExplorationFeature(
+        database,
+        content,
+        world_views,
+        snapshots,
+        foundation.reward_settlement,
+        foundation.inventory_engine,
+        foundation.player_lineup,
+        battle_reports,
+        ExplorationStorageKinds(
+            ACTION_AGGREGATE,
+            CHARACTER_AGGREGATE,
+            INVENTORY_AGGREGATE,
+            LOADOUT_AGGREGATE,
+            COMPANION_ROSTER_AGGREGATE,
+            LOOT_AGGREGATE,
+            REWARD_CLAIM_AGGREGATE,
+            WEAPON_AGGREGATE,
+            WORLD_AGGREGATE,
+            CHARACTER_WORLD_AGGREGATE,
+            INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+        RewardSettlementStorageKeys,
+        foundation.companion_growth_settlement,
+        world_progress,
+    )
+    dimensional_disasters = DimensionalDisasterFeature(
+        database,
+        content,
+        world_views,
+        content_assembly.disasters,
+        world_views.world_ids(),
+        snapshots,
+        foundation.reward_settlement,
+        foundation.player_lineup,
+        battle_reports,
+        DimensionalDisasterStorageKinds(
+            ACTION_AGGREGATE,
+            ACTIVITY_AGGREGATE,
+            CHARACTER_AGGREGATE,
+            CHARACTER_WORLD_AGGREGATE,
+            EXPLORATION_AGGREGATE,
+            INVENTORY_AGGREGATE,
+            LOADOUT_AGGREGATE,
+            COMPANION_ROSTER_AGGREGATE,
+            REWARD_CLAIM_AGGREGATE,
+            INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+        RewardSettlementStorageKeys,
+        foundation.companion_growth_settlement,
+        maximum_battle_rounds=DIMENSIONAL_DISASTER_BATTLE_ROUNDS,
+        timezone=config.project.timezone,
+    )
+    return _WorldFeatureAssembly(
+        world_progress,
+        world_lore,
+        battle_reports,
+        data_lifecycle,
+        build_trials,
+        companions,
+        world_travel,
+        exploration,
+        dimensional_disasters,
+    )
+
+
+def _assemble_economy_features(
+    database: SqliteDatabase,
+    content_assembly: _ContentAssembly,
+    foundation: _FoundationAssembly,
+) -> _EconomyFeatureAssembly:
+    content = content_assembly.content
+    snapshots = content_assembly.snapshots
+    economy = EconomyFeature(
+        database,
+        content.catalog,
+        snapshots,
+        foundation.inventory_engine,
+        foundation.ledger_engine,
+        EconomyStorageKinds(
+            INVENTORY_AGGREGATE,
+            LOADOUT_AGGREGATE,
+            LEDGER_AGGREGATE,
+            MARKET_AGGREGATE,
+        ),
+        market_item_policies=content.market_item_policies,
+    )
+    lottery = LotteryFeature(
+        database,
+        snapshots,
+        foundation.ledger_engine,
+        storage=LotteryStorageKinds(LOTTERY_AGGREGATE, LEDGER_AGGREGATE),
+        timezone=config.project.timezone,
+    )
+    draw = DrawFeature(
+        database,
+        content,
+        snapshots,
+        foundation.inventory_engine,
+        foundation.reward_settlement,
+        DrawStorageKinds(
+            DRAW_HISTORY_AGGREGATE,
+            INVENTORY_AGGREGATE,
+            LEDGER_AGGREGATE,
+            LOOT_AGGREGATE,
+            REWARD_CLAIM_AGGREGATE,
+        ),
+        RewardSettlementStorageKeys,
+    )
+    rest = RestFeature(
+        database,
+        content.catalog,
+        snapshots,
+        foundation.actions,
+        CharacterEngine(content.catalog.characters),
+        foundation.character_projector,
+        RestStorageKinds(
+            ACTION_AGGREGATE,
+            CHARACTER_AGGREGATE,
+            INVENTORY_AGGREGATE,
+            LOADOUT_AGGREGATE,
+            EXPLORATION_AGGREGATE,
+        ),
+    )
+    return _EconomyFeatureAssembly(economy, lottery, draw, rest)
+
+
+def _assemble_player_features(
+    database: SqliteDatabase,
+    secret: str,
+    content_assembly: _ContentAssembly,
+    foundation: _FoundationAssembly,
+) -> _PlayerFeatureAssembly:
+    content = content_assembly.content
+    snapshots = content_assembly.snapshots
+    accounts = PersistedAccountService(
+        database,
+        AccountEngine(lambda: f"account-{uuid4().hex}"),
+        secret,
+    )
+    characters = PersistedCharacterService(database)
+    character_creation = PersistedCharacterCreationService(
+        database,
+        content_assembly.workflow,
+        snapshots=snapshots,
+    )
+    notifications = NotificationInboxService(database)
+    activities = PersistedActivityService(database, content.catalog.activity_engine)
+    player = PlayerFeature(
+        database,
+        accounts,
+        characters,
+        character_creation,
+        snapshots,
+        notifications,
+        activities,
+        content_assembly.global_activities,
+        PlayerStorageKinds(
+            character=CHARACTER_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+            loadout=LOADOUT_AGGREGATE,
+            ledger=LEDGER_AGGREGATE,
+            world=WORLD_AGGREGATE,
+            character_world=CHARACTER_WORLD_AGGREGATE,
+            action=ACTION_AGGREGATE,
+            settings=CHARACTER_SETTINGS_AGGREGATE,
+            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+    )
+    dimension_shift = DimensionShiftFeature(
+        database,
+        content,
+        content_assembly.world_views,
+        snapshots,
+        foundation.inventory_engine,
+        DimensionShiftStorageKinds(
+            character_world=CHARACTER_WORLD_AGGREGATE,
+            world=WORLD_AGGREGATE,
+            action=ACTION_AGGREGATE,
+            exploration=EXPLORATION_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+        ),
+    )
+    breakthrough = BreakthroughFeature(
+        database,
+        content,
+        snapshots,
+        foundation.inventory_engine,
+        CharacterEngine(content.catalog.characters),
+        BreakthroughStorageKinds(
+            character=CHARACTER_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+        ),
+    )
+    return _PlayerFeatureAssembly(
+        accounts,
+        characters,
+        character_creation,
+        notifications,
+        activities,
+        player,
+        dimension_shift,
+        breakthrough,
+    )
+
+
+def _assemble_social_features(
+    database: SqliteDatabase,
+    content_assembly: _ContentAssembly,
+    foundation: _FoundationAssembly,
+    world_features: _WorldFeatureAssembly,
+) -> _SocialFeatureAssembly:
+    content = content_assembly.content
+    snapshots = content_assembly.snapshots
+    social = PersistedSocialService(database, content.catalog.social_engine, snapshots)
+    party_engine = PartyEngine(content.catalog.parties)
+    party = PartyFeature(
+        PersistedPartyService(database, party_engine, snapshots),
+        PersistedPartyAdmissionService(
+            database,
+            content.catalog.social_engine,
+            party_engine,
+            snapshots,
+        ),
+        social,
+        content.catalog.parties,
+    )
+    party_battles = PartyBattleFeature(
+        database,
+        content,
+        content_assembly.world_views,
+        snapshots,
+        foundation.reward_settlement,
+        world_features.battle_reports,
+        foundation.player_lineup,
+        PartyBattleStorageKinds(
+            party=PARTY_AGGREGATE,
+            character=CHARACTER_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+            loadout=LOADOUT_AGGREGATE,
+            companion_roster=COMPANION_ROSTER_AGGREGATE,
+            action=ACTION_AGGREGATE,
+            exploration=EXPLORATION_AGGREGATE,
+            reward_claim=REWARD_CLAIM_AGGREGATE,
+            weapon=WEAPON_AGGREGATE,
+            character_world=CHARACTER_WORLD_AGGREGATE,
+            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+        RewardSettlementStorageKeys,
+        foundation.companion_growth_settlement,
+        party_scope_id=PARTY_SCOPE_ID,
+        timezone=config.project.timezone,
+    )
+    party_sparring = PartySparringFeature(
+        database,
+        content,
+        content_assembly.world_views,
+        snapshots,
+        social,
+        world_features.battle_reports,
+        PartySparringBattleSimulator(content.catalog, foundation.player_lineup),
+        PartySparringStorageKinds(
+            party=PARTY_AGGREGATE,
+            character=CHARACTER_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+            loadout=LOADOUT_AGGREGATE,
+            companion_roster=COMPANION_ROSTER_AGGREGATE,
+            character_world=CHARACTER_WORLD_AGGREGATE,
+            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+        party_scope_id=PARTY_SCOPE_ID,
+    )
+    sparring = SparringFeature(
+        database,
+        content,
+        content_assembly.world_views,
+        snapshots,
+        social,
+        world_features.battle_reports,
+        SparringBattleSimulator(content.catalog, foundation.player_lineup),
+        SparringStorageKinds(
+            character=CHARACTER_AGGREGATE,
+            character_world=CHARACTER_WORLD_AGGREGATE,
+            inventory=INVENTORY_AGGREGATE,
+            loadout=LOADOUT_AGGREGATE,
+            companion_roster=COMPANION_ROSTER_AGGREGATE,
+            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
+        ),
+    )
+    return _SocialFeatureAssembly(party, party_battles, party_sparring, sparring)
+
+
 def build_game_services(
     *,
     database_path: Path | str | None = None,
@@ -752,415 +1187,77 @@ def build_game_services(
         ),
     )
     content_assembly = _assemble_content(world_id)
-    world_views = content_assembly.world_views
-    content = content_assembly.content
-    disaster_catalog = content_assembly.disasters
-    registered_global_activities = content_assembly.global_activities
-    workflow = content_assembly.workflow
-    snapshots = content_assembly.snapshots
-    foundation = _assemble_foundation(database, content, snapshots)
-    inventory_engine = foundation.inventory_engine
-    inventory_protection = foundation.inventory_protection
-    character_projector = foundation.character_projector
-    player_combat = foundation.player_combat
-    companion_engine = foundation.companion_engine
-    companion_growth = foundation.companion_growth
-    companion_growth_settlement = foundation.companion_growth_settlement
-    companion_combat = foundation.companion_combat
-    player_lineup = foundation.player_lineup
-    item_use_service = foundation.item_use
-    character_item_use_service = foundation.character_item_use
-    weapon_item_use_service = foundation.weapon_item_use
-    special_item_use_service = foundation.special_item_use
-    equipment_blueprints = foundation.equipment_blueprints
-    covenant_exchange = foundation.covenant_exchange
-    action_service = foundation.actions
-    inscription_service = foundation.inscriptions
-    loadout_service = foundation.loadouts
-    ledger_engine = foundation.ledger_engine
-    reward_settlement = foundation.reward_settlement
-    world_progress = WorldProgressFeature(
+    foundation = _assemble_foundation(
         database,
-        content,
-        world_views,
-        snapshots,
-        reward_settlement,
-        ProjectionStore(database, snapshots),
-        WorldProgressStorageKinds(
-            progress=WORLD_PROGRESS_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-            ledger=LEDGER_AGGREGATE,
-            reward_claim=REWARD_CLAIM_AGGREGATE,
-        ),
-        RewardSettlementStorageKeys,
+        content_assembly.content,
+        content_assembly.snapshots,
     )
-    world_lore = WorldLoreFeature(
+    world_features = _assemble_world_features(
         database,
-        WORLD_LORE_CATALOG,
-        snapshots,
-        world_progress.view,
-        world_views.world_ids(),
+        content_assembly,
+        foundation,
     )
-    battle_report_builder = BattleReportBuilder(content, world_views)
-    battle_reports = BattleReportService(
+    economy_features = _assemble_economy_features(
         database,
-        BattleReportStore(database),
-        battle_report_builder,
+        content_assembly,
+        foundation,
     )
-    persistence_retention = PersistenceRetentionService(database)
-    data_lifecycle = DataLifecycleFeature(
-        (
-            DataLifecycleTask(
-                "data.battle_reports",
-                lambda logical_time: battle_reports.cleanup(logical_time=logical_time),
-            ),
-            DataLifecycleTask(
-                "data.persistence",
-                lambda logical_time: persistence_retention.cleanup(logical_time=logical_time),
-            ),
-        )
-    )
-    build_trials = BuildTrialFeature(
+    player_features = _assemble_player_features(
         database,
-        content,
-        world_views,
-        snapshots,
-        battle_reports,
-        player_lineup,
-        BuildTrialStorageKinds(
-            character=CHARACTER_AGGREGATE,
-            character_world=CHARACTER_WORLD_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-            loadout=LOADOUT_AGGREGATE,
-            companion_roster=COMPANION_ROSTER_AGGREGATE,
-            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
-    )
-    companions = CompanionFeature(
-        database,
-        content,
-        world_views,
-        snapshots,
-        inventory_engine,
-        battle_reports,
-        companion_engine,
-        CompanionSanctuaryBattleSimulator(
-            content.catalog,
-            player_lineup,
-            companion_combat,
-        ),
-        CompanionStorageKinds(
-            action=ACTION_AGGREGATE,
-            character=CHARACTER_AGGREGATE,
-            character_world=CHARACTER_WORLD_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-            loadout=LOADOUT_AGGREGATE,
-            roster=COMPANION_ROSTER_AGGREGATE,
-            sanctuary=COMPANION_SANCTUARY_AGGREGATE,
-            world=WORLD_AGGREGATE,
-            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
-        companion_growth,
-    )
-    world_travel = WorldTravelFeature(
-        database,
-        content,
-        snapshots,
-        WorldTravelStorageKinds(
-            action=ACTION_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
-            world=WORLD_AGGREGATE,
-            character_world=CHARACTER_WORLD_AGGREGATE,
-        ),
-    )
-    exploration = ExplorationFeature(
-        database,
-        content,
-        world_views,
-        snapshots,
-        reward_settlement,
-        inventory_engine,
-        player_lineup,
-        battle_reports,
-        ExplorationStorageKinds(
-            ACTION_AGGREGATE,
-            CHARACTER_AGGREGATE,
-            INVENTORY_AGGREGATE,
-            LOADOUT_AGGREGATE,
-            COMPANION_ROSTER_AGGREGATE,
-            LOOT_AGGREGATE,
-            REWARD_CLAIM_AGGREGATE,
-            WEAPON_AGGREGATE,
-            WORLD_AGGREGATE,
-            CHARACTER_WORLD_AGGREGATE,
-            INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
-        RewardSettlementStorageKeys,
-        companion_growth_settlement,
-        world_progress,
-    )
-    dimensional_disasters = DimensionalDisasterFeature(
-        database,
-        content,
-        world_views,
-        disaster_catalog,
-        world_views.world_ids(),
-        snapshots,
-        reward_settlement,
-        player_lineup,
-        battle_reports,
-        DimensionalDisasterStorageKinds(
-            ACTION_AGGREGATE,
-            ACTIVITY_AGGREGATE,
-            CHARACTER_AGGREGATE,
-            CHARACTER_WORLD_AGGREGATE,
-            EXPLORATION_AGGREGATE,
-            INVENTORY_AGGREGATE,
-            LOADOUT_AGGREGATE,
-            COMPANION_ROSTER_AGGREGATE,
-            REWARD_CLAIM_AGGREGATE,
-            INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
-        RewardSettlementStorageKeys,
-        companion_growth_settlement,
-        maximum_battle_rounds=DIMENSIONAL_DISASTER_BATTLE_ROUNDS,
-        timezone=config.project.timezone,
-    )
-    economy = EconomyFeature(
-        database,
-        content.catalog,
-        snapshots,
-        inventory_engine,
-        ledger_engine,
-        EconomyStorageKinds(
-            INVENTORY_AGGREGATE,
-            LOADOUT_AGGREGATE,
-            LEDGER_AGGREGATE,
-            MARKET_AGGREGATE,
-        ),
-        market_item_policies=content.market_item_policies,
-    )
-    lottery = LotteryFeature(
-        database,
-        snapshots,
-        ledger_engine,
-        storage=LotteryStorageKinds(
-            LOTTERY_AGGREGATE,
-            LEDGER_AGGREGATE,
-        ),
-        timezone=config.project.timezone,
-    )
-    draw = DrawFeature(
-        database,
-        content,
-        snapshots,
-        inventory_engine,
-        reward_settlement,
-        DrawStorageKinds(
-            DRAW_HISTORY_AGGREGATE,
-            INVENTORY_AGGREGATE,
-            LEDGER_AGGREGATE,
-            LOOT_AGGREGATE,
-            REWARD_CLAIM_AGGREGATE,
-        ),
-        RewardSettlementStorageKeys,
-    )
-    rest = RestFeature(
-        database,
-        content.catalog,
-        snapshots,
-        action_service,
-        CharacterEngine(content.catalog.characters),
-        character_projector,
-        RestStorageKinds(
-            ACTION_AGGREGATE,
-            CHARACTER_AGGREGATE,
-            INVENTORY_AGGREGATE,
-            LOADOUT_AGGREGATE,
-            EXPLORATION_AGGREGATE,
-        ),
-    )
-    accounts = PersistedAccountService(
-        database,
-        AccountEngine(lambda: f"account-{uuid4().hex}"),
         secret,
+        content_assembly,
+        foundation,
     )
-    characters = PersistedCharacterService(database)
-    character_creation_service = PersistedCharacterCreationService(
+    social_features = _assemble_social_features(
         database,
-        workflow,
-        snapshots=snapshots,
-    )
-    notifications = NotificationInboxService(database)
-    activities = PersistedActivityService(database, content.catalog.activity_engine)
-    player = PlayerFeature(
-        database,
-        accounts,
-        characters,
-        character_creation_service,
-        snapshots,
-        notifications,
-        activities,
-        registered_global_activities,
-        PlayerStorageKinds(
-            character=CHARACTER_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-            loadout=LOADOUT_AGGREGATE,
-            ledger=LEDGER_AGGREGATE,
-            world=WORLD_AGGREGATE,
-            character_world=CHARACTER_WORLD_AGGREGATE,
-            action=ACTION_AGGREGATE,
-            settings=CHARACTER_SETTINGS_AGGREGATE,
-            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
-    )
-    dimension_shift = DimensionShiftFeature(
-        database,
-        content,
-        world_views,
-        snapshots,
-        inventory_engine,
-        DimensionShiftStorageKinds(
-            character_world=CHARACTER_WORLD_AGGREGATE,
-            world=WORLD_AGGREGATE,
-            action=ACTION_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-        ),
-    )
-    breakthrough = BreakthroughFeature(
-        database,
-        content,
-        snapshots,
-        inventory_engine,
-        CharacterEngine(content.catalog.characters),
-        BreakthroughStorageKinds(
-            character=CHARACTER_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-        ),
-    )
-    social = PersistedSocialService(database, content.catalog.social_engine, snapshots)
-    party_engine = PartyEngine(content.catalog.parties)
-    party_persistence = PersistedPartyService(database, party_engine, snapshots)
-    party_admissions = PersistedPartyAdmissionService(
-        database,
-        content.catalog.social_engine,
-        party_engine,
-        snapshots,
-    )
-    party = PartyFeature(
-        party_persistence,
-        party_admissions,
-        social,
-        content.catalog.parties,
-    )
-    party_battles = PartyBattleFeature(
-        database,
-        content,
-        world_views,
-        snapshots,
-        reward_settlement,
-        battle_reports,
-        player_lineup,
-        PartyBattleStorageKinds(
-            party=PARTY_AGGREGATE,
-            character=CHARACTER_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-            loadout=LOADOUT_AGGREGATE,
-            companion_roster=COMPANION_ROSTER_AGGREGATE,
-            action=ACTION_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
-            reward_claim=REWARD_CLAIM_AGGREGATE,
-            weapon=WEAPON_AGGREGATE,
-            character_world=CHARACTER_WORLD_AGGREGATE,
-            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
-        RewardSettlementStorageKeys,
-        companion_growth_settlement,
-        party_scope_id=PARTY_SCOPE_ID,
-        timezone=config.project.timezone,
-    )
-    party_sparring = PartySparringFeature(
-        database,
-        content,
-        world_views,
-        snapshots,
-        social,
-        battle_reports,
-        PartySparringBattleSimulator(content.catalog, player_lineup),
-        PartySparringStorageKinds(
-            party=PARTY_AGGREGATE,
-            character=CHARACTER_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-            loadout=LOADOUT_AGGREGATE,
-            companion_roster=COMPANION_ROSTER_AGGREGATE,
-            character_world=CHARACTER_WORLD_AGGREGATE,
-            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
-        party_scope_id=PARTY_SCOPE_ID,
-    )
-    sparring = SparringFeature(
-        database,
-        content,
-        world_views,
-        snapshots,
-        social,
-        battle_reports,
-        SparringBattleSimulator(content.catalog, player_lineup),
-        SparringStorageKinds(
-            character=CHARACTER_AGGREGATE,
-            character_world=CHARACTER_WORLD_AGGREGATE,
-            inventory=INVENTORY_AGGREGATE,
-            loadout=LOADOUT_AGGREGATE,
-            companion_roster=COMPANION_ROSTER_AGGREGATE,
-            inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
-        ),
+        content_assembly,
+        foundation,
+        world_features,
     )
     return GameServices(
         database=database,
-        accounts=accounts,
-        characters=characters,
-        character_creation=character_creation_service,
-        character_projector=character_projector,
-        player_combat=player_combat,
-        inscriptions=inscription_service,
-        item_use=item_use_service,
-        character_item_use=character_item_use_service,
-        weapon_item_use=weapon_item_use_service,
-        special_item_use=special_item_use_service,
-        equipment_blueprints=equipment_blueprints,
-        covenant_exchange=covenant_exchange,
-        inventory_engine=inventory_engine,
-        inventory_protection=inventory_protection,
-        player=player,
-        dimension_shift=dimension_shift,
-        breakthrough=breakthrough,
-        loadouts=loadout_service,
-        notifications=notifications,
-        activities=activities,
-        actions=action_service,
-        global_activities=registered_global_activities,
-        battle_reports=battle_reports,
-        data_lifecycle=data_lifecycle,
-        build_trials=build_trials,
-        dimensional_disasters=dimensional_disasters,
-        party=party,
-        party_battles=party_battles,
-        party_sparring=party_sparring,
-        companions=companions,
-        player_lineup=player_lineup,
-        exploration=exploration,
-        world_progress=world_progress,
-        world_lore=world_lore,
-        world_travel=world_travel,
-        rest=rest,
-        sparring=sparring,
-        economy=economy,
-        lottery=lottery,
-        draw=draw,
-        world_views=world_views,
-        content=content,
+        accounts=player_features.accounts,
+        characters=player_features.characters,
+        character_creation=player_features.character_creation,
+        character_projector=foundation.character_projector,
+        player_combat=foundation.player_combat,
+        inscriptions=foundation.inscriptions,
+        item_use=foundation.item_use,
+        character_item_use=foundation.character_item_use,
+        weapon_item_use=foundation.weapon_item_use,
+        special_item_use=foundation.special_item_use,
+        equipment_blueprints=foundation.equipment_blueprints,
+        covenant_exchange=foundation.covenant_exchange,
+        inventory_engine=foundation.inventory_engine,
+        inventory_protection=foundation.inventory_protection,
+        player=player_features.player,
+        dimension_shift=player_features.dimension_shift,
+        breakthrough=player_features.breakthrough,
+        loadouts=foundation.loadouts,
+        notifications=player_features.notifications,
+        activities=player_features.activities,
+        actions=foundation.actions,
+        global_activities=content_assembly.global_activities,
+        battle_reports=world_features.battle_reports,
+        data_lifecycle=world_features.data_lifecycle,
+        build_trials=world_features.build_trials,
+        dimensional_disasters=world_features.dimensional_disasters,
+        party=social_features.party,
+        party_battles=social_features.party_battles,
+        party_sparring=social_features.party_sparring,
+        companions=world_features.companions,
+        player_lineup=foundation.player_lineup,
+        exploration=world_features.exploration,
+        world_progress=world_features.world_progress,
+        world_lore=world_features.world_lore,
+        world_travel=world_features.world_travel,
+        rest=economy_features.rest,
+        sparring=social_features.sparring,
+        economy=economy_features.economy,
+        lottery=economy_features.lottery,
+        draw=economy_features.draw,
+        world_views=content_assembly.world_views,
+        content=content_assembly.content,
     )
 
 
