@@ -86,9 +86,12 @@ ACTIVE_FEATURE_MANIFESTS = (
     FeatureManifest(
         "data_lifecycle",
         "data_lifecycle",
-        "统一执行各领域登记的短期数据清理",
-        ("数据维护",),
-        scheduled_jobs=("game_data_lifecycle_cleanup",),
+        "统一执行各领域登记的短期数据清理并维护正式数据库备份",
+        ("数据维护", "数据库备份"),
+        scheduled_jobs=(
+            "game_data_lifecycle_cleanup",
+            "wanxiang_xingji_database_backup",
+        ),
     ),
     FeatureManifest(
         "companion",

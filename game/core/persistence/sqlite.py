@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing, suppress
 from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
@@ -756,6 +757,38 @@ class SqliteDatabase:
 
     def unit_of_work(self, *, write: bool = True) -> "SqliteUnitOfWork":
         return SqliteUnitOfWork(self.connect(), write=write)
+
+    def backup_to(self, destination: Path | str) -> Path:
+        """在线生成一份独立 SQLite 备份，并在交付前完成完整性校验。"""
+
+        target = Path(destination)
+        if not self.path.is_file():
+            raise FileNotFoundError(f"待备份数据库不存在：{self.path}")
+        if target.resolve() == self.path.resolve():
+            raise ValueError("数据库备份目标不能覆盖源数据库")
+        if target.exists():
+            raise FileExistsError(f"数据库备份目标已经存在：{target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with closing(self.connect()) as source_connection, closing(
+                sqlite3.connect(
+                    target,
+                    timeout=self.busy_timeout_ms / 1000,
+                )
+            ) as target_connection:
+                source_connection.backup(target_connection)
+                target_connection.execute("PRAGMA journal_mode = DELETE")
+                check_rows = target_connection.execute("PRAGMA quick_check").fetchall()
+                check_result = tuple(str(row[0]) for row in check_rows)
+                if check_result != ("ok",):
+                    raise sqlite3.DatabaseError(
+                        f"数据库备份完整性校验失败：{', '.join(check_result)}"
+                    )
+        except Exception:
+            with suppress(OSError):
+                target.unlink(missing_ok=True)
+            raise
+        return target
 
 
 class SqliteUnitOfWork:

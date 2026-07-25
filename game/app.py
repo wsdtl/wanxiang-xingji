@@ -258,6 +258,11 @@ class GameServices:
         )
         return self.world_views.require(world_id)
 
+    def backup_database(self, destination: Path | str) -> Path:
+        """为数据库备份组件提供受控的持久化入口。"""
+
+        return self.database.backup_to(destination)
+
     def create_character(
         self,
         evidence: IdentityEvidence,
