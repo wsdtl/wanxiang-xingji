@@ -15,14 +15,13 @@ game/database/*.db-wal
 game/database/*.db-shm
 game/database/backups/
 
-# 私钥和证书容器禁止进入版本库；公开证书链可以显式保留。
+# 私钥和证书容器禁止进入版本库。
 certs/*.key
 certs/*.p12
 certs/*.pfx
 certs/*.pem
 certs/*.csr
 certs/*.crt
-!certs/*_bundle.pem
 
 launch/log/*
 launch/runtime/*

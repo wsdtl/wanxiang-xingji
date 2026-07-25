@@ -17,6 +17,7 @@ from game.app import build_game_services, install_game_services, restore_game_se
 from game.cmd.help_registry import HELP_CATEGORY_ORDER, help_registry  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq.render import render_qq_message  # noqa: E402
+from launch.paths import public_url, static_url  # noqa: E402
 from main import create_app  # noqa: E402
 
 
@@ -41,6 +42,8 @@ async def _main() -> None:
     assert home_payload["content"].count("mqqapi://aio/inlinecmd") == len(
         HELP_CATEGORY_ORDER
     )
+    assert "世界设定 · 诸界档案 · 游玩手册" in home_payload["content"]
+    assert public_url(static_url("main", "index.html")) in home_payload["content"]
     assert "keyboard" not in home_payload
     detail_payload = render_qq_message(
         help_service._detail_message(help_registry.find("开始探险"))
@@ -70,6 +73,8 @@ async def _main() -> None:
             home_content = _content(home)
             for category in HELP_CATEGORY_ORDER:
                 assert category in home_content
+            assert "世界设定 · 诸界档案 · 游玩手册" in home_content
+            assert home_content.rfind("游戏主页") > home_content.rfind(HELP_CATEGORY_ORDER[-1])
             assert not home.replies[0].message.actions
 
             category = await _dispatch("帮助 行动", "help-category")

@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101416">
+  <meta name="description" content="《万象行纪》世界设定、诸界档案、界海词典与游玩手册。">
+  <title>万象行纪 · 界门公开档案</title>
+  <link rel="stylesheet" href="/static/main/style.css">
+  <script src="/static/main/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到正文</a>
+
+  <header class="site-header" data-site-header>
+    <a class="brand" href="#home" aria-label="返回万象行纪首页">
+      <span class="brand-mark" aria-hidden="true">界</span>
+      <span>
+        <strong>万象行纪</strong>
+        <small>界门公开档案</small>
+      </span>
+    </a>
+    <nav class="site-nav" aria-label="主要导航">
+      <a href="#home" aria-current="page">首页</a>
+      <a href="#worlds">诸界</a>
+      <a href="#incarnation">唯一化身</a>
+      <a href="#glossary">界海词典</a>
+      <a href="#manual">游玩手册</a>
+      <a href="#chronicle">行纪</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="home" aria-labelledby="hero-title">
+      <canvas id="hero-scene" class="hero-scene" aria-hidden="true"></canvas>
+      <div class="hero-shade" aria-hidden="true"></div>
+      <div class="hero-content page-shell">
+        <p class="eyebrow">界门公开档案 · 稳定坐标 03</p>
+        <h1 id="hero-title">万象行纪</h1>
+        <p class="hero-lead">没有人知道世界究竟有多少。</p>
+        <p class="hero-copy">诸界没有尽头。你将维系同一具化身，穿过不同文明的界门，把每一次选择写进共同历史。</p>
+        <div class="hero-actions" aria-label="主页入口">
+          <a class="primary-link" href="#worlds">进入诸界</a>
+          <a class="text-link" href="#manual">第一次登录 <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+      <div class="coordinate-strip" aria-label="当前稳定开放世界">
+        <span>01 太玄界</span>
+        <span>02 魔法世界</span>
+        <span>03 星环界</span>
+        <span class="coordinate-status"><i aria-hidden="true"></i> 界门在线</span>
+      </div>
+    </section>
+
+    <section class="section worlds-section" id="worlds" aria-labelledby="worlds-title">
+      <div class="page-shell">
+        <header class="section-heading">
+          <p class="eyebrow">当前稳定开放坐标</p>
+          <h2 id="worlds-title">三处入口，不是界海的边界</h2>
+          <p>它们拥有独立的起源、历史和力量法则。界门只记录目前能够长期安全登录的坐标。</p>
+        </header>
+
+        <div class="world-ledger">
+          <article class="world-entry" id="world-taixuan">
+            <figure class="world-poster poster-taixuan" aria-label="太玄界风格海报">
+              <canvas data-poster="taixuan" aria-hidden="true"></canvas>
+              <div class="poster-coordinate">WX-01</div>
+              <figcaption>
+                <span>修行文明</span>
+                <strong>太玄界</strong>
+                <small>山海仍在，天门久闭</small>
+              </figcaption>
+            </figure>
+            <div class="world-copy">
+              <p class="record-number">坐标 01 · 灵脉纪元</p>
+              <h3>太玄界</h3>
+              <p class="world-summary">灵脉、仙城与古老传承共同维系的修行世界。修士以境界、法器和问道之路理解界门。</p>
+              <dl class="world-facts">
+                <div><dt>力量体系</dt><dd>灵气 · 境界 · 法器</dd></div>
+                <div><dt>关键地点</dt><dd>太玄仙城 · 昆仑天墟 · 万剑冢</dd></div>
+              </dl>
+              <div class="mystery-record">
+                <span>当前谜团</span>
+                <p>千年无人飞升。无名道碑、九山同梦与天门旧誓正指向同一段被掩埋的守门史。</p>
+              </div>
+              <button class="command-link" type="button" data-copy-command="世界志 太玄界" title="复制命令">
+                <span>世界志 太玄界</span><b aria-hidden="true">复制</b>
+              </button>
+            </div>
+          </article>
+
+          <article class="world-entry world-entry-reverse" id="world-magic">
+            <figure class="world-poster poster-magic" aria-label="魔法世界风格海报">
+              <canvas data-poster="magic" aria-hidden="true"></canvas>
+              <div class="poster-coordinate">WX-02</div>
+              <figcaption>
+                <span>星辉文明</span>
+                <strong>魔法世界</strong>
+                <small>预言鸣钟，姓名失落</small>
+              </figcaption>
+            </figure>
+            <div class="world-copy">
+              <p class="record-number">坐标 02 · 星辉历</p>
+              <h3>魔法世界</h3>
+              <p class="world-summary">王城、学院、遗迹与魔力潮汐交织。冒险者以法术、圣器和星象解释诸界联系。</p>
+              <dl class="world-facts">
+                <div><dt>力量体系</dt><dd>魔力 · 法术 · 圣器</dd></div>
+                <div><dt>关键地点</dt><dd>星辉王城 · 天穹神域 · 混沌深渊</dd></div>
+              </dl>
+              <div class="mystery-record">
+                <span>当前谜团</span>
+                <p>预言钟与勇者仪式覆盖了历代姓名，失落的第十三行仍在英雄史诗之外回响。</p>
+              </div>
+              <button class="command-link" type="button" data-copy-command="世界志 魔法世界" title="复制命令">
+                <span>世界志 魔法世界</span><b aria-hidden="true">复制</b>
+              </button>
+            </div>
+          </article>
+
+          <article class="world-entry" id="world-stellar">
+            <figure class="world-poster poster-stellar" aria-label="星环界风格海报">
+              <canvas data-poster="stellar" aria-hidden="true"></canvas>
+              <div class="poster-coordinate">WX-03</div>
+              <figcaption>
+                <span>机械文明</span>
+                <strong>星环界</strong>
+                <small>十二天环，一处暗环</small>
+              </figcaption>
+            </figure>
+            <div class="world-copy">
+              <p class="record-number">坐标 03 · 环历 1207</p>
+              <h3>星环界</h3>
+              <p class="world-summary">十二道巨型天环围绕人造恒星运转。古老系统维持城市与生态，创造者却已从全部档案中消失。</p>
+              <dl class="world-facts">
+                <div><dt>力量体系</dt><dd>同步 · 兵装 · 协议</dd></div>
+                <div><dt>关键地点</dt><dd>环心天城 · 造物母厂 · 天穹观测阵</dd></div>
+              </dl>
+              <div class="mystery-record">
+                <span>当前谜团</span>
+                <p>官方星图只承认十二环，维修记录却不断出现一个不存在的编号：第十三暗环。</p>
+              </div>
+              <button class="command-link" type="button" data-copy-command="世界志 星环界" title="复制命令">
+                <span>世界志 星环界</span><b aria-hidden="true">复制</b>
+              </button>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section identity-section" id="incarnation" aria-labelledby="identity-title">
+      <div class="page-shell identity-layout">
+        <header class="section-heading identity-heading">
+          <p class="eyebrow">角色背景设定</p>
+          <h2 id="identity-title">进入多少世界，仍是同一个人</h2>
+          <p>世界可以改变化身的材质、名称和传说，却不能改变归属、机制与已经发生的历史。</p>
+        </header>
+
+        <div class="identity-flow" aria-label="登录者、唯一化身与归航者关系">
+          <article>
+            <span class="identity-index">01</span>
+            <div class="identity-symbol identity-symbol-login" aria-hidden="true"></div>
+            <h3>登录者</h3>
+            <p>真实玩家与界门之间的身份，负责向化身传递意志。</p>
+          </article>
+          <div class="identity-arrow" aria-hidden="true">→</div>
+          <article class="identity-primary">
+            <span class="identity-index">02</span>
+            <div class="identity-symbol identity-symbol-avatar" aria-hidden="true"></div>
+            <h3>唯一化身</h3>
+            <p>唯一角色与长期成长主体，承载等级、资产、战报和全部经历。</p>
+          </article>
+          <div class="identity-arrow" aria-hidden="true">→</div>
+          <article>
+            <span class="identity-index">03</span>
+            <div class="identity-symbol identity-symbol-return" aria-hidden="true"></div>
+            <h3>归航者</h3>
+            <p>化身接受归航公约登记后的公共身份，不增加第二套成长。</p>
+          </article>
+        </div>
+
+        <blockquote class="identity-quote">
+          <p>“无论进入多少世界，都能带着同一个名字回来。”</p>
+          <cite>界门档案 · 身份连续性条款</cite>
+        </blockquote>
+      </div>
+    </section>
+
+    <section class="section glossary-section" id="glossary" aria-labelledby="glossary-title">
+      <div class="page-shell">
+        <div class="glossary-topline">
+          <header class="section-heading">
+            <p class="eyebrow">核心术语</p>
+            <h2 id="glossary-title">界海词典</h2>
+            <p>界门、公约和诸界共用的基础词条。</p>
+          </header>
+          <label class="search-field">
+            <span>检索词条</span>
+            <input id="glossary-search" type="search" autocomplete="off" placeholder="名称或含义" aria-controls="glossary-list">
+          </label>
+        </div>
+        <p class="result-count" id="glossary-count" aria-live="polite">14 个词条</p>
+        <div class="glossary-list" id="glossary-list">
+          <article data-term="万象行纪 所有登录者 真实行动 游戏 历史"><h3>万象行纪</h3><p>所有登录者真实行动共同形成的游戏与历史。</p></article>
+          <article data-term="界海 无穷 独立世界 跨界空间"><h3>界海</h3><p>承载无穷独立世界的跨界空间。</p></article>
+          <article data-term="界门 登录 身份 世界连接 古老网络"><h3>界门</h3><p>维持登录、跨界身份与世界连接的古老网络。</p></article>
+          <article data-term="登录者 QQ 用户 玩家 身份"><h3>登录者</h3><p>QQ 用户在世界观中的身份。</p></article>
+          <article data-term="唯一化身 玩家 唯一角色 长期成长"><h3>唯一化身</h3><p>玩家唯一角色及长期成长主体。</p></article>
+          <article data-term="归航公约 身份互认 资产确权 公共清算 共同历史"><h3>归航公约</h3><p>维护跨界身份互认、资产确权、公共清算和共同历史的契约组织。</p></article>
+          <article data-term="归航者 建立 唯一化身 公共身份"><h3>归航者</h3><p>建立唯一化身并接受归航公约登记的玩家公共身份。</p></article>
+          <article data-term="跨世界档案 角色 资产 规则事实 历史记录"><h3>跨世界档案</h3><p>界门保存的角色、资产、规则事实和历史记录。</p></article>
+          <article data-term="归航市场 托管 原子交割 跨界寄售"><h3>归航市场</h3><p>由归航公约担保托管与原子交割的跨界寄售网络。</p></article>
+          <article data-term="归航库 税金 公共玩法 资金库"><h3>归航库</h3><p>接收公开税金并按公开规则用于公共玩法的跨界资金库。</p></article>
+          <article data-term="锚址 世界 稳定对应 登录坐标"><h3>锚址</h3><p>不同世界之间可以稳定对应的登录坐标。</p></article>
+          <article data-term="跃迁 封存 当前构筑 登录 另一世界"><h3>跃迁</h3><p>封存当前构筑并登录另一世界。</p></article>
+          <article data-term="跨界灾厄 世界边界 公共灾难"><h3>跨界灾厄</h3><p>能够突破世界边界并影响多个世界的公共灾难。</p></article>
+          <article data-term="铭刻之羽 灾厄 结局 恒定记录 命名"><h3>铭刻之羽</h3><p>灾厄结局凝结的唯一恒定记录与命名载体。</p></article>
+        </div>
+        <p class="empty-result" id="glossary-empty" hidden>没有匹配的词条。</p>
+      </div>
+    </section>
+
+    <section class="section manual-section" id="manual" aria-labelledby="manual-title">
+      <div class="page-shell manual-layout">
+        <header class="section-heading manual-heading">
+          <p class="eyebrow">游玩手册</p>
+          <h2 id="manual-title">从第一次降临开始</h2>
+          <p>命令承载主要流程，回复中的文字目标和按钮用于快速联动。</p>
+        </header>
+
+        <div class="manual-workbench">
+          <div class="manual-tabs" role="tablist" aria-label="游玩阶段">
+            <button id="tab-first" type="button" role="tab" aria-selected="true" aria-controls="panel-first" tabindex="0">第一次登录</button>
+            <button id="tab-explore" type="button" role="tab" aria-selected="false" aria-controls="panel-explore" tabindex="-1">探索与成长</button>
+            <button id="tab-travel" type="button" role="tab" aria-selected="false" aria-controls="panel-travel" tabindex="-1">跃迁诸界</button>
+            <button id="tab-public" type="button" role="tab" aria-selected="false" aria-controls="panel-public" tabindex="-1">公共玩法</button>
+          </div>
+
+          <div class="manual-panels">
+            <section id="panel-first" role="tabpanel" aria-labelledby="tab-first">
+              <ol class="step-list">
+                <li><span>01</span><div><h3>建立唯一化身</h3><p>创建角色后，界门会完成身份确认、归航者登记与首次世界降临。</p><button type="button" class="command-link compact" data-copy-command="创建角色"><span>创建角色 [名称]</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>02</span><div><h3>确认当前构筑</h3><p>查看角色、初始武器、人物状态与首次降临世界。</p><button type="button" class="command-link compact" data-copy-command="我的角色"><span>我的角色</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>03</span><div><h3>选择一处地点</h3><p>先打开地图，再从当前世界的地点中选择目标。</p><button type="button" class="command-link compact" data-copy-command="地图"><span>地图</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>04</span><div><h3>留下第一条行纪</h3><p>探险会持续推进；返回后查看总结、战利品与区域记录。</p><button type="button" class="command-link compact" data-copy-command="开始探险"><span>开始探险</span><b aria-hidden="true">复制</b></button></div></li>
+              </ol>
+            </section>
+
+            <section id="panel-explore" role="tabpanel" aria-labelledby="tab-explore" hidden>
+              <ol class="step-list">
+                <li><span>01</span><div><h3>移动</h3><p>地点拥有独立环境、敌人和掉落记录。</p><button type="button" class="command-link compact" data-copy-command="前往 "><span>前往 [地点]</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>02</span><div><h3>探险</h3><p>开始后会占用主要行动；离开聊天窗口也会继续推进。</p><button type="button" class="command-link compact" data-copy-command="探险总结"><span>探险总结</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>03</span><div><h3>整理资产</h3><p>查看背包、武库和装备详情，再决定装配或归航回收。</p><button type="button" class="command-link compact" data-copy-command="背包"><span>背包</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>04</span><div><h3>阅读世界</h3><p>行纪记录区域进度，世界志逐层呈现当地环境、旧史与真相。</p><button type="button" class="command-link compact" data-copy-command="行纪"><span>行纪</span><b aria-hidden="true">复制</b></button></div></li>
+              </ol>
+            </section>
+
+            <section id="panel-travel" role="tabpanel" aria-labelledby="tab-travel" hidden>
+              <ol class="step-list">
+                <li><span>01</span><div><h3>查看界门</h3><p>确认当前世界、可登录坐标和稳定跃迁所需介质。</p><button type="button" class="command-link compact" data-copy-command="跃迁"><span>跃迁</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>02</span><div><h3>选择世界</h3><p>界门先封存当前构筑，再按目标世界法则重构同一具化身。</p><button type="button" class="command-link compact" data-copy-command="跃迁 "><span>跃迁 [世界名称]</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>03</span><div><h3>核对新形态</h3><p>名称、材质和力量解释可能改变，所有权、机制与历史保持不变。</p><button type="button" class="command-link compact" data-copy-command="战斗面板"><span>战斗面板</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>04</span><div><h3>继续当地记录</h3><p>每个世界拥有独立地点与世界志进度。</p><button type="button" class="command-link compact" data-copy-command="世界志"><span>世界志 [世界名称]</span><b aria-hidden="true">复制</b></button></div></li>
+              </ol>
+            </section>
+
+            <section id="panel-public" role="tabpanel" aria-labelledby="tab-public" hidden>
+              <ol class="step-list">
+                <li><span>01</span><div><h3>归航市场</h3><p>寄售、购买和税务通过公约托管与统一清算。</p><button type="button" class="command-link compact" data-copy-command="二手"><span>二手</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>02</span><div><h3>临时队伍</h3><p>队伍只建立协同档案，不改写成员原世界的身份和进度。</p><button type="button" class="command-link compact" data-copy-command="组队"><span>组队</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>03</span><div><h3>跨界灾厄</h3><p>所有归航者面对同一灾厄实例，共享血量与贡献封榜。</p><button type="button" class="command-link compact" data-copy-command="跨界灾厄"><span>跨界灾厄</span><b aria-hidden="true">复制</b></button></div></li>
+                <li><span>04</span><div><h3>公共行纪</h3><p>真实行动、灾厄结局与铭刻最终汇入可查询的共同历史。</p><button type="button" class="command-link compact" data-copy-command="行纪排行"><span>行纪排行</span><b aria-hidden="true">复制</b></button></div></li>
+              </ol>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section chronicle-section" id="chronicle" aria-labelledby="chronicle-title">
+      <div class="page-shell chronicle-layout">
+        <header class="section-heading">
+          <p class="eyebrow">玩家共同历史</p>
+          <h2 id="chronicle-title">行纪不会预写你的结局</h2>
+          <p>世界志呈现可发现的事实，面对这些事实时采取何种立场，始终属于玩家自己。</p>
+          <button type="button" class="command-link light" data-copy-command="行纪"><span>查看我的行纪</span><b aria-hidden="true">复制命令</b></button>
+        </header>
+
+        <div class="chronicle-records" aria-label="当前可追寻的世界记录">
+          <article><time>太玄界</time><h3>天门旧誓</h3><p>千年无人飞升之后，守门与飞升是否仍是同一条路？</p><span>记录 01 / 05</span></article>
+          <article><time>魔法世界</time><h3>失落的第十三行</h3><p>被覆盖的历代姓名，正在从勇者仪式的缝隙中重新出现。</p><span>记录 01 / 05</span></article>
+          <article><time>星环界</time><h3>第十三暗环</h3><p>维护协议持续修复世界，也把无法识别的变化标记为异常。</p><span>记录 01 / 05</span></article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="page-shell footer-layout">
+      <div><strong>万象行纪</strong><p>界门公开档案 · wanxiang_xingji</p></div>
+      <p>当前稳定坐标只是开放记录，不代表界海边界。</p>
+      <a href="#home">返回顶部 <span aria-hidden="true">↑</span></a>
+    </div>
+  </footer>
+
+  <div class="copy-toast" id="copy-toast" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

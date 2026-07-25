@@ -10,6 +10,7 @@ from game.content.presentation import (
     COVENANT_TREASURY_NAME,
     GAME_NAME,
 )
+from launch.paths import public_url, static_url
 from message import Action, DocumentMessage, M
 
 from ..help_registry import CommandHelpEntry, help_registry
@@ -64,6 +65,12 @@ def _home_message() -> DocumentMessage:
                 parts.append("　")
             parts.append(M.command(category, f"帮助 {category}"))
         builder.line(*parts)
+    builder.section("游戏主页").line(
+        M.link(
+            "世界设定 · 诸界档案 · 游玩手册",
+            public_url(static_url("main", "index.html")),
+        )
+    )
     return builder.build()
 
 
