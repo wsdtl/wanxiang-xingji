@@ -13,7 +13,6 @@ from game.core.gameplay import (
 TAIXUAN_WORLD_ID = "world.taixuan"
 MAGIC_WORLD_ID = "world.magic"
 STELLAR_RING_WORLD_ID = "world.stellar_ring"
-PLAYABLE_WORLD_IDS = (TAIXUAN_WORLD_ID, MAGIC_WORLD_ID, STELLAR_RING_WORLD_ID)
 
 TAIXUAN_WORLD_SPACE_ID = "world_space.taixuan"
 MAGIC_WORLD_SPACE_ID = "world_space.magic"
@@ -101,6 +100,10 @@ WORLD_DISPLAY_CONTENT_IDS = frozenset(
         *LOCATION_DISPLAY_IDS,
     }
 )
+WORLD_SPACE_DISPLAY_IDS = frozenset(
+    {TAIXUAN_WORLD_SPACE_ID, MAGIC_WORLD_SPACE_ID, STELLAR_RING_WORLD_SPACE_ID}
+)
+SHARED_WORLD_DISPLAY_CONTENT_IDS = frozenset(LOCATION_DISPLAY_IDS)
 _COORDINATE_SUFFIX = re.compile(
     r"_x(0|p[1-9][0-9]*|n[1-9][0-9]*)_y(0|p[1-9][0-9]*|n[1-9][0-9]*)$"
 )

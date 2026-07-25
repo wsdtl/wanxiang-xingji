@@ -25,7 +25,7 @@ from ..gameplay.inventory import (
     ItemCatalog,
     ItemStack,
 )
-from .errors import CorruptPersistenceData, TransactionMismatch
+from .errors import TransactionMismatch
 from .snapshots import CHARACTER_AGGREGATE, INVENTORY_AGGREGATE, SnapshotRepository
 from .sqlite import SqliteDatabase
 

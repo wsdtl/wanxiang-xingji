@@ -17,7 +17,6 @@ from game.content import (  # noqa: E402
     BASIC_ATTACK_ABILITY_ID,
     BASIC_COMBAT_FEATURE_ID,
     CATALOG_PACKAGE,
-    CATALOG_PACKAGE_ID,
     CHARACTER_LEVEL_EXPERIENCE_REQUIREMENTS,
     CHARACTER_REALMS,
     DEFAULT_CHARACTER_TEMPLATE_ID,
@@ -61,10 +60,9 @@ from game.content import (  # noqa: E402
     TAIXUAN_WORLD_ID,
     coordinate_token,
     validate_anchor_coordinate_id,
-    WORLD_SKIN_PACKAGE_ID,
     WORLD_SKIN_PACKAGE,
-    WORLD_PACKAGE_ID,
     WORLD_PACKAGE,
+    OFFICIAL_PACKAGES,
     assemble_official_catalog,
     character_realm_for_level,
     select_world_skin,
@@ -82,6 +80,7 @@ from game.core.gameplay import (  # noqa: E402
     LoadoutState,
     MapAnchorDefinition,
     character_name_display_width,
+    resolve_package_order,
 )
 from game.content.catalog.world_progress import WORLD_PROGRESS_DEFINITION  # noqa: E402
 
@@ -102,19 +101,24 @@ def main() -> None:
     }
     assert progress_reward_ids <= set(catalog.items.definitions.ids())
 
-    assert tuple(value.id for value in catalog.report.packages) == (
-        CATALOG_PACKAGE_ID,
-        WORLD_SKIN_PACKAGE_ID,
-        WORLD_PACKAGE_ID,
+    assert tuple(value.id for value in catalog.report.packages) == tuple(
+        value.manifest.id for value in resolve_package_order(OFFICIAL_PACKAGES)
     )
     assert str(CATALOG_PACKAGE.manifest.version) == "3.28.0"
     assert str(WORLD_SKIN_PACKAGE.manifest.version) == "3.21.0"
-    assert str(WORLD_PACKAGE.manifest.version) == "1.2.0"
+    assert str(WORLD_PACKAGE.manifest.version) == "2.0.0"
     assert len(catalog.report.content_fingerprint) == 64
-    assert catalog.report.display_content_ids == (
-        CATALOG_PACKAGE.display_content_ids
-        | WORLD_SKIN_PACKAGE.display_content_ids
-        | WORLD_PACKAGE.display_content_ids
+    assert catalog.report.display_content_ids == frozenset(
+        content_id
+        for package in OFFICIAL_PACKAGES
+        for content_id in (
+            *package.display_content_ids,
+            *(
+                scoped_id
+                for scoped_ids in package.skin_display_content_ids.values()
+                for scoped_id in scoped_ids
+            ),
+        )
     )
     progression = catalog.characters.progressions.require("progression.character_level")
     assert progression.maximum_level == 100

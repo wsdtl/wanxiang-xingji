@@ -22,7 +22,6 @@ from ..gameplay.social import (
     ResolveSocialRequest,
     SocialCommand,
     SocialEngine,
-    SocialExecution,
     SocialRequestStatus,
     SocialState,
 )

@@ -11,7 +11,7 @@ from game.core.gameplay import (
 
 from ...catalog.enemy.blueprints import (
     BEHAVIOR_BLUEPRINTS,
-    BOSS_TEMPLATE_KEYS,
+    BOSS_BLUEPRINTS,
     CULTIVATION_PARTY_BOSS_BLUEPRINTS,
     MAGIC_PARTY_BOSS_BLUEPRINTS,
     STELLAR_RING_PARTY_BOSS_BLUEPRINTS,
@@ -97,16 +97,6 @@ _BOSS_NAMES = (
     ("卡律布狄斯·视界吞噬者", "卡律布狄斯"),
     ("忒弥斯·协议裁决者", "忒弥斯"),
     ("第十三核心·未署名母机", "第十三核心"),
-    ("星辰吞噬者·阿波菲斯", "阿波菲斯"),
-    ("位面破坏者·提丰", "提丰"),
-    ("冥河船夫·卡戎", "卡戎"),
-    ("冥王·哈迪斯", "哈迪斯"),
-    ("堕天晨星·路西法", "路西法"),
-    ("黑夜女神·赫卡忒", "赫卡忒"),
-    ("雷霆巨龙·法夫纳", "法夫纳"),
-    ("霜巨人之王·尤弥尔", "尤弥尔"),
-    ("不死鸟·涅槃之焰", "不死鸟"),
-    ("终焉守卫·梅塔特隆", "梅塔特隆"),
 )
 
 
@@ -148,16 +138,11 @@ _BEHAVIOR_DISPLAY = {
 
 def _build_entries() -> tuple[dict[str, SkinEntry], dict[str, tuple[str, ...]], dict[str, str]]:
     regular_keys = tuple(value.key for value in REGULAR_ENEMY_BLUEPRINTS)
-    boss_names = dict(zip(BOSS_TEMPLATE_KEYS, _BOSS_NAMES))
-    boss_blueprints = (
-        *PERSONAL_BOSS_BLUEPRINTS,
-        *CULTIVATION_PARTY_BOSS_BLUEPRINTS,
-        *MAGIC_PARTY_BOSS_BLUEPRINTS,
-        *STELLAR_RING_PARTY_BOSS_BLUEPRINTS,
-    )
+    boss_blueprints = BOSS_BLUEPRINTS
     behavior_keys = {value.key for value in BEHAVIOR_BLUEPRINTS}
-    if len(_REGULAR_NAMES) != len(regular_keys) or len(_BOSS_NAMES) != len(BOSS_TEMPLATE_KEYS):
+    if len(_REGULAR_NAMES) != len(regular_keys) or len(_BOSS_NAMES) != len(boss_blueprints):
         raise ValueError("魔法世界敌人名称必须完整覆盖正式敌人身份")
+    boss_names = dict(zip((value.key for value in boss_blueprints), _BOSS_NAMES, strict=True))
     if set(_BEHAVIOR_DISPLAY) != behavior_keys:
         raise ValueError("魔法世界行为名称必须完整覆盖正式行为模板")
     all_names = [

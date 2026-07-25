@@ -147,6 +147,7 @@ def main() -> None:
     _assert_feature_layer_boundary()
     _assert_business_feature_catalog()
     _assert_application_composition_boundary()
+    _assert_retired_structure_is_absent()
     _assert_balance_values_live_in_content()
     _assert_item_use_components_are_wired()
     _assert_cross_domain_state_fields()
@@ -162,22 +163,25 @@ def _assert_business_feature_catalog() -> None:
 
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    from game.features.catalog import ACTIVE_BUSINESS_FEATURES
+    from game.features.catalog import (
+        ACTIVE_FEATURE_MANIFESTS,
+        feature_snapshot_codec_registrations,
+    )
 
-    ids = [value.id for value in ACTIVE_BUSINESS_FEATURES]
-    packages = [value.package for value in ACTIVE_BUSINESS_FEATURES]
+    ids = [value.id for value in ACTIVE_FEATURE_MANIFESTS]
+    packages = [value.package for value in ACTIVE_FEATURE_MANIFESTS]
     assert len(ids) == len(set(ids)), "正式业务台账存在重复 ID"
     assert len(packages) == len(set(packages)), "正式业务台账存在重复包名"
 
     command_owners: dict[str, str] = {}
-    for feature in ACTIVE_BUSINESS_FEATURES:
+    for feature in ACTIVE_FEATURE_MANIFESTS:
         integrated = set(feature.integrated_command_packages)
         for command_package in set(feature.command_packages) - integrated:
             previous = command_owners.setdefault(command_package, feature.id)
             assert previous == feature.id, (
                 f"命令组件 {command_package} 存在多个主业务：{previous} 与 {feature.id}"
             )
-    for feature in ACTIVE_BUSINESS_FEATURES:
+    for feature in ACTIVE_FEATURE_MANIFESTS:
         for command_package in feature.integrated_command_packages:
             assert command_package in command_owners, (
                 f"业务 {feature.id} 的协作命令组件 {command_package} 没有主业务"
@@ -200,7 +204,7 @@ def _assert_business_feature_catalog() -> None:
         for path in command_root.rglob("jobs.py")
     }
     registered_job_files: set[Path] = set()
-    for feature in ACTIVE_BUSINESS_FEATURES:
+    for feature in ACTIVE_FEATURE_MANIFESTS:
         for command_package in feature.command_packages:
             package = command_root / command_package
             assert (package / "__init__.py").is_file(), (
@@ -222,59 +226,29 @@ def _assert_business_feature_catalog() -> None:
             registered_job_files.add(job_file)
     assert registered_job_files == set(job_sources), "存在未登记到业务台账的 jobs.py"
 
+    codec_packages = {
+        path.parent.name for path in feature_root.glob("*/codec.py")
+    }
+    registered_codec_packages = {
+        feature.package
+        for feature in ACTIVE_FEATURE_MANIFESTS
+        if feature.snapshot_codecs
+    }
+    assert registered_codec_packages == codec_packages, (
+        "业务 codec.py 与 Feature Manifest 登记不一致："
+        f"文件={sorted(codec_packages)}，登记={sorted(registered_codec_packages)}"
+    )
+    codec_registrations = feature_snapshot_codec_registrations()
+    codec_ids = tuple(value[0] for value in codec_registrations)
+    assert len(codec_ids) == len(set(codec_ids)), "业务快照 codec ID 重复"
+
 
 def _assert_item_use_components_are_wired() -> None:
     """正式物品的类型化使用组件必须都有唯一的实际消费入口。"""
 
     from game.content import build_official_content
+    from game.cmd.物品.use import ITEM_USE_ROUTES, ITEM_USE_ROUTE_REGISTRY
 
-    source_files = {
-        path: (ROOT / path).read_text(encoding="utf-8")
-        for path in (
-            "game/cmd/物品/service.py",
-            "game/features/companion/service.py",
-            "game/features/dimension_shift/service.py",
-            "game/features/equipment_blueprint/service.py",
-        )
-    }
-    route_markers = {
-        "item_component.use_ability": (
-            "game/cmd/物品/service.py",
-            "services.item_use.use",
-        ),
-        "item_component.use_character_experience": (
-            "game/cmd/物品/service.py",
-            "services.character_item_use.use",
-        ),
-        "item_component.use_companion_experience": (
-            "game/cmd/物品/service.py",
-            "services.companions.use_experience_item",
-        ),
-        "item_component.use_weapon_experience": (
-            "game/cmd/物品/service.py",
-            "services.weapon_item_use.use",
-        ),
-        "item_component.use_weapon_maximum_level": (
-            "game/cmd/物品/service.py",
-            "services.weapon_item_use.use",
-        ),
-        "item_component.use_container_capacity": (
-            "game/cmd/物品/service.py",
-            "services.special_item_use.use",
-        ),
-        "item_component.use_dimension_shift": (
-            "game/features/dimension_shift/service.py",
-            "DIMENSION_SHIFT_ITEM_COMPONENT_ID",
-        ),
-        "item_component.use_companion_sanctuary": (
-            "game/features/companion/service.py",
-            "COMPANION_SANCTUARY_ITEM_COMPONENT_ID",
-        ),
-        "item_component.use_equipment_set_blueprint": (
-            "game/features/equipment_blueprint/service.py",
-            "ConsumeStack(blueprint.id, 1)",
-        ),
-    }
     content = build_official_content()
     used_components = {
         str(component_id)
@@ -282,23 +256,65 @@ def _assert_item_use_components_are_wired() -> None:
         for component_id in definition.components
         if str(component_id).startswith("item_component.use_")
     }
-    assert used_components == set(route_markers), (
+    registered_components = {str(value) for value in ITEM_USE_ROUTE_REGISTRY}
+    assert len(ITEM_USE_ROUTES) == len(registered_components)
+    assert used_components == registered_components, (
         "正式物品使用组件与消费入口不一致："
-        f"定义={sorted(used_components)}，入口={sorted(route_markers)}"
+        f"定义={sorted(used_components)}，入口={sorted(registered_components)}"
     )
-    for component_id, (path, marker) in route_markers.items():
-        assert marker in source_files[path], (
-            f"物品使用组件 {component_id} 缺少实际消费入口：{path}::{marker}"
-        )
+    for route in ITEM_USE_ROUTES:
+        assert route.handler.__module__ == "game.cmd.物品.use"
+        action = route.action("I1")
+        assert action.data
+        assert action.behavior in {"fill", "send"}
+
+    delegated = ITEM_USE_ROUTE_REGISTRY["item_component.use_dimension_shift"]
+    delegated_action = delegated.action("I1")
+    assert (delegated_action.data, delegated_action.behavior) == ("跃迁", "send")
+    for route in ITEM_USE_ROUTES:
+        if route is delegated:
+            continue
+        action = route.action("I1")
+        assert (action.data, action.behavior) == ("使用 I1", "fill")
 
 
 def _assert_application_composition_boundary() -> None:
     """组合根只能装配和转发，不能重新成为业务事务集中地。"""
 
+    from game.features.catalog import ACTIVE_FEATURE_MANIFESTS
+
     source = (ROOT / "game" / "app.py").read_text(encoding="utf-8")
     assert ".unit_of_work(" not in source, "game/app.py 禁止直接开启业务工作单元"
     assert "InventoryTransaction(" not in source, "game/app.py 禁止直接构造库存事务"
     assert "@Scheduler" not in source, "game/app.py 禁止直接注册业务定时任务"
+    assert "*feature_snapshot_codec_registrations()," in source
+    for feature in ACTIVE_FEATURE_MANIFESTS:
+        assert f"{feature.id}_codec_registrations" not in source, (
+            f"业务 {feature.id} 的快照 codec 必须通过 Feature Manifest 装配"
+        )
+
+
+def _assert_retired_structure_is_absent() -> None:
+    """已经移除的伪模板和兼容别名不能重新进入正式源码。"""
+
+    forbidden = {
+        "BOSS_TEMPLATE_KEYS": "首领显示必须直接覆盖真实个人/组队身份蓝图",
+        "DISASTER_TEMPLATE_KEYS": "跨界灾厄必须由 disaster 内容包独立定义",
+        "ItemRecycleValue": "回收产出必须使用明确的 CurrencyRecycleYield 类型",
+        "BusinessFeaturePlan": "正式业务必须统一使用 FeatureManifest",
+        "ACTIVE_BUSINESS_FEATURES": "正式业务必须统一使用 ACTIVE_FEATURE_MANIFESTS",
+    }
+    failures: list[str] = []
+    for root in (ROOT / "game", ROOT / "launch", ROOT / "message"):
+        for path in root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for symbol, reason in forbidden.items():
+                if symbol in source:
+                    failures.append(
+                        f"{path.relative_to(ROOT).as_posix()} 仍包含退役符号 "
+                        f"{symbol}：{reason}"
+                    )
+    assert not failures, "\n".join(failures)
 
 
 def _assert_battle_modes_use_core_session() -> None:

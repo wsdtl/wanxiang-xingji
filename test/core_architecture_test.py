@@ -30,6 +30,7 @@ def main() -> None:
     _assert_game_reply_boundaries()
     _assert_application_assembly_boundaries()
     _assert_command_helper_boundaries()
+    _assert_extension_consumers_use_composed_catalogs()
     _assert_core_neutrality()
     _assert_world_identity_boundaries()
     print("core architecture tests passed")
@@ -180,6 +181,7 @@ def _assert_physical_layout() -> None:
             "blueprints.py",
             "definitions.py",
             "mechanics.py",
+            "registry.py",
         },
         "equipment": {
             "__init__.py",
@@ -497,6 +499,29 @@ def _assert_import_boundaries() -> None:
                 failures.append(
                     f"{path.relative_to(ROOT)} 命令注册入口导入了禁止模块 {imported}"
                 )
+    assert not failures, "\n".join(failures)
+
+
+def _assert_extension_consumers_use_composed_catalogs() -> None:
+    """业务不得绕过扩展装配重新读取基础包静态映射。"""
+
+    forbidden = {
+        "MARKET_ITEM_POLICIES",
+        "PARTY_BOSS_TROPHY_ITEM_IDS",
+    }
+    failures: list[str] = []
+    for root in (ROOT / "game" / "features", ROOT / "game" / "cmd"):
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                imported = forbidden & {alias.name for alias in node.names}
+                if imported:
+                    failures.append(
+                        f"{path.relative_to(ROOT)} 绕过扩展目录导入静态映射："
+                        + ", ".join(sorted(imported))
+                    )
     assert not failures, "\n".join(failures)
 
 

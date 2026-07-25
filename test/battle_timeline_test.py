@@ -24,7 +24,6 @@ from game.core.gameplay import (  # noqa: E402
     BattleParticipant,
     BattleRules,
     BattleStatus,
-    ChangeResource,
     CombatStats,
     DamageEngine,
     DamageTypeDefinition,

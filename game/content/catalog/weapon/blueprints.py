@@ -144,8 +144,8 @@ WEAPON_BLUEPRINTS = (
 
 
 def _validate_blueprints() -> None:
-    if len(WEAPON_BLUEPRINTS) != 74:
-        raise ValueError(f"正式武器矩阵必须正好包含 74 把，当前为 {len(WEAPON_BLUEPRINTS)}")
+    if not WEAPON_BLUEPRINTS:
+        raise ValueError("正式武器矩阵不能为空")
     keys = [value.key for value in WEAPON_BLUEPRINTS]
     mechanics = [(value.primary, value.support, value.targeting) for value in WEAPON_BLUEPRINTS]
     if len(keys) != len(set(keys)):

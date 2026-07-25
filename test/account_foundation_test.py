@@ -20,7 +20,6 @@ from game.core.account import (  # noqa: E402
     AccountStatus,
     AccountStatusTransaction,
     AccountViolation,
-    ExternalIdentity,
     IdentityEvidence,
     PrincipalRef,
     UnbindIdentityTransaction,

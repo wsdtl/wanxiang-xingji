@@ -10,7 +10,6 @@ from game.core.gameplay import (
     HEALTH_CURRENT,
     HEALTH_MAXIMUM,
     SPIRIT_CURRENT,
-    SPIRIT_MAXIMUM,
     BattleEngine,
     BattleParticipant,
     BattleRules,

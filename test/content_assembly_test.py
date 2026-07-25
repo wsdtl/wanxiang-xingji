@@ -133,6 +133,7 @@ def main() -> None:
     runtime = _assert_complete_runtime(packages)
     _assert_runtime_is_frozen(runtime)
     _assert_dependency_and_reference_failures(packages)
+    _assert_scoped_skin_coverage(packages)
     _assert_weapon_core_contract(packages)
     _assert_fingerprint_is_deterministic(packages, runtime.report.content_fingerprint)
     _assert_persisted_activation(runtime)
@@ -501,7 +502,7 @@ def _assert_dependency_resolution(packages) -> None:
 
 def _assert_complete_runtime(packages):
     runtime = ContentAssembler().assemble(tuple(reversed(packages)))
-    assert CONTENT_FOUNDATION_VERSION == "content.foundation.v8"
+    assert CONTENT_FOUNDATION_VERSION == "content.foundation.v9"
     assert runtime.report.active_combat_profile_id == "combat_profile.standard"
     assert runtime.report.packages[-1].id == "content.world_skins"
     assert len(runtime.report.content_fingerprint) == 64
@@ -639,6 +640,53 @@ def _assert_runtime_is_frozen(runtime) -> None:
         pass
 
 
+def _assert_scoped_skin_coverage(packages) -> None:
+    core, mechanics, adventure, skins = packages
+    local_id = "currency.skin_local"
+    local = ContentPackage(
+        _manifest("content.skin_local", "content.core"),
+        currencies=(CurrencyDefinition(local_id),),
+        skin_display_content_ids={"skin.cultivation": frozenset({local_id})},
+    )
+    cultivation, magic = skins.skin_packs
+    scoped_skins = replace(
+        skins,
+        skin_packs=(
+            replace(
+                cultivation,
+                entries={
+                    **cultivation.entries,
+                    local_id: SkinEntry("太玄专属货币"),
+                },
+            ),
+            magic,
+        ),
+    )
+    runtime = ContentAssembler().assemble(
+        (core, mechanics, adventure, local, scoped_skins)
+    )
+    assert runtime.skins.require("skin.cultivation").entries[local_id]
+    assert local_id not in runtime.skins.require("skin.magic").entries
+
+    try:
+        ContentAssembler().assemble((core, mechanics, adventure, local, skins))
+        raise AssertionError("皮肤必须覆盖分配给自己的作用域展示内容")
+    except ValueError as exc:
+        assert "缺少条目" in str(exc)
+
+    unknown_skin_scope = replace(
+        local,
+        skin_display_content_ids={"skin.not_installed": frozenset({local_id})},
+    )
+    try:
+        ContentAssembler().assemble(
+            (core, mechanics, adventure, unknown_skin_scope, scoped_skins)
+        )
+        raise AssertionError("作用域展示内容不能引用未启用皮肤")
+    except KeyError as exc:
+        assert "未启用皮肤" in str(exc)
+
+
 def _assert_dependency_and_reference_failures(packages) -> None:
     core, mechanics, adventure, skins = packages
     undeclared = replace(
@@ -655,11 +703,10 @@ def _assert_dependency_and_reference_failures(packages) -> None:
         skins,
         manifest=_manifest("content.world_skins"),
     )
-    try:
-        ContentAssembler().assemble((core, mechanics, adventure, skin_without_dependencies))
-        raise AssertionError("皮肤引用其他包内容却未声明依赖时必须失败")
-    except ValueError as exc:
-        assert "未依赖" in str(exc)
+    projected = ContentAssembler().assemble(
+        (core, mechanics, adventure, skin_without_dependencies)
+    )
+    assert projected.skins.require("skin.cultivation")
 
     duplicate = ContentPackage(
         _manifest("content.duplicate"),

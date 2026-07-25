@@ -32,7 +32,7 @@ _PERSONAL_BOSS_IDS = frozenset(value.id for value in PERSONAL_BOSS_ENEMIES)
 _PARTY_BOSS_IDS = frozenset(value.id for value in PARTY_BOSS_ENEMIES)
 
 
-ENEMY_ENCOUNTERS = (
+PERSONAL_ENEMY_ENCOUNTERS = (
     EnemyEncounterDefinition(
         PERSONAL_NORMAL_ENCOUNTER_ID,
         ENCOUNTER_SCOPE_PERSONAL_ID,
@@ -66,14 +66,23 @@ ENEMY_ENCOUNTERS = (
         ),
         TagSet.of("encounter.enemy.boss"),
     ),
-    EnemyEncounterDefinition(
+)
+
+
+def build_party_boss_encounter(
+    enemy_ids: frozenset[str],
+) -> EnemyEncounterDefinition:
+    candidates = frozenset(enemy_ids)
+    if not candidates:
+        raise ValueError("组队首领遭遇至少需要一个候选敌人")
+    return EnemyEncounterDefinition(
         PARTY_BOSS_ENCOUNTER_ID,
         ENCOUNTER_SCOPE_PARTY_ID,
         1,
         100,
         (
             EnemySpawnDefinition(
-                _PARTY_BOSS_IDS,
+                candidates,
                 ENEMY_RANK_BOSS_ID,
                 1,
                 1,
@@ -82,7 +91,13 @@ ENEMY_ENCOUNTERS = (
             ),
         ),
         TagSet.of("encounter.enemy.boss", "encounter.party"),
-    ),
+    )
+
+
+PARTY_BOSS_ENCOUNTER = build_party_boss_encounter(_PARTY_BOSS_IDS)
+ENEMY_ENCOUNTERS = (
+    *PERSONAL_ENEMY_ENCOUNTERS,
+    PARTY_BOSS_ENCOUNTER,
 )
 
 
@@ -100,14 +115,19 @@ _validate()
 ENCOUNTER_DISPLAY_IDS = frozenset(
     {*(value.id for value in ENCOUNTER_SCOPES), *(value.id for value in ENEMY_ENCOUNTERS)}
 )
+SHARED_ENCOUNTER_DISPLAY_IDS = ENCOUNTER_DISPLAY_IDS - {PARTY_BOSS_ENCOUNTER_ID}
 
 
 __all__ = [
     "ENCOUNTER_DISPLAY_IDS",
     "ENCOUNTER_SCOPES",
     "ENEMY_ENCOUNTERS",
+    "PARTY_BOSS_ENCOUNTER",
     "PARTY_BOSS_ENCOUNTER_ID",
+    "PERSONAL_ENEMY_ENCOUNTERS",
     "PERSONAL_BOSS_ENCOUNTER_ID",
     "PERSONAL_ELITE_ENCOUNTER_ID",
     "PERSONAL_NORMAL_ENCOUNTER_ID",
+    "SHARED_ENCOUNTER_DISPLAY_IDS",
+    "build_party_boss_encounter",
 ]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from game.app import CharacterOverview, CharacterOverviewResult, current_game_services
 from game.content.catalog.exploration import ExplorationRegionKind

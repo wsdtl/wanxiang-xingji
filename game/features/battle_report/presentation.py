@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-import json
 from types import MappingProxyType
 
 from game.content.catalog.combat.stats import SHIELD_CURRENT
@@ -18,7 +17,6 @@ from game.core.gameplay import (
 )
 from game.rules.battle_report import (
     KNOWN_BATTLE_EVENT_KINDS,
-    BattleReportTerm,
     BattleReportView,
     StoredBattleCombatant,
     StoredBattleEffect,

@@ -14,6 +14,7 @@ from ..catalog.world import (
 )
 from ..world_skins import STELLAR_RING_SKIN_ID
 from .layouts import STELLAR_RING_LAYOUT
+from .models import OfficialWorldBundle
 
 
 STELLAR_RING_WORLD = WorldDefinition(
@@ -50,6 +51,15 @@ STELLAR_RING_LOCATION_BINDINGS = (
         for value in STELLAR_RING_PEOPLE
     ),
 )
+STELLAR_RING_WORLD_BUNDLE = OfficialWorldBundle(
+    STELLAR_RING_WORLD,
+    tuple(STELLAR_RING_LAYOUT.values()),
+    STELLAR_RING_LOCATION_BINDINGS,
+)
 
 
-__all__ = ["STELLAR_RING_LOCATION_BINDINGS", "STELLAR_RING_WORLD"]
+__all__ = [
+    "STELLAR_RING_LOCATION_BINDINGS",
+    "STELLAR_RING_WORLD",
+    "STELLAR_RING_WORLD_BUNDLE",
+]

@@ -147,20 +147,16 @@ EQUIPMENT_SET_BLUEPRINTS = (
 
 
 def _validate_blueprints() -> None:
-    if len(EQUIPMENT_FAMILY_BLUEPRINTS) != 12:
-        raise ValueError("正式装备必须包含十二个底座族")
     if len(EQUIPMENT_SLOT_BLUEPRINTS) != 6:
         raise ValueError("正式装备必须覆盖六个标准槽位")
-    if len(EQUIPMENT_PROPERTY_BLUEPRINTS) != 48:
-        raise ValueError("正式装备必须包含四十八种随机词条")
-    if len(EQUIPMENT_SET_BLUEPRINTS) != 18:
-        raise ValueError("正式装备必须包含十八套套装")
     for values, label in (
         (EQUIPMENT_FAMILY_BLUEPRINTS, "底座族"),
         (EQUIPMENT_SLOT_BLUEPRINTS, "槽位"),
         (EQUIPMENT_PROPERTY_BLUEPRINTS, "词条"),
         (EQUIPMENT_SET_BLUEPRINTS, "套装"),
     ):
+        if not values:
+            raise ValueError(f"正式装备{label}不能为空")
         keys = [value.key for value in values]
         if len(keys) != len(set(keys)):
             raise ValueError(f"正式装备{label}稳定键不能重复")

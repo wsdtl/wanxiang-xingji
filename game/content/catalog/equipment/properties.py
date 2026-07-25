@@ -74,7 +74,6 @@ from ..combat.stats import (
     COMBAT_TENACITY,
     FIRE_DAMAGE_ID,
     FROST_DAMAGE_ID,
-    PHYSICAL_DAMAGE_ID,
     POISON_DAMAGE_ID,
     STUN_CONTROL_ID,
     TRUE_DAMAGE_ID,

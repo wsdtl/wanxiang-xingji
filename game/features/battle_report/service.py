@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import json
 from secrets import token_urlsafe
@@ -22,6 +23,30 @@ DETAIL_RETENTION = timedelta(days=7)
 SUMMARY_RETENTION = timedelta(days=30)
 
 
+@dataclass(frozen=True)
+class PreparedBattleReport:
+    """已经在写事务外完成序列化和压缩的战报。"""
+
+    draft: BattleReportDraft
+    detail_payload: bytes
+    uncompressed_bytes: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.draft, BattleReportDraft):
+            raise TypeError("PreparedBattleReport.draft 类型不正确")
+        if not isinstance(self.detail_payload, bytes) or not self.detail_payload:
+            raise ValueError("PreparedBattleReport.detail_payload 不能为空")
+        if self.uncompressed_bytes < 1:
+            raise ValueError("PreparedBattleReport.uncompressed_bytes 必须大于 0")
+
+    def with_summary(self, summary: BattleReportSummary) -> "PreparedBattleReport":
+        """保留已冻结片段，只替换最终结算后才能确定的摘要。"""
+
+        if not isinstance(summary, BattleReportSummary):
+            raise TypeError("summary 必须是 BattleReportSummary")
+        return replace(self, draft=replace(self.draft, summary=summary))
+
+
 class BattleReportService:
     """一张报告主表和一张片段表承接所有战斗模式。"""
 
@@ -31,14 +56,34 @@ class BattleReportService:
         self.builder = builder
 
     def capture(self, draft: BattleReportDraft) -> BattleReportReference:
+        prepared = self.prepare_capture(draft)
         with self.database.unit_of_work() as uow:
-            reference = self.capture_in_uow(uow, draft)
+            reference = self.capture_prepared_in_uow(uow, prepared)
             uow.commit()
             return reference
+
+    @staticmethod
+    def prepare_capture(draft: BattleReportDraft) -> PreparedBattleReport:
+        """在写事务外冻结战报负载，避免压缩过程占用 SQLite 写锁。"""
+
+        compressed, uncompressed_bytes = encode_segment(draft.segment)
+        return PreparedBattleReport(draft, compressed, uncompressed_bytes)
 
     def capture_in_uow(self, uow, draft: BattleReportDraft) -> BattleReportReference:
         """与玩法结算共用工作单元，战报失败时不会留下半份结算。"""
 
+        return self.capture_prepared_in_uow(uow, self.prepare_capture(draft))
+
+    def capture_prepared_in_uow(
+        self,
+        uow,
+        prepared: PreparedBattleReport,
+    ) -> BattleReportReference:
+        """只写入已经编码的战报，供玩法最终短事务原子提交。"""
+
+        if not isinstance(prepared, PreparedBattleReport):
+            raise TypeError("prepared 必须是 PreparedBattleReport")
+        draft = prepared.draft
         existing = self.store.header_in_uow(uow, draft.report_id)
         if existing is None:
             share_id = self._new_share_id(uow)
@@ -68,13 +113,12 @@ class BattleReportService:
         ):
             return BattleReportReference(draft.report_id, share_id)
 
-        compressed, uncompressed_bytes = encode_segment(draft.segment)
         self.store.append_segment_in_uow(
             uow,
             report_id=draft.report_id,
             segment_id=draft.segment.segment_id,
-            detail_payload=compressed,
-            uncompressed_bytes=uncompressed_bytes,
+            detail_payload=prepared.detail_payload,
+            uncompressed_bytes=prepared.uncompressed_bytes,
             summary_payload=_encode_summary(draft.summary),
             started_at=draft.segment.started_at.isoformat(),
             finished_at=draft.segment.finished_at.isoformat(),
@@ -176,5 +220,6 @@ def _aware(value: datetime) -> None:
 __all__ = [
     "BattleReportService",
     "DETAIL_RETENTION",
+    "PreparedBattleReport",
     "SUMMARY_RETENTION",
 ]

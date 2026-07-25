@@ -20,10 +20,8 @@ from message.schema import (
     Document,
     FieldSeparator,
     HeaderBlock,
-    ImageBlock,
     InlineBlock,
     RichText,
-    Text,
 )
 
 from .presentation import character_header_color, character_header_parts

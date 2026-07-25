@@ -52,10 +52,6 @@ class StackItemRecycleYield(ItemRecycleYield):
             raise ValueError("物品回收产出数量必须大于 0")
 
 
-# 兼容既有内容和外部测试名称；新代码应使用明确的产出类型。
-ItemRecycleValue = CurrencyRecycleYield
-
-
 ITEM_RECYCLE_COMPONENT_TYPE = ItemComponentType(
     ITEM_RECYCLE_COMPONENT_ID,
     ItemRecycleYield,
@@ -67,6 +63,5 @@ __all__ = [
     "ITEM_RECYCLE_COMPONENT_TYPE",
     "CurrencyRecycleYield",
     "ItemRecycleYield",
-    "ItemRecycleValue",
     "StackItemRecycleYield",
 ]

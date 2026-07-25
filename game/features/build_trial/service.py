@@ -165,7 +165,6 @@ class BuildTrialFeature:
         outcome,
         logical_time,
     ) -> BattleReportDraft:
-        view = self.world_views.require(character_world.world_id)
         combatants = [
             self.battle_reports.builder.character(
                 character,

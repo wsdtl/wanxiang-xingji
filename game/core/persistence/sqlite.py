@@ -774,7 +774,7 @@ class SqliteUnitOfWork:
         self._entered = True
         return self
 
-    def __exit__(self, exc_type, exc, traceback) -> None:
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
         try:
             if not self._committed:
                 self.connection.rollback()

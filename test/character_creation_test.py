@@ -36,7 +36,6 @@ from game.content import (  # noqa: E402
     PRIMARY_CURRENCY_ID,
     SMALL_HEALTH_MEDICINE_ITEM_ID,
     SMALL_SPIRIT_MEDICINE_ITEM_ID,
-    STARTING_CITY_ID,
 )
 from game.core.account import AccountEngine, build_qq_identity_evidence  # noqa: E402
 from game.core.gameplay import (  # noqa: E402

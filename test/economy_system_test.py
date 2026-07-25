@@ -14,7 +14,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from game.app import build_game_services  # noqa: E402
-from game.content.catalog.foundation import PRIMARY_CURRENCY_ID  # noqa: E402
 from game.content.catalog.item import SMALL_HEALTH_MEDICINE_ITEM_ID  # noqa: E402
 from game.content.catalog.weapon.mechanics import WEAPON_MAXIMUM_LEVEL_TABLE  # noqa: E402
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402

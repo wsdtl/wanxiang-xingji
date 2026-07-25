@@ -12,7 +12,7 @@
 
 当前正式业务及其状态所有权以
 [业务框架与功能规划](game/features/业务框架与功能规划.md)和
-`game/features/catalog.py` 为准；README 与各底座说明不再各自维护另一份完成度台账。
+`game/features/catalog.py` 的显式 `FeatureManifest` 为准；README 与各底座说明不再各自维护另一份完成度台账。
 
 ## 当前地基
 
@@ -307,6 +307,15 @@ Get-ChildItem test\*_test.py | Sort-Object Name | ForEach-Object {
   .venv\Scripts\python.exe -X utf8 -B $_.FullName
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+```
+
+上线前静态审计工具与生产依赖分开安装：
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\ruff.exe check game launch message auto main.py
+.venv\Scripts\vulture.exe game launch message auto main.py --exclude .venv,__pycache__ --min-confidence 100
+git diff --check
 ```
 
 ## 说明文档

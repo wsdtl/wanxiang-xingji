@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from game.app import CurrentCharacterResult, current_game_services
 from game.content import LOADOUT_PRESET_IDS
@@ -194,7 +193,6 @@ def _loadout_message(
     preference,
     view,
 ) -> DocumentMessage:
-    services = current_game_services()
     active = _preset_index(loadout.active_preset_id)
     builder = (
         M.document()

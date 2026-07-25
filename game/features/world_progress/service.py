@@ -26,7 +26,6 @@ from game.core.gameplay import (
 from game.rules.character import PRIMARY_ISSUER_ACCOUNT_ID, PRIMARY_LEDGER_ID
 from game.rules.exploration import EXPLORATION_VICTORY_FACT_KIND, ExplorationVictoryFact
 from game.rules.world_progress import (
-    WORLD_PROGRESS_AGGREGATE,
     WORLD_PROGRESS_RULESET_VERSION,
     WorldProgressState,
     advance_world_progress,

@@ -13,6 +13,7 @@ from game.content.catalog.social import (
     PARTY_BATTLE_DAY_RESET_HOUR,
     PARTY_BATTLE_MINIMUM_MEMBERS,
 )
+from game.features.errors import StalePreparationError
 from game.core.gameplay import (
     HEALTH_CURRENT,
     SPIRIT_CURRENT,
@@ -72,6 +73,33 @@ class PartyBattleStorageKinds:
     weapon: str
     character_world: str
     inscription_preference: str
+
+
+@dataclass(frozen=True)
+class _PartyMemberInputs:
+    character: CharacterState
+    inventory: InventoryState
+    loadout: LoadoutState
+    roster: CompanionRosterState
+    action: ActionState | None
+    exploration: ExplorationState | None
+    character_world: CharacterWorldState
+    inscription_preference: InscriptionPreference | None
+    loadout_fingerprint: str
+
+
+@dataclass(frozen=True)
+class _PreparedPartyChallenge:
+    party: object
+    challenge: PartyBattleChallengeState
+    members: tuple[_PartyMemberInputs, ...]
+    battle: object
+    enemy_name: str
+    context: RuleContext
+    report: object
+
+
+_STALE_CHALLENGE = object()
 
 
 class PartyBattleFeature:
@@ -275,8 +303,37 @@ class PartyBattleFeature:
         party_id = _identity(party_id, "队伍")
         actor_id = _identity(actor_id, "角色")
         fingerprint = _operation_fingerprint("challenge", party_id, actor_id)
-        context = _context(operation_id, logical_time)
-        with self.database.unit_of_work() as uow:
+        for _ in range(2):
+            prepared = self._prepare_challenge(
+                operation_id,
+                party_id,
+                actor_id,
+                fingerprint,
+                logical_time,
+            )
+            if isinstance(prepared, PartyBattleResult):
+                return prepared
+            result = self._commit_challenge(
+                operation_id,
+                party_id,
+                actor_id,
+                fingerprint,
+                logical_time,
+                prepared,
+            )
+            if result is not _STALE_CHALLENGE:
+                return result
+        raise StalePreparationError("组队挑战准备结果连续过期，请重新发起")
+
+    def _prepare_challenge(
+        self,
+        operation_id: str,
+        party_id: str,
+        actor_id: str,
+        fingerprint: str,
+        logical_time: datetime,
+    ) -> _PreparedPartyChallenge | PartyBattleResult:
+        with self.database.unit_of_work(write=False) as uow:
             replay = self._replay(uow, operation_id, fingerprint, party_id)
             if replay is not None:
                 return self._replayed_result(uow, party_id, replay)
@@ -295,36 +352,91 @@ class PartyBattleFeature:
                 return PartyBattleResult("not_ready", challenge, failure_message="仍有队员没有准备")
 
             members = []
-            bundles = []
             for member in sorted(party.members.values(), key=lambda value: value.slot):
                 character_id = member.subject_id
-                occupied = self._occupied(uow, character_id)
+                inputs = self._load_member_inputs(uow, character_id)
+                occupied = self._occupied_inputs(inputs)
                 if occupied:
                     return PartyBattleResult("member_busy", challenge, failure_message=f"{occupied}正在进行其他主要行动")
-                character = self.snapshots.require(uow, self.storage.character, character_id, CharacterState)
-                if character.resources[HEALTH_CURRENT] <= 0:
-                    return PartyBattleResult("health_depleted", challenge, failure_message=f"{character.name}的血气已经归零")
-                current_fingerprint = self._loadout_fingerprint(uow, character_id)
-                if current_fingerprint != challenge.ready_fingerprints[character_id]:
-                    return PartyBattleResult("loadout_changed", challenge, failure_message=f"{character.name}准备后的状态或配装已经变化")
-                inventory = self.snapshots.require(uow, self.storage.inventory, character_id, InventoryState)
-                loadout = self.snapshots.require(uow, self.storage.loadout, character_id, LoadoutState)
-                roster = self.snapshots.load(
-                    uow,
-                    self.storage.companion_roster,
-                    character_id,
-                    CompanionRosterState,
-                ) or CompanionRosterState(character_id)
-                members.append(character)
-                bundles.append((inventory, loadout, roster))
+                if inputs.character.resources[HEALTH_CURRENT] <= 0:
+                    return PartyBattleResult("health_depleted", challenge, failure_message=f"{inputs.character.name}的血气已经归零")
+                if inputs.loadout_fingerprint != challenge.ready_fingerprints[character_id]:
+                    return PartyBattleResult("loadout_changed", challenge, failure_message=f"{inputs.character.name}准备后的状态或配装已经变化")
+                members.append(inputs)
 
-            battle = self.battles.simulate(members, bundles, challenge, context=context)
-            enemy = challenge.encounter.enemies[0]
-            enemy_name = self.world_views.require(challenge.source_world_id).enemy_projector.enemy(enemy).name
+        context = _context(operation_id, logical_time)
+        member_inputs = tuple(members)
+        battle = self.battles.simulate(
+            [value.character for value in member_inputs],
+            [
+                (value.inventory, value.loadout, value.roster)
+                for value in member_inputs
+            ],
+            challenge,
+            context=context,
+        )
+        enemy = challenge.encounter.enemies[0]
+        enemy_name = self.world_views.require(
+            challenge.source_world_id
+        ).enemy_projector.enemy(enemy).name
+        report_id = self._report_id(challenge)
+        report = self.battle_reports.prepare_capture(
+            self._battle_report(
+                challenge,
+                member_inputs,
+                battle,
+                enemy_name,
+                report_id,
+                logical_time,
+            )
+        )
+        return _PreparedPartyChallenge(
+            party,
+            challenge,
+            member_inputs,
+            battle,
+            enemy_name,
+            context,
+            report,
+        )
+
+    def _commit_challenge(
+        self,
+        operation_id: str,
+        party_id: str,
+        actor_id: str,
+        fingerprint: str,
+        logical_time: datetime,
+        prepared: _PreparedPartyChallenge,
+    ):
+        challenge = prepared.challenge
+        battle = prepared.battle
+        enemy_name = prepared.enemy_name
+        context = prepared.context
+        with self.database.unit_of_work() as uow:
+            replay = self._replay(uow, operation_id, fingerprint, party_id)
+            if replay is not None:
+                return self._replayed_result(uow, party_id, replay)
+            party = self._party(uow, party_id)
+            current_challenge = self._load_challenge(uow, party_id)
+            if party != prepared.party or current_challenge != challenge:
+                return _STALE_CHALLENGE
+            current_members = tuple(
+                self._load_member_inputs(uow, value.character.id)
+                for value in prepared.members
+            )
+            if current_members != prepared.members:
+                return _STALE_CHALLENGE
+
             reward_summaries: dict[str, tuple[str, ...]] = {}
             if battle.victory:
+                enemy = challenge.encounter.enemies[0]
                 quote = self.content.catalog.enemy_threat.reward_quote(enemy)
-                for character, (inventory, loadout, roster) in zip(members, bundles):
+                for member in current_members:
+                    character = member.character
+                    inventory = member.inventory
+                    loadout = member.loadout
+                    roster = member.roster
                     daily = self._daily_state(uow, character.id, logical_time)
                     if daily.reward_wins >= PARTY_BATTLE_DAILY_WINS:
                         reward_summaries[character.id] = ("助战完成，本次没有奖励",)
@@ -425,7 +537,8 @@ class PartyBattleFeature:
                         ),
                     )
 
-            for character in members:
+            for member in current_members:
+                character = member.character
                 current = self.snapshots.require(
                     uow,
                     self.storage.character,
@@ -446,19 +559,9 @@ class PartyBattleFeature:
                         logical_time,
                     )
 
-            report_id = self._report_id(challenge)
-            report = self.battle_reports.capture_in_uow(
+            report = self.battle_reports.capture_prepared_in_uow(
                 uow,
-                self._battle_report(
-                    uow,
-                    challenge,
-                    members,
-                    bundles,
-                    battle,
-                    enemy_name,
-                    report_id,
-                    logical_time,
-                ),
+                prepared.report,
             )
             next_challenge = replace(
                 challenge,
@@ -507,38 +610,28 @@ class PartyBattleFeature:
 
     def _battle_report(
         self,
-        uow,
         challenge,
         members,
-        bundles,
         battle,
         enemy_name,
         report_id,
         logical_time,
     ):
         combatants = []
-        for member, (inventory, loadout, roster) in zip(members, bundles):
-            character_world = self.snapshots.require(
-                uow,
-                self.storage.character_world,
-                member.id,
-                CharacterWorldState,
-            )
-            inscription_preference = self.snapshots.load(
-                uow,
-                self.storage.inscription_preference,
-                member.id,
-                InscriptionPreference,
-            )
+        for inputs in members:
+            member = inputs.character
+            inventory = inputs.inventory
+            loadout = inputs.loadout
+            roster = inputs.roster
             combatants.append(
                 self.battle_reports.builder.character(
                     member,
-                    character_world,
+                    inputs.character_world,
                     inventory,
                     loadout,
                     team_id="team.party",
                     team_label="行者队伍",
-                    inscription_preference=inscription_preference,
+                    inscription_preference=inputs.inscription_preference,
                 )
             )
             lineup = battle.lineups[member.id]
@@ -584,6 +677,63 @@ class PartyBattleFeature:
             ),
         )
 
+    def _load_member_inputs(self, uow, character_id: str) -> _PartyMemberInputs:
+        character = self.snapshots.require(
+            uow,
+            self.storage.character,
+            character_id,
+            CharacterState,
+        )
+        inventory = self.snapshots.require(
+            uow,
+            self.storage.inventory,
+            character_id,
+            InventoryState,
+        )
+        loadout = self.snapshots.require(
+            uow,
+            self.storage.loadout,
+            character_id,
+            LoadoutState,
+        )
+        roster = self.snapshots.load(
+            uow,
+            self.storage.companion_roster,
+            character_id,
+            CompanionRosterState,
+        ) or CompanionRosterState(character_id)
+        return _PartyMemberInputs(
+            character,
+            inventory,
+            loadout,
+            roster,
+            self.snapshots.load(
+                uow,
+                self.storage.action,
+                character_id,
+                ActionState,
+            ),
+            self.snapshots.load(
+                uow,
+                self.storage.exploration,
+                character_id,
+                ExplorationState,
+            ),
+            self.snapshots.require(
+                uow,
+                self.storage.character_world,
+                character_id,
+                CharacterWorldState,
+            ),
+            self.snapshots.load(
+                uow,
+                self.storage.inscription_preference,
+                character_id,
+                InscriptionPreference,
+            ),
+            self._loadout_fingerprint(uow, character_id),
+        )
+
     def _loadout_fingerprint(self, uow, character_id: str) -> str:
         character = self.snapshots.require(uow, self.storage.character, character_id, CharacterState)
         inventory = self.snapshots.require(uow, self.storage.inventory, character_id, InventoryState)
@@ -621,17 +771,14 @@ class PartyBattleFeature:
         )
         return {weapon.asset_id: weapon.revision}
 
-    def _occupied(self, uow, character_id: str) -> str:
-        action = self.snapshots.load(uow, self.storage.action, character_id, ActionState)
-        if action is not None and action.running(ActionSlotKind.MAIN):
+    @staticmethod
+    def _occupied_inputs(inputs: _PartyMemberInputs) -> str:
+        if inputs.action is not None and inputs.action.running(ActionSlotKind.MAIN):
             return "队员"
-        exploration = self.snapshots.load(
-            uow,
-            self.storage.exploration,
-            character_id,
-            ExplorationState,
-        )
-        if exploration is not None and exploration.status is ExplorationStatus.RUNNING:
+        if (
+            inputs.exploration is not None
+            and inputs.exploration.status is ExplorationStatus.RUNNING
+        ):
             return "队员"
         return ""
 

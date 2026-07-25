@@ -1,17 +1,15 @@
-"""物品查询、实例详情与手动使用的协议中立实现。"""
+"""物品查询、实例详情与资产保护的协议中立实现。"""
 
 from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from datetime import datetime
 from math import ceil
 from zoneinfo import ZoneInfo
 
 from game.app import (
     CharacterOverview,
     CharacterOverviewResult,
-    CurrentCharacterResult,
     current_game_services,
 )
 from game.content.catalog.combat import (
@@ -20,9 +18,6 @@ from game.content.catalog.combat import (
     SMALL_MEDICINE_RECOVERY_RATIO,
 )
 from game.content.catalog.item import (
-    COMPANION_SANCTUARY_ITEM_COMPONENT_ID,
-    DIMENSION_SHIFT_ITEM_COMPONENT_ID,
-    EQUIPMENT_SET_BLUEPRINT_COMPONENT_ID,
     ITEM_RECYCLE_COMPONENT_ID,
     LARGE_HEALTH_MEDICINE_ITEM_ID,
     LARGE_SPIRIT_MEDICINE_ITEM_ID,
@@ -36,33 +31,22 @@ from game.content.catalog.item import (
 from game.core.gameplay import (
     HEALTH_CURRENT,
     HEALTH_MAXIMUM,
-    ITEM_ABILITY_COMPONENT_ID,
-    ITEM_CONTAINER_CAPACITY_COMPONENT_ID,
     ITEM_STORAGE_COMPONENT_ID,
     LOADOUT_ITEM_COMPONENT_ID,
     SPIRIT_CURRENT,
     SPIRIT_MAXIMUM,
     STANDARD_LOADOUT_SLOT_ORDER,
-    AbilityUse,
     AssetAvailability,
-    CharacterItemUse,
-    CharacterItemUseCommand,
-    CHARACTER_EXPERIENCE_ITEM_COMPONENT_ID,
-    COMPANION_EXPERIENCE_ITEM_COMPONENT_ID,
     EquipmentState,
     InscriptionMediumData,
     InscriptionProjector,
     InventoryState,
-    ItemAbilityComponent,
     ItemInstance,
     ItemStack,
     ItemStorageComponent,
     LoadoutItemComponent,
     WeaponContributionProvider,
-    WeaponItemUseCommand,
     WeaponState,
-    WEAPON_EXPERIENCE_ITEM_COMPONENT_ID,
-    WEAPON_MAXIMUM_LEVEL_ITEM_COMPONENT_ID,
     equipment_state_from_instance,
     weapon_state_from_instance,
 )
@@ -70,10 +54,6 @@ from game.core.gameplay.inscription import INSCRIPTION_MEDIUM_DATA_KEY
 from game.rules import game_operation_context
 from game.rules.character import equipped_character_contributions
 from game.rules.item import asset_reference, resolve_asset_reference
-from game.features.special_items import (
-    BACKPACK_CAPACITY_EFFECT_KIND,
-    SpecialItemUseCommand,
-)
 from launch import C, config, logger
 from launch.adapter import current_message_context
 from message import Action, DocumentMessage, M
@@ -274,473 +254,6 @@ async def _set_asset_protection(
     )
 
 
-async def use_item(message: str, current: CurrentCharacterResult) -> None:
-    character = current.character if current.status == "ok" else None
-    if character is None:
-        await send_game_reply(_unavailable("使用"))
-        return
-    parts = str(message or "").strip().split()
-    if not parts or len(parts) > 2:
-        await send_game_reply(_invalid("使用", "发送: 使用 物品编号 [数量或武器编号]"))
-        return
-
-    services = current_game_services()
-    initial = await _load_overview(character)
-    if initial is None:
-        await send_game_reply(_unavailable("使用"))
-        return
-    try:
-        asset = resolve_asset_reference(initial.inventory, parts[0], services.content.catalog.items)
-        definition = services.content.catalog.items.require(asset.definition_id)
-        if definition.tags.has("item.inscription_medium"):
-            raise ValueError("铭刻之羽只能通过铭刻命令使用")
-        if DIMENSION_SHIFT_ITEM_COMPONENT_ID in definition.components:
-            raise ValueError("跃迁凭证会在成功跃迁时自动消耗，请发送：跃迁")
-        available = initial.inventory.available_quantity(asset.id)
-        if available < 1:
-            raise ValueError("物品当前不可使用")
-    except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid("使用", str(exc)))
-        return
-
-    if any(
-        component_id in definition.components
-        for component_id in (
-            WEAPON_MAXIMUM_LEVEL_ITEM_COMPONENT_ID,
-            WEAPON_EXPERIENCE_ITEM_COMPONENT_ID,
-        )
-    ):
-        await _use_weapon_growth_item(parts, asset, initial)
-        return
-
-    if CHARACTER_EXPERIENCE_ITEM_COMPONENT_ID in definition.components:
-        if len(parts) != 1:
-            await send_game_reply(_invalid("使用", "人物经验物品不需要指定目标"))
-            return
-        await _use_character_experience_item(asset, initial)
-        return
-
-    if COMPANION_EXPERIENCE_ITEM_COMPONENT_ID in definition.components:
-        await _use_companion_experience_item(parts, asset, initial)
-        return
-
-    if COMPANION_SANCTUARY_ITEM_COMPONENT_ID in definition.components:
-        if len(parts) != 1:
-            await send_game_reply(_invalid("使用", "万灵引每次只能使用一枚"))
-            return
-        await _use_companion_sanctuary(asset, current)
-        return
-
-    if EQUIPMENT_SET_BLUEPRINT_COMPONENT_ID in definition.components:
-        if len(parts) != 1:
-            await send_game_reply(_invalid("使用", "套装图纸每次只能使用一张"))
-            return
-        await _use_equipment_blueprint(asset, initial)
-        return
-
-    if any(
-        component_id in definition.components
-        for component_id in (
-            ITEM_CONTAINER_CAPACITY_COMPONENT_ID,
-        )
-    ):
-        if len(parts) != 1:
-            await send_game_reply(_invalid("使用", "该特殊物品每次只能使用一件"))
-            return
-        await _use_specialized_item(asset, initial)
-        return
-
-    try:
-        component = definition.component(ITEM_ABILITY_COMPONENT_ID, ItemAbilityComponent)
-        requested_quantity = int(parts[1]) if len(parts) == 2 else 1
-        if requested_quantity < 1:
-            raise ValueError("使用数量必须大于 0")
-    except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid("使用", str(exc)))
-        return
-
-    limit = min(requested_quantity, available)
-    initial_resources = dict(initial.character.resources)
-    consumed = 0
-    executed = 0
-    stopped_full = False
-    failure_message = ""
-    for index in range(limit):
-        overview = await _load_overview(character)
-        if overview is None:
-            failure_message = "物品状态读取失败"
-            break
-        try:
-            current_asset = resolve_asset_reference(
-                overview.inventory,
-                parts[0],
-                services.content.catalog.items,
-            )
-        except ValueError:
-            break
-        medicine = _MEDICINE_RESOURCE.get(current_asset.definition_id)
-        if medicine is not None:
-            resource_id, maximum_id, _ = medicine
-            maximum = _resource_maximum(overview, maximum_id)
-            if overview.character.resources[resource_id] >= maximum:
-                stopped_full = True
-                break
-        transaction_id = f"item-use:{_evidence_id()}:{index}"
-        command = CharacterItemUse(
-            transaction_id,
-            character.id,
-            character.id,
-            current_asset.id,
-            AbilityUse(f"{transaction_id}:ability", component.ability_id),
-        )
-        contributions = equipped_character_contributions(
-            services.content.catalog,
-            overview.inventory,
-            overview.loadout,
-        )
-        try:
-            outcome = await asyncio.to_thread(
-                services.item_use.use,
-                command,
-                inventory_id=character.id,
-                contributions={character.id: contributions},
-                context=game_operation_context(transaction_id, logical_time=command_time()),
-            )
-        except Exception as exc:
-            logger.opt(colors=True, exception=exc).error(
-                C.join(C.fail("物品使用失败"), C.kv("character", character.id))
-            )
-            failure_message = "物品使用没有完成"
-            break
-        if outcome.failure:
-            failure_message = outcome.failure.message
-            break
-        assert outcome.value is not None
-        executed += 1
-        consumed += outcome.value.consumed_quantity
-
-    final = await _load_overview(character)
-    if executed < 1 or final is None:
-        message_text = "资源已经恢复至上限" if stopped_full else failure_message or "没有使用任何物品"
-        await send_game_reply(_invalid("使用", message_text))
-        return
-    await send_game_reply(
-        _use_result(
-            definition.id,
-            executed,
-            consumed,
-            initial_resources,
-            final,
-            requested_quantity > limit,
-            stopped_full,
-            failure_message,
-        )
-    )
-
-
-async def _use_equipment_blueprint(item_asset, overview: CharacterOverview) -> None:
-    services = current_game_services()
-    transaction_id = f"equipment-blueprint:{_evidence_id()}"
-    try:
-        result = await asyncio.to_thread(
-            services.equipment_blueprints.use,
-            overview.character.id,
-            item_asset.id,
-            transaction_id,
-            logical_time=command_time(),
-        )
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("套装图纸使用失败"), C.kv("character", overview.character.id))
-        )
-        await send_game_reply(_invalid("套装图纸", "装备没有生成，请稍后重试"))
-        return
-    if result.receipt is None:
-        await send_game_reply(_invalid("套装图纸", result.failure_message or "装备没有生成"))
-        return
-    final = await _load_overview(overview.character)
-    if final is None:
-        await send_game_reply(_invalid("套装图纸", "装备已经生成，请稍后查看武库"))
-        return
-    asset = final.inventory.instances.get(result.receipt.equipment_asset_id)
-    if asset is None:
-        await send_game_reply(_invalid("套装图纸", "装备已经生成，请稍后查看武库"))
-        return
-    view = _view(final)
-    state = equipment_state_from_instance(asset)
-    display = view.gear_projector.equipment(
-        state,
-        asset,
-        inscription_preference=final.inscription_preference,
-    )
-    reference = _reference(final.inventory, asset)
-    await send_game_reply(
-        M.document()
-        .section("套装图纸", icon="reward")
-        .field("套装", view.projector.name(result.receipt.set_id))
-        .field("获得", M.command(display.name, f"查看 {reference}"))
-        .row(("品阶", view.projector.name(state.quality_id)), ("编号", reference))
-        .note("部位、底座、品阶、词条与词条数值均由本次生成独立决定。")
-        .build()
-    )
-
-
-async def _use_weapon_growth_item(parts, item_asset, overview: CharacterOverview) -> None:
-    services = current_game_services()
-    try:
-        if len(parts) == 2:
-            target = resolve_asset_reference(
-                overview.inventory,
-                parts[1],
-                services.content.catalog.items,
-            )
-            if not isinstance(target, ItemInstance):
-                raise ValueError("目标编号不是武器")
-        else:
-            asset_id = overview.loadout.weapon_asset_id
-            if asset_id is None:
-                raise ValueError("当前没有装备武器，请补充武器编号")
-            target = overview.inventory.instances[asset_id]
-        target_definition = services.content.catalog.items.require(target.definition_id)
-        if not target_definition.tags.has("item.weapon"):
-            raise ValueError("目标编号不是武器")
-    except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid("使用", str(exc)))
-        return
-
-    transaction_id = f"weapon-item-use:{_evidence_id()}"
-    try:
-        outcome = await asyncio.to_thread(
-            services.weapon_item_use.use,
-            WeaponItemUseCommand(
-                transaction_id,
-                overview.character.id,
-                item_asset.id,
-                target.id,
-            ),
-            inventory_id=overview.character.id,
-            context=game_operation_context(transaction_id, logical_time=command_time()),
-        )
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("武器成长道具使用失败"), C.kv("character", overview.character.id))
-        )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
-        return
-    if outcome.failure:
-        await send_game_reply(_invalid("使用", outcome.failure.message))
-        return
-    assert outcome.value is not None
-    receipt = outcome.value
-    view = _view(overview)
-    builder = (
-        M.document()
-        .section("使用完成", icon="item")
-        .field("物品", view.projector.name(receipt.item_definition_id))
-        .field("武器", _asset_name(target, overview))
-    )
-    if receipt.maximum_level_after != receipt.maximum_level_before:
-        builder.field(
-            "等级上限",
-            f"{receipt.maximum_level_before} -> {receipt.maximum_level_after}",
-        )
-    if receipt.level_after != receipt.level_before:
-        builder.field("等级", f"Lv{receipt.level_before} -> Lv{receipt.level_after}")
-    if receipt.experience_granted:
-        builder.field("武器经验", f"+{receipt.experience_granted}")
-        builder.field(
-            "当前经验",
-            f"{receipt.experience_before} -> {receipt.experience_after}",
-        )
-    await send_game_reply(builder.build())
-
-
-async def _use_character_experience_item(item_asset, overview: CharacterOverview) -> None:
-    services = current_game_services()
-    transaction_id = f"character-item-use:{_evidence_id()}"
-    try:
-        outcome = await asyncio.to_thread(
-            services.character_item_use.use,
-            CharacterItemUseCommand(
-                transaction_id,
-                overview.character.id,
-                item_asset.id,
-            ),
-            inventory_id=overview.character.id,
-            context=game_operation_context(transaction_id, logical_time=command_time()),
-        )
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("人物经验物品使用失败"), C.kv("character", overview.character.id))
-        )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
-        return
-    if outcome.failure:
-        await send_game_reply(_invalid("使用", outcome.failure.message))
-        return
-    receipt = outcome.unwrap()
-    builder = (
-        M.document()
-        .section("使用完成", icon="item")
-        .field("物品", _view(overview).projector.name(receipt.item_definition_id))
-        .field("人物经验", f"+{receipt.experience_granted}")
-        .field("等级", f"Lv{receipt.level_before} -> Lv{receipt.level_after}")
-        .field("当前经验", f"{receipt.experience_before} -> {receipt.experience_after}")
-    )
-    await send_game_reply(builder.build())
-
-
-async def _use_companion_experience_item(parts, item_asset, overview: CharacterOverview) -> None:
-    services = current_game_services()
-    reference = parts[1].upper() if len(parts) == 2 else None
-    if reference is not None and (not reference.startswith("C") or not reference[1:].isdigit()):
-        await send_game_reply(_invalid("使用", "伙伴编号必须使用 C数字"))
-        return
-    transaction_id = f"companion-item-use:{_evidence_id()}"
-    try:
-        result = await asyncio.to_thread(
-            services.companions.use_experience_item,
-            transaction_id,
-            overview.character.id,
-            item_asset.id,
-            reference,
-            logical_time=command_time(),
-        )
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("伙伴经验物品使用失败"), C.kv("character", overview.character.id))
-        )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
-        return
-    if result.status != "used" or result.receipt is None or result.companion is None:
-        await send_game_reply(_invalid("使用", result.failure_message or "伙伴经验物品没有生效"))
-        return
-    receipt = result.receipt
-    definition = services.content.companions.require_definition(result.companion.definition_id)
-    builder = (
-        M.document()
-        .section("使用完成", icon="item")
-        .field("物品", _view(overview).projector.name(receipt.item_definition_id))
-        .field("伙伴", f"{result.companion.reference} {definition.name}")
-        .field("伙伴经验", f"+{receipt.experience_granted}")
-        .field("等级", f"Lv{receipt.level_before} -> Lv{receipt.level_after}")
-        .field("当前经验", f"{receipt.experience_before} -> {receipt.experience_after}")
-    )
-    await send_game_reply(builder.build())
-
-
-async def _use_specialized_item(item_asset, overview: CharacterOverview) -> None:
-    services = current_game_services()
-    transaction_id = f"special-item-use:{_evidence_id()}"
-    try:
-        outcome = await asyncio.to_thread(
-            services.special_item_use.use,
-            SpecialItemUseCommand(
-                transaction_id,
-                overview.character.id,
-                item_asset.id,
-            ),
-            inventory_id=overview.character.id,
-            context=game_operation_context(transaction_id, logical_time=command_time()),
-        )
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("特殊物品使用失败"), C.kv("character", overview.character.id))
-        )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
-        return
-    if outcome.failure:
-        await send_game_reply(_invalid("使用", outcome.failure.message))
-        return
-    assert outcome.value is not None
-    receipt = outcome.value
-    view = _view(overview)
-    builder = (
-        M.document()
-        .section("使用完成", icon="item")
-        .field("物品", view.projector.name(receipt.item_definition_id))
-    )
-    if receipt.effect_kind == BACKPACK_CAPACITY_EFFECT_KIND:
-        builder.field("背包空间", f"{receipt.value_before} -> {receipt.value_after}")
-    await send_game_reply(builder.build())
-
-
-async def _use_companion_sanctuary(item_asset, current: CurrentCharacterResult) -> None:
-    character = current.character
-    dimension = current.character_world
-    if character is None or dimension is None:
-        await send_game_reply(_unavailable("使用"))
-        return
-    services = current_game_services()
-    operation_id = f"companion-sanctuary-open:{_evidence_id()}"
-    try:
-        result = await asyncio.to_thread(
-            services.companions.open_sanctuary,
-            operation_id,
-            character,
-            dimension,
-            item_asset.id,
-            logical_time=command_time(),
-        )
-    except Exception as exc:
-        logger.opt(colors=True, exception=exc).error(
-            C.join(C.fail("宠物秘境开启失败"), C.kv("character", character.id))
-        )
-        await send_game_reply(_invalid("使用", "万灵引没有成功生效"))
-        return
-    if result.status != "opened" or result.sanctuary is None:
-        await send_game_reply(
-            _invalid("使用", result.failure_message or "当前不能开启宠物秘境")
-        )
-        return
-    await send_game_reply(_opened_sanctuary_message(result.sanctuary, dimension))
-
-
-def _opened_sanctuary_message(sanctuary, dimension) -> DocumentMessage:
-    services = current_game_services()
-    view = services.world_view(dimension)
-    title = view.projector.name("term.companion_sanctuary")
-    builder = (
-        M.document()
-        .section(f"{title}已开启", icon="explore")
-        .field("有效期", sanctuary.expires_at.strftime("%m-%d %H:%M"))
-    )
-    actions = []
-    for trace in sanctuary.traces:
-        species = services.content.companions.species.require(trace.definition_id)
-        builder.item(
-            trace.index,
-            species.name,
-            FieldSeparator(),
-            _companion_role(species.role),
-            FieldSeparator(),
-            "危险相当",
-        )
-        actions.append(
-            Action(
-                f"companion.trace.{trace.index}",
-                f"追踪 {trace.index}",
-                f"秘境追踪 {trace.index}",
-                behavior="send",
-            )
-        )
-    return (
-        builder.note("选择一条踪迹后，另外两条会立即消失。跃迁不会刷新踪迹。")
-        .actions(actions)
-        .build()
-    )
-
-
-def _companion_role(role: str) -> str:
-    return {
-        "assault": "强攻",
-        "swift": "迅捷",
-        "guardian": "守护",
-        "control": "控制",
-        "sustain": "续航",
-    }[role]
-
-
 def _armory_home(overview: CharacterOverview) -> DocumentMessage:
     counts = Counter()
     catalog = current_game_services().content.catalog.items
@@ -836,6 +349,8 @@ def _backpack_page(assets, page: int, overview: CharacterOverview) -> DocumentMe
 
 
 def _asset_detail(asset, overview: CharacterOverview) -> DocumentMessage:
+    from .use import item_use_action
+
     services = current_game_services()
     view = _view(overview)
     inventory = overview.inventory
@@ -878,22 +393,9 @@ def _asset_detail(asset, overview: CharacterOverview) -> DocumentMessage:
                 ("恢复", view.projector.name(resource_id)),
                 ("单次", _number(maximum * ratio)),
             )
-        if DIMENSION_SHIFT_ITEM_COMPONENT_ID in definition.components:
-            actions.append(Action("dimension.shift", "跃迁", "跃迁", behavior="send"))
-        elif any(
-            component_id in definition.components
-            for component_id in (
-                ITEM_ABILITY_COMPONENT_ID,
-                CHARACTER_EXPERIENCE_ITEM_COMPONENT_ID,
-                COMPANION_EXPERIENCE_ITEM_COMPONENT_ID,
-                WEAPON_MAXIMUM_LEVEL_ITEM_COMPONENT_ID,
-                WEAPON_EXPERIENCE_ITEM_COMPONENT_ID,
-                ITEM_CONTAINER_CAPACITY_COMPONENT_ID,
-                COMPANION_SANCTUARY_ITEM_COMPONENT_ID,
-                EQUIPMENT_SET_BLUEPRINT_COMPONENT_ID,
-            )
-        ):
-            actions.append(Action("item.use", "使用", f"使用 {reference}", behavior="fill"))
+        use_action = item_use_action(definition, reference)
+        if use_action is not None:
+            actions.append(use_action)
     elif definition.tags.has("item.weapon"):
         state = weapon_state_from_instance(asset)
         display = view.gear_projector.weapon(
@@ -1190,44 +692,6 @@ def _score_text(value: float | None) -> str:
     return "暂无" if value is None else _number(value)
 
 
-def _use_result(
-    definition_id: str,
-    executed: int,
-    consumed: int,
-    before,
-    final: CharacterOverview,
-    exhausted: bool,
-    stopped_full: bool,
-    failure: str,
-) -> DocumentMessage:
-    services = current_game_services()
-    view = _view(final)
-    builder = (
-        M.document()
-        .section("使用完成", icon="item")
-        .field("物品", view.projector.name(definition_id))
-        .field("次数", executed)
-    )
-    if consumed:
-        builder.field("消耗", consumed)
-    for resource_id in (HEALTH_CURRENT, SPIRIT_CURRENT):
-        previous = before[resource_id]
-        current = final.character.resources[resource_id]
-        if current != previous:
-            maximum_id = HEALTH_MAXIMUM if resource_id == HEALTH_CURRENT else SPIRIT_MAXIMUM
-            builder.field(
-                view.projector.name(resource_id),
-                f"{_number(previous)} -> {_number(current)}/{_number(_resource_maximum(final, maximum_id))}",
-            )
-    if stopped_full:
-        builder.note("资源达到上限后已停止继续消耗。")
-    elif exhausted:
-        builder.note("持有数量不足，已使用全部可用物品。")
-    elif failure:
-        builder.note(f"后续使用已停止: {failure}")
-    return builder.build()
-
-
 def _armory_assets(overview: CharacterOverview, slot_id: str):
     catalog = current_game_services().content.catalog.items
     values = []
@@ -1453,5 +917,4 @@ __all__ = [
     "nacre",
     "protect_asset",
     "unprotect_asset",
-    "use_item",
 ]

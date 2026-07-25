@@ -13,7 +13,6 @@ from game.core.gameplay import (
 from game.rules.character import MULTIVERSE_WORLD_STATE_ID
 from game.rules.exploration import (
     EXPLORATION_AGGREGATE,
-    EXPLORATION_RULESET_VERSION,
     ExplorationBatchResult,
     ExplorationState,
     ExplorationStatus,

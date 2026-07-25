@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from hashlib import sha256
 from math import ceil, sqrt
@@ -54,6 +54,7 @@ from game.core.gameplay import (
     ActionState,
     INSCRIPTION_MEDIUM_DATA_KEY,
 )
+from game.features.errors import StalePreparationError
 from game.rules.activity import GLOBAL_ACTIVITY_SCOPE_ID
 from game.rules.character import CharacterWorldState, PRIMARY_LEDGER_ID
 from game.rules.companion import CompanionRosterState
@@ -90,6 +91,31 @@ from .models import (
 
 SOURCE_KIND = "source.dimensional_disaster"
 SYSTEM_ACTOR_ID = "system.dimensional_disaster"
+
+
+@dataclass(frozen=True)
+class _DisasterPlayerInputs:
+    action: ActionState | None
+    exploration: ExplorationState | None
+    character: CharacterState
+    character_world: CharacterWorldState
+    inventory: InventoryState
+    loadout: LoadoutState
+    roster: CompanionRosterState
+    inscription_preference: InscriptionPreference | None
+
+
+@dataclass(frozen=True)
+class _PreparedDisasterChallenge:
+    event: DimensionalDisasterState
+    inputs: _DisasterPlayerInputs
+    battle: object
+    context: RuleContext
+    draw_ticket_drops: int
+    report: object
+
+
+_STALE_DISASTER_CHALLENGE = object()
 
 
 class DimensionalDisasterFeature:
@@ -179,14 +205,40 @@ class DimensionalDisasterFeature:
         normalized_operation_id = str(operation_id or "").strip()
         if not normalized_character_id or not normalized_operation_id:
             raise ValueError("灾厄挑战缺少角色或操作身份")
-        with self.database.unit_of_work() as uow:
+        for _ in range(2):
+            prepared = self._prepare_challenge(
+                current.event_id,
+                normalized_character_id,
+                normalized_operation_id,
+                logical_time,
+            )
+            if isinstance(prepared, DimensionalDisasterChallengeResult):
+                return prepared
+            result = self._commit_challenge(
+                normalized_character_id,
+                normalized_operation_id,
+                logical_time,
+                prepared,
+            )
+            if result is not _STALE_DISASTER_CHALLENGE:
+                return result
+        raise StalePreparationError("灾厄挑战准备结果连续过期，请重试")
+
+    def _prepare_challenge(
+        self,
+        event_id: str,
+        character_id: str,
+        operation_id: str,
+        logical_time: datetime,
+    ) -> _PreparedDisasterChallenge | DimensionalDisasterChallengeResult:
+        with self.database.unit_of_work(write=False) as uow:
             event = self.snapshots.require(
                 uow,
                 DIMENSIONAL_DISASTER_AGGREGATE,
-                current.event_id,
+                event_id,
                 DimensionalDisasterState,
             )
-            replay = event.challenge_receipts.get(normalized_operation_id)
+            replay = event.challenge_receipts.get(operation_id)
             activity_state = self.snapshots.require(
                 uow,
                 self.storage.activity,
@@ -200,8 +252,9 @@ class DimensionalDisasterFeature:
                     event,
                     activity,
                     replay.as_replay(),
-                    self.battle_reports.reference(
-                        self._battle_report_id(normalized_operation_id)
+                    self.battle_reports.reference_in_uow(
+                        uow,
+                        self._battle_report_id(operation_id)
                     ),
                 )
             if (
@@ -212,98 +265,148 @@ class DimensionalDisasterFeature:
             ):
                 return DimensionalDisasterChallengeResult("ended", event, activity)
             business_day = self._business_day(logical_time)
-            attempts = event.attempts_today(normalized_character_id, business_day)
+            attempts = event.attempts_today(character_id, business_day)
             if attempts >= DIMENSIONAL_DISASTER_DAILY_ATTEMPTS:
                 return DimensionalDisasterChallengeResult(
                     "attempt_limit",
                     event,
                     activity,
                 )
-            action = self.snapshots.load(
-                uow,
-                self.storage.action,
-                normalized_character_id,
-                ActionState,
-            )
-            if action is not None and action.running(ActionSlotKind.MAIN):
+            inputs = self._load_player_inputs(uow, character_id)
+            if inputs.action is not None and inputs.action.running(ActionSlotKind.MAIN):
                 return DimensionalDisasterChallengeResult("main_action_occupied", event, activity)
-            exploration = self.snapshots.load(
-                uow,
-                self.storage.exploration,
-                normalized_character_id,
-                ExplorationState,
-            )
-            if exploration is not None and exploration.status is ExplorationStatus.RUNNING:
+            if (
+                inputs.exploration is not None
+                and inputs.exploration.status is ExplorationStatus.RUNNING
+            ):
                 return DimensionalDisasterChallengeResult("exploring", event, activity)
-            character = self.snapshots.require(
-                uow,
-                self.storage.character,
-                normalized_character_id,
-                CharacterState,
-            )
-            character_world = self.snapshots.require(
-                uow,
-                self.storage.character_world,
-                normalized_character_id,
-                CharacterWorldState,
-            )
-            if character.resources[HEALTH_CURRENT] <= 0:
+            if inputs.character.resources[HEALTH_CURRENT] <= 0:
                 return DimensionalDisasterChallengeResult("health_depleted", event, activity)
-            inventory = self.snapshots.require(
-                uow,
-                self.storage.inventory,
-                normalized_character_id,
-                InventoryState,
+        context = _context(operation_id, logical_time)
+        battle = self.battles.simulate(
+            event.combat,
+            event.event_id,
+            character=inputs.character,
+            inventory=inputs.inventory,
+            loadout=inputs.loadout,
+            roster=inputs.roster,
+            context=context,
+        )
+        damage = min(event.current_health, max(0, battle.damage))
+        ticket_stack = self._ticket_stack(inputs.inventory)
+        ticket_definition = self.content.catalog.items.require(DRAW_TICKET_ITEM_ID)
+        ticket_capacity = (
+            ticket_definition.stack_limit - (ticket_stack.quantity if ticket_stack else 0)
+            if ticket_definition.stack_limit is not None
+            else 1
+        )
+        draw_ticket_drops = roll_draw_ticket_drop(
+            context.random,
+            chance=DIMENSIONAL_DISASTER_DRAW_TICKET_CHANCE,
+            effective_damage=damage,
+            available_capacity=ticket_capacity,
+        )
+        companion_amount = self.companion_growth.engine.disaster_experience(
+            event.combat.level,
+            damage,
+            event.maximum_health,
+        )
+        provisional_receipt = DisasterChallengeReceipt(
+            operation_id,
+            character_id,
+            event.event_id,
+            business_day,
+            damage,
+            event.current_health,
+            event.current_health - damage,
+            battle.player_health_after,
+            battle.player_spirit_after,
+            attempts + 1,
+            battle.turns,
+            battle.player_victory,
+            logical_time,
+            draw_ticket_drops,
+            battle.player_companion_id,
+            companion_amount,
+        )
+        report = self.battle_reports.prepare_capture(
+            self._battle_report_draft(
+                event,
+                inputs.character,
+                inputs.character_world,
+                inputs.inventory,
+                inputs.loadout,
+                inputs.inscription_preference,
+                inputs.roster,
+                battle,
+                provisional_receipt,
+                operation_id,
+                logical_time,
             )
-            loadout = self.snapshots.require(
+        )
+        return _PreparedDisasterChallenge(
+            event,
+            inputs,
+            battle,
+            context,
+            draw_ticket_drops,
+            report,
+        )
+
+    def _commit_challenge(
+        self,
+        character_id: str,
+        operation_id: str,
+        logical_time: datetime,
+        prepared: _PreparedDisasterChallenge,
+    ):
+        battle = prepared.battle
+        context = prepared.context
+        with self.database.unit_of_work() as uow:
+            event = self.snapshots.require(
                 uow,
-                self.storage.loadout,
-                normalized_character_id,
-                LoadoutState,
+                DIMENSIONAL_DISASTER_AGGREGATE,
+                prepared.event.event_id,
+                DimensionalDisasterState,
             )
-            roster = self.snapshots.load(
+            activity_state = self.snapshots.require(
                 uow,
-                self.storage.companion_roster,
-                normalized_character_id,
-                CompanionRosterState,
-            ) or CompanionRosterState(normalized_character_id)
-            inscription_preference = self.snapshots.load(
-                uow,
-                self.storage.inscription_preference,
-                normalized_character_id,
-                InscriptionPreference,
+                self.storage.activity,
+                GLOBAL_ACTIVITY_SCOPE_ID,
+                ActivityState,
             )
-            context = _context(normalized_operation_id, logical_time)
-            battle = self.battles.simulate(
-                event.combat,
-                event.event_id,
-                character=character,
-                inventory=inventory,
-                loadout=loadout,
-                roster=roster,
-                context=context,
-            )
+            activity = activity_state.instances[event.event_id]
+            replay = event.challenge_receipts.get(operation_id)
+            if replay is not None:
+                return DimensionalDisasterChallengeResult(
+                    "replayed",
+                    event,
+                    activity,
+                    replay.as_replay(),
+                    self.battle_reports.reference_in_uow(
+                        uow,
+                        self._battle_report_id(operation_id),
+                    ),
+                )
+            if (
+                event.status is not DimensionalDisasterStatus.OPEN
+                or event.outcome is not DimensionalDisasterOutcome.NONE
+                or activity.status is not ActivityStatus.OPEN
+                or not event.opens_at <= logical_time < event.closes_at
+            ):
+                return DimensionalDisasterChallengeResult("ended", event, activity)
+            business_day = self._business_day(logical_time)
+            attempts = event.attempts_today(character_id, business_day)
+            if attempts >= DIMENSIONAL_DISASTER_DAILY_ATTEMPTS:
+                return DimensionalDisasterChallengeResult(
+                    "attempt_limit",
+                    event,
+                    activity,
+                )
+            inputs = self._load_player_inputs(uow, character_id)
+            if inputs != prepared.inputs:
+                return _STALE_DISASTER_CHALLENGE
             damage = min(event.current_health, max(0, battle.damage))
-            ticket_stack = next(
-                (
-                    value
-                    for value in inventory.stacks.values()
-                    if value.definition_id == DRAW_TICKET_ITEM_ID
-                ),
-                None,
-            )
-            ticket_definition = self.content.catalog.items.require(DRAW_TICKET_ITEM_ID)
-            ticket_capacity = (
-                ticket_definition.stack_limit - (ticket_stack.quantity if ticket_stack else 0)
-                if ticket_definition.stack_limit is not None
-                else 1
-            )
-            draw_ticket_drops = roll_draw_ticket_drop(
-                context.random,
-                chance=DIMENSIONAL_DISASTER_DRAW_TICKET_CHANCE,
-                effective_damage=damage,
-                available_capacity=ticket_capacity,
-            )
             companion_amount = self.companion_growth.engine.disaster_experience(
                 event.combat.level,
                 damage,
@@ -311,10 +414,10 @@ class DimensionalDisasterFeature:
             )
             companion_growth = self.companion_growth.grant_in_uow(
                 uow,
-                normalized_character_id,
+                character_id,
                 battle.player_companion_id,
                 companion_amount,
-                character_level=character.progressions[
+                character_level=inputs.character.progressions[
                     CHARACTER_LEVEL_PROGRESSION_ID
                 ].level,
                 logical_time=logical_time,
@@ -323,8 +426,8 @@ class DimensionalDisasterFeature:
                 companion_growth.accepted if companion_growth is not None else 0
             )
             receipt = DisasterChallengeReceipt(
-                normalized_operation_id,
-                normalized_character_id,
+                operation_id,
+                character_id,
                 event.event_id,
                 business_day,
                 damage,
@@ -336,19 +439,19 @@ class DimensionalDisasterFeature:
                 battle.turns,
                 battle.player_victory,
                 logical_time,
-                draw_ticket_drops,
+                prepared.draw_ticket_drops,
                 battle.player_companion_id,
                 companion_experience,
             )
             next_event = record_disaster_challenge(event, receipt)
             next_activity_state = activity_state
-            if normalized_character_id not in activity.participants:
+            if character_id not in activity.participants:
                 next_activity_state, activity = self._persist_activity_operation(
                     uow,
                     next_activity_state,
-                    JoinActivity(event.event_id, normalized_character_id),
-                    f"{normalized_operation_id}:join",
-                    normalized_character_id,
+                    JoinActivity(event.event_id, character_id),
+                    f"{operation_id}:join",
+                    character_id,
                     logical_time,
                 )
             next_activity_state, activity = self._persist_activity_operation(
@@ -356,11 +459,11 @@ class DimensionalDisasterFeature:
                 next_activity_state,
                 RecordActivityContribution(
                     event.event_id,
-                    normalized_character_id,
+                    character_id,
                     damage,
                 ),
-                f"{normalized_operation_id}:contribution",
-                normalized_character_id,
+                f"{operation_id}:contribution",
+                character_id,
                 logical_time,
             )
             self.snapshots.update(
@@ -371,24 +474,26 @@ class DimensionalDisasterFeature:
                 next_event,
                 logical_time,
             )
-            resources = dict(character.resources)
+            resources = dict(inputs.character.resources)
             resources[HEALTH_CURRENT] = battle.player_health_after
             resources[SPIRIT_CURRENT] = battle.player_spirit_after
-            if resources != dict(character.resources):
+            if resources != dict(inputs.character.resources):
                 next_character = replace(
-                    character,
+                    inputs.character,
                     resources=resources,
-                    revision=character.revision + 1,
+                    revision=inputs.character.revision + 1,
                 )
                 self.snapshots.update(
                     uow,
                     self.storage.character,
-                    normalized_character_id,
-                    character,
+                    character_id,
+                    inputs.character,
                     next_character,
                     logical_time,
                 )
-            if draw_ticket_drops:
+            if prepared.draw_ticket_drops:
+                inventory = inputs.inventory
+                ticket_stack = self._ticket_stack(inventory)
                 container_id = next(
                     value.id
                     for value in inventory.containers.values()
@@ -397,18 +502,18 @@ class DimensionalDisasterFeature:
                 claim = self.snapshots.require(
                     uow,
                     self.storage.reward_claim,
-                    normalized_character_id,
+                    character_id,
                     RewardClaimState,
                 )
                 settlement = RewardSettlement(
-                    f"reward:{normalized_operation_id}:draw-ticket",
-                    normalized_character_id,
-                    normalized_character_id,
+                    f"reward:{operation_id}:draw-ticket",
+                    character_id,
+                    character_id,
                     SOURCE_KIND,
-                    f"{event.event_id}:{normalized_operation_id}:draw-ticket",
+                    f"{event.event_id}:{operation_id}:draw-ticket",
                     (
                         StackItemReward(
-                            ticket_stack.id if ticket_stack else f"stack:{normalized_character_id}:{DRAW_TICKET_ITEM_ID}",
+                            ticket_stack.id if ticket_stack else f"stack:{character_id}:{DRAW_TICKET_ITEM_ID}",
                             DRAW_TICKET_ITEM_ID,
                             container_id,
                             1,
@@ -423,25 +528,15 @@ class DimensionalDisasterFeature:
                 reward_outcome = self.rewards.settle_in_uow(
                     uow,
                     settlement,
-                    self.reward_keys_factory(normalized_character_id, PRIMARY_LEDGER_ID),
+                    self.reward_keys_factory(character_id, PRIMARY_LEDGER_ID),
                     context=context,
                 )
                 if reward_outcome.failure:
                     raise RuntimeError(reward_outcome.failure.message)
-            report = self.battle_reports.capture_in_uow(
+            report = self.battle_reports.capture_prepared_in_uow(
                 uow,
-                self._battle_report_draft(
-                    event,
-                    character,
-                    character_world,
-                    inventory,
-                    loadout,
-                    inscription_preference,
-                    roster,
-                    battle,
-                    receipt,
-                    normalized_operation_id,
-                    logical_time,
+                prepared.report.with_summary(
+                    self._battle_report_summary(event, battle, receipt)
                 ),
             )
             uow.commit()
@@ -452,6 +547,73 @@ class DimensionalDisasterFeature:
                 receipt,
                 report,
             )
+
+    def _load_player_inputs(
+        self,
+        uow,
+        character_id: str,
+    ) -> _DisasterPlayerInputs:
+        return _DisasterPlayerInputs(
+            self.snapshots.load(
+                uow,
+                self.storage.action,
+                character_id,
+                ActionState,
+            ),
+            self.snapshots.load(
+                uow,
+                self.storage.exploration,
+                character_id,
+                ExplorationState,
+            ),
+            self.snapshots.require(
+                uow,
+                self.storage.character,
+                character_id,
+                CharacterState,
+            ),
+            self.snapshots.require(
+                uow,
+                self.storage.character_world,
+                character_id,
+                CharacterWorldState,
+            ),
+            self.snapshots.require(
+                uow,
+                self.storage.inventory,
+                character_id,
+                InventoryState,
+            ),
+            self.snapshots.require(
+                uow,
+                self.storage.loadout,
+                character_id,
+                LoadoutState,
+            ),
+            self.snapshots.load(
+                uow,
+                self.storage.companion_roster,
+                character_id,
+                CompanionRosterState,
+            ) or CompanionRosterState(character_id),
+            self.snapshots.load(
+                uow,
+                self.storage.inscription_preference,
+                character_id,
+                InscriptionPreference,
+            ),
+        )
+
+    @staticmethod
+    def _ticket_stack(inventory: InventoryState):
+        return next(
+            (
+                value
+                for value in inventory.stacks.values()
+                if value.definition_id == DRAW_TICKET_ITEM_ID
+            ),
+            None,
+        )
 
     def _battle_report_draft(
         self,
@@ -503,16 +665,7 @@ class DimensionalDisasterFeature:
             report_id=self._battle_report_id(operation_id),
             mode_id="battle.mode.dimensional_disaster",
             content_fingerprint=self.content.catalog.report.content_fingerprint,
-            summary=BattleReportSummary(
-                f"讨伐灾厄·{event.narrative.name}",
-                outcome,
-                (
-                    f"造成伤痕: {receipt.damage}",
-                    f"灾厄血量: {receipt.shared_health_after}/{event.maximum_health}",
-                    f"战斗行动: {receipt.turns}",
-                ),
-                "victory" if battle.player_victory else "neutral",
-            ),
+            summary=self._battle_report_summary(event, battle, receipt),
             segment=self.battle_reports.builder.segment(
                 segment_id=operation_id,
                 title=event.narrative.name,
@@ -522,6 +675,23 @@ class DimensionalDisasterFeature:
                 started_at=logical_time,
                 finished_at=logical_time,
             ),
+        )
+
+    @staticmethod
+    def _battle_report_summary(
+        event,
+        battle,
+        receipt,
+    ) -> BattleReportSummary:
+        return BattleReportSummary(
+            f"讨伐灾厄·{event.narrative.name}",
+            "讨伐胜利" if battle.player_victory else "战斗结束",
+            (
+                f"造成伤痕: {receipt.damage}",
+                f"灾厄血量: {receipt.shared_health_after}/{event.maximum_health}",
+                f"战斗行动: {receipt.turns}",
+            ),
+            "victory" if battle.player_victory else "neutral",
         )
 
     @staticmethod

@@ -64,12 +64,17 @@ class SkinPack:
             normalized[content_id] = entry
         object.__setattr__(self, "entries", MappingProxyType(normalized))
 
-    def validate(self, required_ids: set[StableId] | frozenset[StableId]) -> None:
-        """皮肤必须完整覆盖当前要求展示的内容，也不能引用未知内容。"""
+    def validate(
+        self,
+        required_ids: set[StableId] | frozenset[StableId],
+        known_ids: set[StableId] | frozenset[StableId] | None = None,
+    ) -> None:
+        """皮肤必须覆盖自身要求的内容，额外条目也必须属于正式内容。"""
 
-        known = set(required_ids)
+        required = set(required_ids)
+        known = set(known_ids if known_ids is not None else required_ids)
         actual = set(self.entries)
-        missing = sorted(known - actual)
+        missing = sorted(required - actual)
         unknown = sorted(actual - known)
         if missing:
             raise ValueError(f"世界皮肤 {self.id} 缺少条目：{', '.join(missing)}")
@@ -125,10 +130,34 @@ class SkinCatalog:
     ``version`` 精确选择皮肤；省略版本时返回该皮肤的最新版本。
     """
 
-    def __init__(self, required_content_ids: set[StableId] | frozenset[StableId]) -> None:
+    def __init__(
+        self,
+        required_content_ids: set[StableId] | frozenset[StableId],
+        *,
+        scoped_content_ids: Mapping[StableId, frozenset[StableId]] | None = None,
+    ) -> None:
         self._required_ids = frozenset(
             stable_id(value, field="required skin content id")
             for value in required_content_ids
+        )
+        self._scoped_ids = MappingProxyType(
+            {
+                stable_id(skin_id, field="skin id"): frozenset(
+                    stable_id(value, field="skin scoped content id")
+                    for value in content_ids
+                )
+                for skin_id, content_ids in (scoped_content_ids or {}).items()
+            }
+        )
+        self._known_ids = frozenset(
+            {
+                *self._required_ids,
+                *(
+                    content_id
+                    for content_ids in self._scoped_ids.values()
+                    for content_id in content_ids
+                ),
+            }
         )
         self._packs: dict[tuple[StableId, int], SkinPack] = {}
         self._latest_versions: dict[StableId, int] = {}
@@ -149,7 +178,10 @@ class SkinCatalog:
             raise ValueError(
                 f"世界皮肤名称冲突：{pack.name} 同时属于 {name_owner} 和 {pack.id}"
             )
-        pack.validate(self._required_ids)
+        pack.validate(
+            self._required_ids | self._scoped_ids.get(pack.id, frozenset()),
+            self._known_ids,
+        )
         SkinProjector(pack)
         self._packs[key] = pack
         self._name_owners[name_key] = pack.id

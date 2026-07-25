@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
@@ -28,6 +28,33 @@ class EnemyBehaviorProfileDefinition:
         object.__setattr__(self, "behavior_weights", MappingProxyType(weights))
 
 
+@dataclass(frozen=True)
+class EnemyBehaviorWeightPolicy:
+    """共享行为扩展对全部世界提供默认权重，并可覆盖个别世界。"""
+
+    behavior_id: StableId
+    default_weight: int = 10
+    world_weights: Mapping[StableId, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "behavior_id",
+            stable_id(self.behavior_id, field="enemy behavior id"),
+        )
+        default_weight = int(self.default_weight)
+        if default_weight < 1:
+            raise ValueError("敌人行为默认权重必须大于 0")
+        weights = {
+            stable_id(key, field="world id"): int(value)
+            for key, value in (self.world_weights or {}).items()
+        }
+        if any(value < 1 for value in weights.values()):
+            raise ValueError("敌人行为世界权重必须全部大于 0")
+        object.__setattr__(self, "default_weight", default_weight)
+        object.__setattr__(self, "world_weights", MappingProxyType(weights))
+
+
 class EnemyBehaviorProfileCatalog:
     def __init__(self, definitions: tuple[EnemyBehaviorProfileDefinition, ...]) -> None:
         values = {value.world_id: value for value in definitions}
@@ -42,11 +69,22 @@ class EnemyBehaviorProfileCatalog:
         except KeyError as exc:
             raise KeyError(f"世界没有登记敌人行为倾向：{key}") from exc
 
-    def validate(self, playable_world_ids: tuple[StableId, ...]) -> None:
+    def validate(
+        self,
+        playable_world_ids: tuple[StableId, ...],
+        known_behavior_ids: tuple[StableId, ...] | None = None,
+    ) -> None:
         worlds = frozenset(stable_id(value, field="world id") for value in playable_world_ids)
         if set(self._definitions) != set(worlds):
             raise ValueError("敌人行为倾向必须完整覆盖全部可进入世界")
-        known = frozenset(value.id for value in ENEMY_BEHAVIOR_CONTENT.behaviors)
+        known = frozenset(
+            stable_id(value, field="enemy behavior id")
+            for value in (
+                known_behavior_ids
+                if known_behavior_ids is not None
+                else tuple(value.id for value in ENEMY_BEHAVIOR_CONTENT.behaviors)
+            )
+        )
         for definition in self._definitions.values():
             if set(definition.behavior_weights) != set(known):
                 raise ValueError(f"世界敌人行为倾向没有完整覆盖行为库：{definition.world_id}")
@@ -93,4 +131,5 @@ __all__ = [
     "ENEMY_BEHAVIOR_PROFILE_CATALOG",
     "EnemyBehaviorProfileCatalog",
     "EnemyBehaviorProfileDefinition",
+    "EnemyBehaviorWeightPolicy",
 ]

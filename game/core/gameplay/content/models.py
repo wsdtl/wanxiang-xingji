@@ -259,6 +259,9 @@ class ContentPackage:
     party_types: tuple[PartyDefinition, ...] = ()
     skin_packs: tuple[SkinPack, ...] = ()
     display_content_ids: frozenset[StableId] = frozenset()
+    skin_display_content_ids: Mapping[StableId, frozenset[StableId]] = field(
+        default_factory=dict
+    )
     magnitude_registrations: tuple[MagnitudeRegistration, ...] = ()
     condition_registrations: tuple[ConditionRegistration, ...] = ()
     effect_operation_registrations: tuple[EffectOperationRegistration, ...] = ()
@@ -340,6 +343,20 @@ class ContentPackage:
                 stable_id(value, field="display content id")
                 for value in self.display_content_ids
             ),
+        )
+        scoped_display_ids = {
+            stable_id(skin_id, field="skin id"): frozenset(
+                stable_id(value, field="skin scoped display content id")
+                for value in content_ids
+            )
+            for skin_id, content_ids in self.skin_display_content_ids.items()
+        }
+        if any(not content_ids for content_ids in scoped_display_ids.values()):
+            raise ValueError("皮肤作用域展示集合不能为空")
+        object.__setattr__(
+            self,
+            "skin_display_content_ids",
+            MappingProxyType(scoped_display_ids),
         )
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 

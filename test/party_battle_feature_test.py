@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -116,6 +119,59 @@ def main() -> None:
             value.ready
             for value in prepared_party_state.parties[party.id].members.values()
         )
+        simulation_started = Event()
+        release_simulation = Event()
+        original_simulate = services.party_battles.battles.simulate
+
+        def blocking_simulate(*args, **kwargs):
+            simulation_started.set()
+            if not release_simulation.wait(timeout=5):
+                raise TimeoutError("测试未及时释放组队战斗模拟")
+            return original_simulate(*args, **kwargs)
+
+        def unrelated_write() -> bool:
+            with services.database.unit_of_work() as uow:
+                uow.insert_transaction(
+                    "test:party-battle:unrelated-write",
+                    "unrelated-fingerprint",
+                    party.id,
+                    "{}",
+                    now.isoformat(),
+                )
+                uow.commit()
+            return True
+
+        with patch.object(
+            services.battle_reports,
+            "capture_prepared_in_uow",
+            side_effect=RuntimeError("injected party report failure"),
+        ), patch.object(
+            services.party_battles.battles,
+            "simulate",
+            side_effect=blocking_simulate,
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                challenge_future = executor.submit(
+                    services.party_battles.challenge,
+                    "party-battle-start",
+                    party.id,
+                    characters[0].id,
+                    logical_time=now,
+                )
+                assert simulation_started.wait(timeout=5)
+                writer = executor.submit(unrelated_write)
+                try:
+                    assert writer.result(timeout=2)
+                    before_failure = _persistent_state(services)
+                finally:
+                    release_simulation.set()
+                try:
+                    challenge_future.result(timeout=10)
+                except RuntimeError as exc:
+                    assert str(exc) == "injected party report failure"
+                else:
+                    raise AssertionError("战报失败应回滚整场组队挑战")
+        assert _persistent_state(services) == before_failure
         result = services.party_battles.challenge(
             "party-battle-start",
             party.id,
@@ -180,6 +236,29 @@ def _now():
     from datetime import datetime, timezone
 
     return datetime(2026, 7, 20, 13, 0, tzinfo=timezone.utc)
+
+
+def _persistent_state(services):
+    tables = (
+        "aggregate_snapshot",
+        "committed_transaction",
+        "outbox_event",
+        "battle_report",
+        "battle_report_segment",
+    )
+    with services.database.unit_of_work(write=False) as uow:
+        return tuple(
+            (
+                table,
+                tuple(
+                    tuple(row)
+                    for row in uow.connection.execute(
+                        f"SELECT * FROM {table} ORDER BY 1, 2"
+                    ).fetchall()
+                ),
+            )
+            for table in tables
+        )
 
 
 if __name__ == "__main__":

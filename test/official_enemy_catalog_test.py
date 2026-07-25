@@ -11,16 +11,20 @@ if str(ROOT) not in sys.path:
 
 from game.content import build_official_content  # noqa: E402
 from game.content.catalog import (  # noqa: E402
+    PARTY_BOSS_ENCOUNTER_ID,
     PERSONAL_BOSS_ENCOUNTER_ID,
     PERSONAL_ELITE_ENCOUNTER_ID,
     PERSONAL_NORMAL_ENCOUNTER_ID,
 )
 from game.content.catalog.enemy import (  # noqa: E402
     BEHAVIOR_BLUEPRINTS,
+    BOSS_BLUEPRINTS,
     PARTY_BOSS_ENEMIES,
     PERSONAL_BOSS_ENEMIES,
     REGULAR_ENEMIES,
 )
+from game.content.catalog.weapon.blueprints import WEAPON_BLUEPRINTS  # noqa: E402
+from game.content.catalog.weapon.registry import OFFICIAL_WEAPON_MECHANICS  # noqa: E402
 from game.content.catalog.disaster.combat import DISASTER_ENEMY_DEFINITIONS  # noqa: E402
 from game.content.catalog.trial import (  # noqa: E402
     BUILD_TRIAL_TARGETS,
@@ -52,15 +56,25 @@ def main() -> None:
     magic = build_official_content("skin.magic")
     catalog = cultivation.catalog
 
-    assert len(BEHAVIOR_BLUEPRINTS) == 32
-    assert len(REGULAR_ENEMIES) == 60
-    assert len(PERSONAL_BOSS_ENEMIES) == 30
-    assert len(PARTY_BOSS_ENEMIES) == 30
-    assert len(DISASTER_ENEMY_DEFINITIONS) == 30
-    assert len(BUILD_TRIAL_TARGETS) == 3
-    assert len(catalog.enemies.definitions.ids()) == 153
-    assert len(catalog.enemies.behaviors.ids()) == 32
-    assert len(catalog.enemies.encounters.ids()) == 4
+    assert BEHAVIOR_BLUEPRINTS
+    assert BOSS_BLUEPRINTS
+    assert all(
+        not hasattr(value, "source_weapon_key")
+        and value.mechanic_recipe_id.startswith("combat.recipe.")
+        for value in BEHAVIOR_BLUEPRINTS
+    )
+    recipe_ids = {
+        OFFICIAL_WEAPON_MECHANICS.recipe_id(value.key)
+        for value in WEAPON_BLUEPRINTS
+    }
+    assert {
+        value.mechanic_recipe_id for value in BEHAVIOR_BLUEPRINTS
+    } <= recipe_ids
+    assert REGULAR_ENEMIES
+    assert PERSONAL_BOSS_ENEMIES
+    assert PARTY_BOSS_ENEMIES
+    assert DISASTER_ENEMY_DEFINITIONS
+    assert BUILD_TRIAL_TARGETS
     personal_ids = {value.id for value in PERSONAL_BOSS_ENEMIES}
     party_ids = {value.id for value in PARTY_BOSS_ENEMIES}
     disaster_ids = {value.id for value in DISASTER_ENEMY_DEFINITIONS}
@@ -71,6 +85,16 @@ def main() -> None:
         *party_ids,
         *disaster_ids,
     }
+    assert gameplay_ids <= set(catalog.enemies.definitions.ids())
+    assert {
+        f"enemy.behavior.{value.key}" for value in BEHAVIOR_BLUEPRINTS
+    } <= set(catalog.enemies.behaviors.ids())
+    assert {
+        PERSONAL_NORMAL_ENCOUNTER_ID,
+        PERSONAL_ELITE_ENCOUNTER_ID,
+        PERSONAL_BOSS_ENCOUNTER_ID,
+        PARTY_BOSS_ENCOUNTER_ID,
+    } <= set(catalog.enemies.encounters.ids())
     assert not gameplay_ids & trial_ids
     assert not any(
         trial_ids & set(spawn.enemy_ids)

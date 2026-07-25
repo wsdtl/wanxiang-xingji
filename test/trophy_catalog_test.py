@@ -37,6 +37,9 @@ from game.core.gameplay import ITEM_STORAGE_COMPONENT_ID, ItemStorageComponent  
 
 
 def main() -> None:
+    from game.content.catalog import item as item_catalog
+
+    assert not hasattr(item_catalog, "ItemRecycleValue")
     catalog = assemble_official_catalog()
     cultivation = select_world_skin(catalog)
     magic = select_world_skin(catalog, MAGIC_SKIN_ID)

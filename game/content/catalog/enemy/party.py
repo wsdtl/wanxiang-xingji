@@ -189,7 +189,12 @@ class PartyBossSourceCatalog:
             raise ValueError("每个可进入世界必须且只能登记一组组队首领")
         known = set(content.enemies.definitions.ids())
         registered = set(self._enemy_owners)
-        if registered != set(PARTY_BOSS_DISPLAY_IDS):
+        official_party_bosses = {
+            enemy_id
+            for enemy_id in known
+            if content.enemies.require(enemy_id).tags.has("enemy.identity.party_boss")
+        }
+        if registered != official_party_bosses:
             raise ValueError("组队首领来源目录没有完整覆盖正式组队首领")
         if not registered.issubset(known):
             raise KeyError("组队首领来源目录引用了未知敌人")

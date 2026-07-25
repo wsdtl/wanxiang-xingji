@@ -30,7 +30,7 @@ from .models import (
     RewardSettlementPreview,
     RewardSettlementSnapshot,
 )
-from .planning import RewardPlan, RewardPlannerRegistry
+from .planning import RewardPlannerRegistry
 
 
 class RewardSettlementEngine:

@@ -18,11 +18,9 @@ if str(ROOT) not in sys.path:
 from game.app import build_game_services, install_game_services, restore_game_services  # noqa: E402
 from game.content import (  # noqa: E402
     CHARACTER_LEVEL_PROGRESSION_ID,
-    CULTIVATION_SKIN_ID,
     TAIXUAN_WORLD_ID,
     DIMENSION_SHIFT_ITEM_ID,
     INSCRIPTION_FEATHER_ITEM_ID,
-    MAGIC_SKIN_ID,
     MAGIC_WORLD_ID,
     PRIMARY_CURRENCY_ID,
 )

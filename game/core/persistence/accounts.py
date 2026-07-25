@@ -19,7 +19,6 @@ from ..account import (
     AccountStatusTransaction,
     ExternalIdentity,
     IdentityBinding,
-    IdentityConflict,
     IdentityEvidence,
     UnbindIdentityTransaction,
 )

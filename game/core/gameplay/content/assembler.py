@@ -70,7 +70,7 @@ from ..weapon import WeaponCatalog, weapon_level_contribution
 from .models import CombatProfileDefinition, ContentPackage, ContentVersion
 
 
-CONTENT_FOUNDATION_VERSION = "content.foundation.v8"
+CONTENT_FOUNDATION_VERSION = "content.foundation.v9"
 
 
 @dataclass(frozen=True)
@@ -765,8 +765,22 @@ class ContentAssembler:
             ownership,
             extension_type_owners,
         )
-        display_ids = frozenset(
+        global_display_ids = frozenset(
             content_id for package in ordered for content_id in package.display_content_ids
+        )
+        scoped_display_ids: dict[StableId, set[StableId]] = {}
+        for package in ordered:
+            for skin_id, content_ids in package.skin_display_content_ids.items():
+                scoped_display_ids.setdefault(skin_id, set()).update(content_ids)
+        display_ids = frozenset(
+            {
+                *global_display_ids,
+                *(
+                    content_id
+                    for content_ids in scoped_display_ids.values()
+                    for content_id in content_ids
+                ),
+            }
         )
         unknown_display = display_ids - known_displayable
         if unknown_display:
@@ -902,11 +916,23 @@ class ContentAssembler:
         profiles.freeze()
         damage_types.freeze()
 
-        skins = SkinCatalog(display_ids)
+        skins = SkinCatalog(
+            global_display_ids,
+            scoped_content_ids={
+                skin_id: frozenset(content_ids)
+                for skin_id, content_ids in scoped_display_ids.items()
+            },
+        )
         for package in ordered:
             for pack in package.skin_packs:
                 skins.register(pack)
         skins.freeze()
+        unknown_scoped_skins = set(scoped_display_ids) - set(skins.skin_ids())
+        if unknown_scoped_skins:
+            raise KeyError(
+                "皮肤作用域展示集合引用了未启用皮肤："
+                + ", ".join(sorted(unknown_scoped_skins))
+            )
         if world_runtime is not None:
             unknown_world_skins = set(world_runtime.skin_ids()) - set(skins.skin_ids())
             if unknown_world_skins:
@@ -1099,7 +1125,8 @@ class ContentAssembler:
     def _validate_declared_dependencies(packages, ownership, extension_type_owners) -> None:
         closures = _dependency_closures(packages)
         for package in packages:
-            referenced = _known_ids_in(package, frozenset(ownership))
+            runtime_values = _package_dependency_values(package)
+            referenced = _known_ids_in(runtime_values, frozenset(ownership))
             for content_id in sorted(referenced):
                 owner = ownership[content_id]
                 if owner.package_id == package.manifest.id:
@@ -1110,7 +1137,7 @@ class ContentAssembler:
                         f"但未依赖其所有者 {owner.package_id}"
                     )
             referenced_types = _extension_types_in(
-                package,
+                runtime_values,
                 frozenset(extension_type_owners),
             )
             for value_type in referenced_types:
@@ -1122,6 +1149,22 @@ class ContentAssembler:
                         f"内容包 {package.manifest.id} 使用扩展类型 {value_type.__name__}，"
                         f"但未依赖其所有者 {owner_id}"
                     )
+
+
+def _package_dependency_values(package: ContentPackage) -> tuple[object, ...]:
+    """展示投影在总装配后校验，不反向制造内容包依赖环。"""
+
+    projection_fields = {
+        "skin_packs",
+        "display_content_ids",
+        "skin_display_content_ids",
+        "metadata",
+    }
+    return tuple(
+        getattr(package, value.name)
+        for value in fields(package)
+        if value.name not in projection_fields
+    )
 
 
 def resolve_package_order(packages: Iterable[ContentPackage]) -> tuple[ContentPackage, ...]:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from game.app import CurrentCharacterResult, current_game_services
 from game.content import DIMENSION_SHIFT_ITEM_ID

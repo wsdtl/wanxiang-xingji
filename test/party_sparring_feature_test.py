@@ -63,13 +63,13 @@ def main() -> None:
                 )
                 for index in range(defender_size)
             )
-            challenger_party = _create_party(
+            _create_party(
                 services,
                 f"spar-{sequence}-a",
                 challenger_members,
                 now,
             )
-            defender_party = _create_party(
+            _create_party(
                 services,
                 f"spar-{sequence}-b",
                 defender_members,

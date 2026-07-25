@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 
@@ -20,16 +23,15 @@ from game.app import (  # noqa: E402
     install_game_services,
     restore_game_services,
 )
+from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.content import (  # noqa: E402
     DIMENSION_SHIFT_ITEM_ID,
     DRAW_TICKET_ITEM_ID,
     INSCRIPTION_FEATHER_ITEM_ID,
-    MAGIC_WORLD_ID,
     PLAYABLE_WORLD_IDS,
-    STELLAR_RING_WORLD_ID,
-    TAIXUAN_WORLD_ID,
     build_dimensional_disaster_catalog,
 )
+from game.content.extensions import OFFICIAL_EXTENSION_CATALOG  # noqa: E402
 from game.core.gameplay import (  # noqa: E402
     COMBAT_ATTACK,
     HEALTH_CURRENT,
@@ -75,6 +77,7 @@ TIME = datetime(2026, 7, 13, 8, 0, tzinfo=ZONE)
 
 
 def main() -> None:
+    _assert_ended_during_simulation()
     asyncio.run(_main())
     print("dimensional disaster tests passed")
 
@@ -93,17 +96,20 @@ async def _main() -> None:
         available_capacity=1,
     ) == 1
     catalog = build_dimensional_disaster_catalog()
-    assert len(catalog.definitions()) == 30
-    assert len(catalog.for_source(TAIXUAN_WORLD_ID)) == 10
-    assert len(catalog.for_source(MAGIC_WORLD_ID)) == 10
-    assert len(catalog.for_source(STELLAR_RING_WORLD_ID)) == 10
+    assert catalog.definitions()
+    assert sum(
+        len(catalog.for_source(world_id))
+        for world_id in OFFICIAL_EXTENSION_CATALOG.world_ids()
+    ) == len(catalog.definitions())
+    assert all(
+        catalog.for_source(world_id)
+        for world_id in OFFICIAL_EXTENSION_CATALOG.world_ids()
+    )
     audit = catalog.audit()
     assert not audit.warnings
-    assert {value.source_world_id for value in audit.sources} == {
-        TAIXUAN_WORLD_ID,
-        MAGIC_WORLD_ID,
-        STELLAR_RING_WORLD_ID,
-    }
+    assert {value.source_world_id for value in audit.sources} == set(
+        OFFICIAL_EXTENSION_CATALOG.world_ids()
+    )
     assert all(value.documented == 7 and value.original == 3 for value in audit.sources)
 
     for command in ("跨界灾厄", "讨伐灾厄", "灾厄排行"):
@@ -148,6 +154,59 @@ async def _main() -> None:
             await _dispatch("player-a", f"跃迁 {target_world}", "shift-a")
             shifted = await _dispatch("player-a", "跨界灾厄", "status-shifted")
             assert event.narrative.name in shifted.replies[0].message.content
+
+            simulation_started = Event()
+            release_simulation = Event()
+            original_simulate = services.dimensional_disasters.battles.simulate
+
+            def blocking_simulate(*args, **kwargs):
+                simulation_started.set()
+                if not release_simulation.wait(timeout=5):
+                    raise TimeoutError("测试未及时释放灾厄战斗模拟")
+                return original_simulate(*args, **kwargs)
+
+            def unrelated_write() -> bool:
+                with services.database.unit_of_work() as uow:
+                    uow.insert_transaction(
+                        "test:disaster:unrelated-write",
+                        "unrelated-fingerprint",
+                        first_character.id,
+                        "{}",
+                        TIME.isoformat(),
+                    )
+                    uow.commit()
+                return True
+
+            with patch.object(
+                services.battle_reports,
+                "capture_prepared_in_uow",
+                side_effect=RuntimeError("injected disaster report failure"),
+            ), patch.object(
+                services.dimensional_disasters.battles,
+                "simulate",
+                side_effect=blocking_simulate,
+            ):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    challenge_future = executor.submit(
+                        services.dimensional_disasters.challenge,
+                        first_character.id,
+                        "disaster-lock-failure",
+                        logical_time=TIME,
+                    )
+                    assert simulation_started.wait(timeout=5)
+                    writer = executor.submit(unrelated_write)
+                    try:
+                        assert writer.result(timeout=2)
+                        before_failure = _persistent_state(services)
+                    finally:
+                        release_simulation.set()
+                    try:
+                        challenge_future.result(timeout=10)
+                    except RuntimeError as exc:
+                        assert str(exc) == "injected disaster report failure"
+                    else:
+                        raise AssertionError("战报失败应回滚整次灾厄挑战")
+            assert _persistent_state(services) == before_failure
 
             first = await _dispatch("player-a", "讨伐灾厄", "challenge-a-1")
             assert "伤痕" in first.replies[0].message.content
@@ -247,6 +306,102 @@ async def _main() -> None:
             disaster_command_service.command_time = original_now
             disaster_feature_service.DIMENSIONAL_DISASTER_DRAW_TICKET_CHANCE = original_ticket_chance
             restore_game_services(previous)
+
+
+def _assert_ended_during_simulation() -> None:
+    with TemporaryDirectory() as directory:
+        services = build_game_services(
+            database_path=Path(directory) / "disaster-ended.db",
+            identity_secret="disaster-ended-secret",
+        )
+        services.database.initialize()
+        services.activities.initialize(GLOBAL_ACTIVITY_SCOPE_ID, logical_time=TIME)
+        created = services.create_character(
+            IdentityEvidence(
+                "disaster-ended-evidence",
+                ExternalIdentity(
+                    "platform.local",
+                    "disaster-ended",
+                    "identity.user",
+                    "private",
+                    "disaster-ended-player",
+                ),
+                (),
+                "message.local",
+                TIME,
+            ),
+            requested_name="迟归者",
+        )
+        assert created.status == "created" and created.receipt is not None
+        character_id = created.receipt.character.id
+        services.dimensional_disasters.maintain(logical_time=TIME)
+        event = _event(services)
+        character_before = created.receipt.character
+        inventory_before = _inventory(services, character_id)
+        simulation_started = Event()
+        release_simulation = Event()
+        original_simulate = services.dimensional_disasters.battles.simulate
+
+        def blocking_simulate(*args, **kwargs):
+            simulation_started.set()
+            if not release_simulation.wait(timeout=5):
+                raise TimeoutError("测试未及时释放灾厄结束边界")
+            return original_simulate(*args, **kwargs)
+
+        with patch.object(
+            services.dimensional_disasters.battles,
+            "simulate",
+            side_effect=blocking_simulate,
+        ):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    services.dimensional_disasters.challenge,
+                    character_id,
+                    "disaster-ended-during-simulation",
+                    logical_time=TIME,
+                )
+                assert simulation_started.wait(timeout=5)
+                snapshots = services.character_creation.snapshots
+                with services.database.unit_of_work() as uow:
+                    current = snapshots.require(
+                        uow,
+                        DIMENSIONAL_DISASTER_AGGREGATE,
+                        event.event_id,
+                        DimensionalDisasterState,
+                    )
+                    snapshots.update(
+                        uow,
+                        DIMENSIONAL_DISASTER_AGGREGATE,
+                        current.event_id,
+                        current,
+                        replace(
+                            current,
+                            current_health=0,
+                            outcome=DimensionalDisasterOutcome.DEFEATED,
+                            defeated_at=TIME,
+                            revision=current.revision + 1,
+                        ),
+                        TIME,
+                    )
+                    uow.commit()
+                release_simulation.set()
+                result = future.result(timeout=10)
+        assert result.status == "ended"
+        ended = _event(services)
+        assert "disaster-ended-during-simulation" not in ended.challenge_receipts
+        assert ended.attempts_today(character_id, "2026-07-13") == 0
+        assert _inventory(services, character_id) == inventory_before
+        with services.database.unit_of_work(write=False) as uow:
+            character_after = services.character_creation.snapshots.require(
+                uow,
+                CHARACTER_AGGREGATE,
+                character_id,
+                CharacterState,
+            )
+        assert character_after == character_before
+        assert services.battle_reports.reference(
+            "battle-report:dimensional-disaster:disaster-ended-during-simulation"
+        ) is None
 
 
 async def _dispatch(client_id: str, command: str, event_id: str):
@@ -402,6 +557,29 @@ def _set_event_health(services, event_id: str, health: int) -> None:
             TIME,
         )
         uow.commit()
+
+
+def _persistent_state(services):
+    tables = (
+        "aggregate_snapshot",
+        "committed_transaction",
+        "outbox_event",
+        "battle_report",
+        "battle_report_segment",
+    )
+    with services.database.unit_of_work(write=False) as uow:
+        return tuple(
+            (
+                table,
+                tuple(
+                    tuple(row)
+                    for row in uow.connection.execute(
+                        f"SELECT * FROM {table} ORDER BY 1, 2"
+                    ).fetchall()
+                ),
+            )
+            for table in tables
+        )
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from ..ids import StableId, stable_id
 from ..runtime import GameplayExecutor
 from .components import ItemComponentRegistry, ItemComponentType
 from .definitions import ItemCatalog
-from .models import InventoryState, ItemInstance, ItemStack
+from .models import InventoryState, ItemStack
 from .transactions import (
     ConsumeInstance,
     ConsumeStack,

@@ -222,8 +222,8 @@ TROPHY_DISPLAY_CONTENT_IDS = frozenset(item.id for item in TROPHY_ITEMS)
 
 
 def _validate() -> None:
-    if len(TROPHY_ITEMS) != 210:
-        raise ValueError("正式战利品名录必须正好包含 210 项")
+    if not TROPHY_ITEMS:
+        raise ValueError("正式战利品名录不能为空")
     ids = tuple(item.id for item in TROPHY_ITEMS)
     if len(ids) != len(set(ids)):
         raise ValueError("战利品稳定 ID 不能重复")

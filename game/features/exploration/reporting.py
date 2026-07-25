@@ -72,17 +72,7 @@ def build_exploration_battle_report(
         report_id=exploration_battle_report_id(state.session_id),
         mode_id="battle.mode.exploration",
         content_fingerprint=content.catalog.report.content_fingerprint,
-        summary=BattleReportSummary(
-            f"探险战报·{view.projector.name(state.location_id)}",
-            f"{next_state.victories}胜 {next_state.defeats}负",
-            (
-                f"完成批次: {next_state.completed_batches}",
-                f"累计经验: +{next_state.character_experience}",
-                f"伙伴经验: +{next_state.companion_experience}",
-                f"累计掉落: 武器 {next_state.weapon_drops}, 装备 {next_state.equipment_drops}",
-            ),
-            "victory" if battle.victory else "neutral" if battle.draw else "defeat",
-        ),
+        summary=build_exploration_battle_report_summary(next_state, view),
         segment=builder.segment(
             segment_id=segment_id,
             title=f"第 {plan.batch_index} 批·{', '.join(enemy_names)}",
@@ -95,4 +85,26 @@ def build_exploration_battle_report(
     )
 
 
-__all__ = ["build_exploration_battle_report"]
+def build_exploration_battle_report_summary(state, view) -> BattleReportSummary:
+    """生成可在最终短事务中替换的轻量结算摘要。"""
+
+    result = state.last_result
+    if result is None or result.plan.encounter is None:
+        raise ValueError("探险战报摘要缺少战斗批次")
+    return BattleReportSummary(
+        f"探险战报·{view.projector.name(state.location_id)}",
+        f"{state.victories}胜 {state.defeats}负",
+        (
+            f"完成批次: {state.completed_batches}",
+            f"累计经验: +{state.character_experience}",
+            f"伙伴经验: +{state.companion_experience}",
+            f"累计掉落: 武器 {state.weapon_drops}, 装备 {state.equipment_drops}",
+        ),
+        "victory" if result.victory else "neutral" if result.draw else "defeat",
+    )
+
+
+__all__ = [
+    "build_exploration_battle_report",
+    "build_exploration_battle_report_summary",
+]

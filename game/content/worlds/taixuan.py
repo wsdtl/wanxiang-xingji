@@ -14,6 +14,7 @@ from ..catalog.world import (
 )
 from ..world_skins import CULTIVATION_SKIN_ID
 from .layouts import TAIXUAN_LAYOUT
+from .models import OfficialWorldBundle
 
 
 TAIXUAN_WORLD = WorldDefinition(
@@ -50,6 +51,15 @@ TAIXUAN_LOCATION_BINDINGS = (
         for value in CULTIVATION_PEOPLE
     ),
 )
+TAIXUAN_WORLD_BUNDLE = OfficialWorldBundle(
+    TAIXUAN_WORLD,
+    tuple(TAIXUAN_LAYOUT.values()),
+    TAIXUAN_LOCATION_BINDINGS,
+)
 
 
-__all__ = ["TAIXUAN_LOCATION_BINDINGS", "TAIXUAN_WORLD"]
+__all__ = [
+    "TAIXUAN_LOCATION_BINDINGS",
+    "TAIXUAN_WORLD",
+    "TAIXUAN_WORLD_BUNDLE",
+]

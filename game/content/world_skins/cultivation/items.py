@@ -79,7 +79,7 @@ CULTIVATION_ITEM_ENTRIES = {
     COMPANION_EXPERIENCE_ITEM_ID: SkinEntry(
         name="同契灵简",
         description="为指定伙伴补充成长经验，单次最多增加 30,000 点。",
-        icon="🪶",
+        icon="💠",
     ),
     SMALL_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="服用小还丹"),
     MEDIUM_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="服用中还丹"),

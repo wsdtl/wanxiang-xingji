@@ -13,7 +13,8 @@ from game.core.gameplay import (
     ResourceCost,
 )
 
-from .stats import BASE_CONTROLS, BASE_DAMAGE_TYPES, PHYSICAL_DAMAGE_ID
+from .stats import BASE_CONTROLS as BASE_CONTROLS
+from .stats import BASE_DAMAGE_TYPES, PHYSICAL_DAMAGE_ID
 from game.core.gameplay.character import (
     COMBAT_ATTACK,
     HEALTH_CURRENT,

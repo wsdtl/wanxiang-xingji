@@ -10,14 +10,18 @@ from typing import Mapping
 @dataclass(frozen=True)
 class EnemyBehaviorBlueprint:
     key: str
-    source_weapon_key: str
+    mechanic_recipe_id: str
     attribute_multipliers: Mapping[str, float] = field(default_factory=dict)
     threat_bonus: float = 0.0
     incompatible_keys: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        if not self.key.strip() or not self.source_weapon_key.strip():
+        if not self.key.strip() or not self.mechanic_recipe_id.strip():
             raise ValueError("敌人行为蓝图缺少稳定键")
+        recipe_id = self.mechanic_recipe_id.strip()
+        if not recipe_id.startswith("combat.recipe."):
+            recipe_id = f"combat.recipe.{recipe_id}"
+        object.__setattr__(self, "mechanic_recipe_id", recipe_id)
         object.__setattr__(
             self,
             "attribute_multipliers",
@@ -114,13 +118,6 @@ STELLAR_RING_PARTY_BOSS_KEYS = (
 )
 
 
-DISASTER_TEMPLATE_KEYS = (
-    "star_eater", "realm_breaker", "soul_ferryman", "underworld_king",
-    "celestial_rebel", "chaos_witch",
-    "storm_dragon", "winter_king", "ash_phoenix", "final_guardian",
-)
-
-
 def _boss_blueprints(keys: tuple[str, ...]) -> tuple[EnemyIdentityBlueprint, ...]:
     return tuple(EnemyIdentityBlueprint(key, True) for key in keys)
 
@@ -134,25 +131,18 @@ PARTY_BOSS_BLUEPRINTS = (
     *MAGIC_PARTY_BOSS_BLUEPRINTS,
     *STELLAR_RING_PARTY_BOSS_BLUEPRINTS,
 )
-
-
-_ALL_BOSS_TEMPLATE_KEYS = (
-    *PERSONAL_BOSS_KEYS,
-    *CULTIVATION_PARTY_BOSS_KEYS,
-    *MAGIC_PARTY_BOSS_KEYS,
-    *STELLAR_RING_PARTY_BOSS_KEYS,
-    *DISASTER_TEMPLATE_KEYS,
-)
-BOSS_TEMPLATE_KEYS = tuple(_ALL_BOSS_TEMPLATE_KEYS)
+BOSS_BLUEPRINTS = (*PERSONAL_BOSS_BLUEPRINTS, *PARTY_BOSS_BLUEPRINTS)
 
 
 def _validate() -> None:
-    if len(BEHAVIOR_BLUEPRINTS) != 32:
-        raise ValueError("首批敌人行为模板必须正好包含 32 项")
-    if len(REGULAR_ENEMY_BLUEPRINTS) != 60:
-        raise ValueError("首批敌人身份必须包含 60 个普通身份")
-    if len(PERSONAL_BOSS_BLUEPRINTS) != 30 or len(PARTY_BOSS_BLUEPRINTS) != 30:
-        raise ValueError("正式个人首领必须为 30 个，组队首领必须为 30 个")
+    for values, label in (
+        (BEHAVIOR_BLUEPRINTS, "敌人行为模板"),
+        (REGULAR_ENEMY_BLUEPRINTS, "普通敌人身份"),
+        (PERSONAL_BOSS_BLUEPRINTS, "个人首领身份"),
+        (PARTY_BOSS_BLUEPRINTS, "组队首领身份"),
+    ):
+        if not values:
+            raise ValueError(f"正式{label}不能为空")
     identity_keys = [
         value.key
         for value in (
@@ -163,8 +153,6 @@ def _validate() -> None:
     ]
     if len(identity_keys) != len(set(identity_keys)):
         raise ValueError("敌人身份稳定键不能重复")
-    if len(BOSS_TEMPLATE_KEYS) != len(set(BOSS_TEMPLATE_KEYS)):
-        raise ValueError("首领战斗模板键不能重复或缺失")
 
 
 _validate()
@@ -172,10 +160,9 @@ _validate()
 
 __all__ = [
     "BEHAVIOR_BLUEPRINTS",
-    "BOSS_TEMPLATE_KEYS",
+    "BOSS_BLUEPRINTS",
     "CULTIVATION_PARTY_BOSS_BLUEPRINTS",
     "CULTIVATION_PARTY_BOSS_KEYS",
-    "DISASTER_TEMPLATE_KEYS",
     "EnemyBehaviorBlueprint",
     "EnemyIdentityBlueprint",
     "MAGIC_PARTY_BOSS_BLUEPRINTS",

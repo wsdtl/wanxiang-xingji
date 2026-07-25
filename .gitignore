@@ -24,6 +24,4 @@ certs/*.crt
 !certs/*_bundle.pem
 
 launch/log/*
-!launch/log/.gitkeep
 launch/runtime/*
-!launch/runtime/.gitkeep

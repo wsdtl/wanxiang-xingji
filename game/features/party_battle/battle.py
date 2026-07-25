@@ -10,18 +10,15 @@ from game.content.catalog.social import (
 )
 from game.core.gameplay import (
     COMBAT_SPEED,
-    ENEMY_RANK_BOSS_ID,
     HEALTH_CURRENT,
     HEALTH_MAXIMUM,
     SPIRIT_CURRENT,
-    SPIRIT_MAXIMUM,
     BattleEngine,
     BattleParticipant,
     BattleRules,
     BattleSession,
     BattleStatus,
     BattleTrace,
-    EnemyEncounterInstance,
     GameplayExecutor,
     RuleContext,
     RuleEvent,

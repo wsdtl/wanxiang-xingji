@@ -13,7 +13,6 @@ from game.core.gameplay import (
     InventoryTransaction,
     ItemCatalog,
     ItemStack,
-    RuleEvent,
     RuleOutcome,
     RuleViolation,
 )

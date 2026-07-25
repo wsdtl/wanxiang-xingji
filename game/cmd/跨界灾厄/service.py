@@ -22,7 +22,7 @@ from game.rules.disaster import (
     DimensionalDisasterStatus,
 )
 from game.rules.activity import GlobalActivityPresentation, register_global_activity
-from launch import C, config, logger
+from launch import config
 from launch.adapter import current_message_context
 from launch.paths import public_url
 from message import Action, DocumentMessage, M

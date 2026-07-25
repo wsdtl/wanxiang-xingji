@@ -5,6 +5,7 @@ from datetime import datetime
 from hashlib import sha256
 
 from game.content.catalog import CHARACTER_LEVEL_PROGRESSION_ID
+from game.features.errors import StalePreparationError
 from game.core.gameplay import (
     HEALTH_CURRENT,
     HEALTH_MAXIMUM,
@@ -57,7 +58,10 @@ from .models import (
     ExplorationVictoryFact,
     ExplorationStorageKinds,
 )
-from .reporting import build_exploration_battle_report
+from .reporting import (
+    build_exploration_battle_report,
+    build_exploration_battle_report_summary,
+)
 from .rewards import ExplorationRewardFactory, available_backpack_space
 
 
@@ -100,6 +104,22 @@ class _BatchRewards:
     trophy_value: int = 0
     references: tuple[ExplorationRewardReference, ...] = ()
     capacity_full: bool = False
+
+
+@dataclass(frozen=True)
+class _PreparedBatch:
+    inputs: _BatchInputs
+    simulation: _BatchSimulation
+    context: RuleContext
+    report: object | None
+
+
+@dataclass(frozen=True)
+class _PreparedBatchLimit:
+    state: ExplorationState
+
+
+_STALE_BATCH = object()
 
 
 class ExplorationSettlementService:
@@ -208,7 +228,29 @@ class ExplorationSettlementService:
         *,
         logical_time: datetime,
     ) -> ExplorationBatchResult | None:
-        with self.database.unit_of_work() as uow:
+        for _ in range(2):
+            prepared = self._prepare_next(character_id, logical_time=logical_time)
+            if prepared is None:
+                return None
+            if isinstance(prepared, _PreparedBatchLimit):
+                result = self._commit_batch_limit(
+                    character_id,
+                    prepared.state,
+                    logical_time,
+                )
+            else:
+                result = self._commit_prepared_batch(character_id, prepared)
+            if result is not _STALE_BATCH:
+                return result
+        raise StalePreparationError("探险批次准备结果连续过期，请重试")
+
+    def _prepare_next(
+        self,
+        character_id: str,
+        *,
+        logical_time: datetime,
+    ) -> _PreparedBatch | _PreparedBatchLimit | None:
+        with self.database.unit_of_work(write=False) as uow:
             state = self.snapshots.load(
                 uow, EXPLORATION_AGGREGATE, character_id, ExplorationState
             )
@@ -219,32 +261,104 @@ class ExplorationSettlementService:
             ):
                 return None
             if state.batch_index >= MAX_EXPLORATION_BATCHES:
-                stopped = stop_exploration(
-                    state,
-                    ExplorationStopReason.BATCH_LIMIT,
-                    logical_time=logical_time,
-                )
-                self.snapshots.update(
-                    uow,
-                    EXPLORATION_AGGREGATE,
-                    character_id,
-                    state,
-                    stopped,
-                    logical_time,
-                )
-                uow.commit()
-                return None
-            resolved_at = state.next_batch_at
-            batch_index = state.batch_index + 1
-            context = _context(
-                f"{state.session_id}:batch:{batch_index}",
-                resolved_at,
-            )
+                return _PreparedBatchLimit(state)
             inputs = self._load_batch_inputs(uow, state, character_id)
-            simulation = self._simulate_batch(inputs, batch_index, context)
+        batch_index = state.batch_index + 1
+        context = _context(
+            f"{state.session_id}:batch:{batch_index}",
+            state.next_batch_at,
+        )
+        simulation = self._simulate_batch(inputs, batch_index, context)
+        report = None
+        if simulation.battle is not None:
+            provisional_result = self._batch_result(
+                simulation,
+                _BatchRewards(),
+                resolved_at=context.logical_time,
+                health_after=simulation.health_after,
+                spirit_after=simulation.spirit_after,
+                medicines_used=(),
+            )
+            provisional_state = record_batch(
+                state,
+                provisional_result,
+                stop_reason=self._stop_reason(simulation, batch_index),
+            )
+            report = self.battle_reports.prepare_capture(
+                build_exploration_battle_report(
+                    self.content,
+                    self.battle_reports.builder,
+                    state,
+                    provisional_state,
+                    inputs.character,
+                    inputs.character_world,
+                    inputs.inventory,
+                    inputs.loadout,
+                    inputs.inscription_preference,
+                    inputs.roster,
+                    simulation.battle,
+                    context.trace_id,
+                    inputs.view,
+                )
+            )
+        return _PreparedBatch(inputs, simulation, context, report)
+
+    def _commit_batch_limit(
+        self,
+        character_id: str,
+        expected: ExplorationState,
+        logical_time: datetime,
+    ):
+        with self.database.unit_of_work() as uow:
+            current = self.snapshots.load(
+                uow,
+                EXPLORATION_AGGREGATE,
+                character_id,
+                ExplorationState,
+            )
+            if current != expected:
+                return _STALE_BATCH
+            stopped = stop_exploration(
+                current,
+                ExplorationStopReason.BATCH_LIMIT,
+                logical_time=logical_time,
+            )
+            self.snapshots.update(
+                uow,
+                EXPLORATION_AGGREGATE,
+                character_id,
+                current,
+                stopped,
+                logical_time,
+            )
+            uow.commit()
+            return None
+
+    def _commit_prepared_batch(
+        self,
+        character_id: str,
+        prepared: _PreparedBatch,
+    ):
+        inputs = prepared.inputs
+        simulation = prepared.simulation
+        context = prepared.context
+        resolved_at = inputs.state.next_batch_at
+        batch_index = inputs.state.batch_index + 1
+        with self.database.unit_of_work() as uow:
+            state = self.snapshots.load(
+                uow,
+                EXPLORATION_AGGREGATE,
+                character_id,
+                ExplorationState,
+            )
+            if state != inputs.state:
+                return _STALE_BATCH
+            current_inputs = self._load_batch_inputs(uow, state, character_id)
+            if not self._same_batch_inputs(inputs, current_inputs):
+                return _STALE_BATCH
             rewards = self._settle_rewards_in_uow(
                 uow,
-                inputs,
+                current_inputs,
                 simulation,
                 context,
             )
@@ -254,41 +368,29 @@ class ExplorationSettlementService:
                 return None
             after_battle, medicines_used = self._apply_battle_resources_in_uow(
                 uow,
-                inputs,
+                current_inputs,
                 simulation,
                 context,
             )
-            result = ExplorationBatchResult(
-                plan=simulation.plan,
+            result = self._batch_result(
+                simulation,
+                rewards,
                 resolved_at=resolved_at,
-                victory=simulation.victory,
-                draw=simulation.draw,
                 health_after=after_battle.resources[HEALTH_CURRENT],
                 spirit_after=after_battle.resources[SPIRIT_CURRENT],
-                character_experience=rewards.character_experience,
-                weapon_experience=rewards.weapon_experience,
-                companion_experience=rewards.companion_experience,
-                weapon_drops=rewards.weapon_drops,
-                equipment_drops=rewards.equipment_drops,
-                trophy_drops=rewards.trophy_drops,
-                medicine_drops=rewards.medicine_drops,
-                draw_ticket_drops=rewards.draw_ticket_drops,
-                trophy_value=rewards.trophy_value,
-                rewards=rewards.references,
-                medicines_used=tuple(medicines_used),
+                medicines_used=medicines_used,
             )
             result = self._observe_victory_in_uow(
                 uow,
-                inputs,
+                current_inputs,
                 simulation,
                 result,
             )
-            reason = None
-            if simulation.plan.encounter is not None and not simulation.victory:
-                reason = ExplorationStopReason.DEFEATED
-            elif batch_index >= MAX_EXPLORATION_BATCHES:
-                reason = ExplorationStopReason.BATCH_LIMIT
-            next_state = record_batch(state, result, stop_reason=reason)
+            next_state = record_batch(
+                state,
+                result,
+                stop_reason=self._stop_reason(simulation, batch_index),
+            )
             self.snapshots.update(
                 uow,
                 EXPLORATION_AGGREGATE,
@@ -297,27 +399,83 @@ class ExplorationSettlementService:
                 next_state,
                 resolved_at,
             )
-            if simulation.battle is not None:
-                self.battle_reports.capture_in_uow(
+            if prepared.report is not None:
+                self.battle_reports.capture_prepared_in_uow(
                     uow,
-                    build_exploration_battle_report(
-                        self.content,
-                        self.battle_reports.builder,
-                        state,
-                        next_state,
-                        inputs.character,
-                        inputs.character_world,
-                        inputs.inventory,
-                        inputs.loadout,
-                        inputs.inscription_preference,
-                        inputs.roster,
-                        simulation.battle,
-                        context.trace_id,
-                        inputs.view,
+                    prepared.report.with_summary(
+                        build_exploration_battle_report_summary(
+                            next_state,
+                            current_inputs.view,
+                        )
                     ),
                 )
             uow.commit()
             return result
+
+    @staticmethod
+    def _same_batch_inputs(left: _BatchInputs, right: _BatchInputs) -> bool:
+        return (
+            left.state,
+            left.character,
+            left.character_world,
+            left.inventory,
+            left.loadout,
+            left.roster,
+            left.settings,
+            left.inscription_preference,
+            left.character_level,
+        ) == (
+            right.state,
+            right.character,
+            right.character_world,
+            right.inventory,
+            right.loadout,
+            right.roster,
+            right.settings,
+            right.inscription_preference,
+            right.character_level,
+        )
+
+    @staticmethod
+    def _stop_reason(
+        simulation: _BatchSimulation,
+        batch_index: int,
+    ) -> ExplorationStopReason | None:
+        if simulation.plan.encounter is not None and not simulation.victory:
+            return ExplorationStopReason.DEFEATED
+        if batch_index >= MAX_EXPLORATION_BATCHES:
+            return ExplorationStopReason.BATCH_LIMIT
+        return None
+
+    @staticmethod
+    def _batch_result(
+        simulation: _BatchSimulation,
+        rewards: _BatchRewards,
+        *,
+        resolved_at: datetime,
+        health_after: float,
+        spirit_after: float,
+        medicines_used,
+    ) -> ExplorationBatchResult:
+        return ExplorationBatchResult(
+            plan=simulation.plan,
+            resolved_at=resolved_at,
+            victory=simulation.victory,
+            draw=simulation.draw,
+            health_after=health_after,
+            spirit_after=spirit_after,
+            character_experience=rewards.character_experience,
+            weapon_experience=rewards.weapon_experience,
+            companion_experience=rewards.companion_experience,
+            weapon_drops=rewards.weapon_drops,
+            equipment_drops=rewards.equipment_drops,
+            trophy_drops=rewards.trophy_drops,
+            medicine_drops=rewards.medicine_drops,
+            draw_ticket_drops=rewards.draw_ticket_drops,
+            trophy_value=rewards.trophy_value,
+            rewards=rewards.references,
+            medicines_used=tuple(medicines_used),
+        )
 
     def _load_batch_inputs(
         self,

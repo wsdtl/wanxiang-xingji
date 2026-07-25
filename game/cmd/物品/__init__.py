@@ -6,7 +6,7 @@ from launch.adapter import Depends
 
 from ..command import GameCommand, HelpSpec
 from ..dependencies import current_character, current_character_overview
-from . import service
+from . import service, use
 
 
 @GameCommand.handler(
@@ -134,7 +134,7 @@ async def use_item(
 ) -> None:
     """使用当前角色持有的可消耗物品或套装图纸。"""
 
-    await service.use_item(message, current)
+    await use.use_item(message, current)
 
 
 __all__ = []

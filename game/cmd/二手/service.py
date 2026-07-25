@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from math import ceil
 
 from game.app import CharacterOverview, CharacterOverviewResult, current_game_services
@@ -16,13 +15,11 @@ from game.content.presentation import (
 from game.core.gameplay import (
     STANDARD_LOADOUT_SLOT_ORDER,
     ItemInstance,
-    ItemStack,
     equipment_state_from_instance,
     weapon_state_from_instance,
 )
 from game.rules.economy import quote_market_tax
 from game.rules.item import resolve_asset_reference
-from launch import C, logger
 from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time

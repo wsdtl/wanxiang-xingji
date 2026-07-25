@@ -20,7 +20,6 @@ from game.content.catalog.item import (
     LARGE_SPIRIT_MEDICINE_ITEM_ID,
     MEDIUM_HEALTH_MEDICINE_ITEM_ID,
     MEDIUM_SPIRIT_MEDICINE_ITEM_ID,
-    PARTY_BOSS_TROPHY_ITEM_IDS,
 )
 from game.content.catalog.weapon.mechanics import WEAPON_MAXIMUM_LEVEL_TABLE
 from game.core.gameplay import (
@@ -60,6 +59,7 @@ class PartyBattleRewardBuild:
 class PartyBattleRewardFactory:
     def __init__(self, content) -> None:
         self.content = content
+        self.party_boss_trophy_item_ids = content.party_boss_trophy_item_ids
         catalog = content.catalog
         self.weapon_generator = WeaponInstanceGenerator(
             catalog.weapons,
@@ -202,10 +202,14 @@ class PartyBattleRewardFactory:
             weapon_asset_id if weapon_experience > 0 else None,
         )
 
-    @staticmethod
-    def _stack_definition(award_id: str, enemy_definition_id: str) -> str:
+    def _stack_definition(self, award_id: str, enemy_definition_id: str) -> str:
         if award_id == AWARD_PARTY_BOSS_TROPHY_ID:
-            return PARTY_BOSS_TROPHY_ITEM_IDS[enemy_definition_id]
+            try:
+                return self.party_boss_trophy_item_ids[enemy_definition_id]
+            except KeyError as exc:
+                raise KeyError(
+                    f"组队首领没有登记战利品：{enemy_definition_id}"
+                ) from exc
         if award_id == AWARD_DRAW_TICKET_ID:
             return DRAW_TICKET_ITEM_ID
         if award_id in _MEDICINE_AWARDS:

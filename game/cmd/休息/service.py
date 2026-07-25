@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from game.app import CurrentCharacterResult, current_game_services
 from game.content.catalog.character import (
@@ -12,7 +11,6 @@ from game.content.catalog.character import (
     REST_MINIMUM_SECONDS,
 )
 from game.core.gameplay import HEALTH_CURRENT, SPIRIT_CURRENT
-from launch import C, logger
 from launch.adapter import current_message_context
 from message import Action, DocumentMessage, M
 

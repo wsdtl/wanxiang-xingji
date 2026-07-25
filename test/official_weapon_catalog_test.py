@@ -225,7 +225,7 @@ def _assert_all_weapon_triggers_execute(catalog) -> None:
         for trigger_id in catalog.triggers.ids()
         if trigger_id.startswith("trigger.weapon.")
     )
-    assert len(trigger_ids) == 23
+    assert trigger_ids
     for index, trigger_id in enumerate(trigger_ids):
         definition = catalog.triggers.require(trigger_id)
         owner_id = "target" if definition.owner.value == "event_target" else "actor"

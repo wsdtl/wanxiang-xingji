@@ -15,7 +15,6 @@ from game.core.gameplay import (
     WEAPON_SLOT_ID,
     AbilityDefinition,
     BattleAbilityTargeting,
-    AttributeGrant,
     AttributeMagnitude,
     ChangeResource,
     ChooseOne,
@@ -61,7 +60,6 @@ from game.core.gameplay import (
     ResourceValueMode,
     StackingPolicy,
     SumMagnitude,
-    Tag,
     TagSet,
     TargetConstraintDefinition,
     TargetConstraintKind,
@@ -113,6 +111,7 @@ from ..combat.stats import (
 )
 from .blueprints import WEAPON_BLUEPRINTS, WeaponBlueprint
 from .balance import estimate_weapon_value
+from .registry import OFFICIAL_WEAPON_MECHANICS
 
 
 WEAPON_MARK_EFFECT_ID = "effect.weapon.shared_mark"
@@ -174,28 +173,12 @@ def _ability_targeting(
     blueprint: WeaponBlueprint,
     ability_id: str,
 ) -> BattleAbilityTargeting:
-    selectors = {
-        "single": frozenset({"target.enemy.explicit", "target.enemy.first"}),
-        "lowest": frozenset({"target.enemy.lowest_health"}),
-        "random": frozenset({"target.enemy.random"}),
-        "adjacent": frozenset({"target.enemy.adjacent"}),
-        "all": frozenset({"target.enemy.all"}),
-    }
-    maximum_targets = {
-        "single": 1,
-        "lowest": 1,
-        "random": 1,
-        "adjacent": 3,
-        "all": None,
-    }
-    try:
-        return BattleAbilityTargeting(
-            ability_id,
-            selectors[blueprint.targeting],
-            maximum_targets[blueprint.targeting],
-        )
-    except KeyError as error:
-        raise ValueError(f"未知武器目标模式：{blueprint.targeting}") from error
+    targeting = OFFICIAL_WEAPON_MECHANICS.resolve(blueprint).targeting
+    return BattleAbilityTargeting(
+        ability_id,
+        targeting.allowed_selectors,
+        targeting.maximum_targets,
+    )
 
 
 def _damage(
@@ -366,7 +349,9 @@ def _base_damage_operations(blueprint: WeaponBlueprint) -> tuple[object, ...]:
                 _attack(power),
             ),
         )
-    return (_damage(f"operation.weapon.{key}.strike", _attack(power)),)
+    if blueprint.primary in {"heavy", "swift", "mark"}:
+        return (_damage(f"operation.weapon.{key}.strike", _attack(power)),)
+    raise ValueError(f"主机制已注册但缺少执行编译器：{blueprint.primary}")
 
 
 def _status_content(
@@ -601,7 +586,7 @@ def _support_effect(
         target, duration, tags = EffectTarget.TARGET, 2, TagSet.of("status.negative", "status.taunted")
         operations = (GrantTargetConstraint(f"operation.weapon.{key}.taunt", TAUNT_CONSTRAINT_ID),)
     else:
-        return (), ()
+        raise ValueError(f"辅助机制已注册但缺少执行编译器：{support}")
     stacking = StackingPolicy.STACK if effect_id in {WEAPON_MARK_EFFECT_ID, WEAPON_CHARGE_EFFECT_ID} else StackingPolicy.REFRESH
     maximum = 5 if stacking is StackingPolicy.STACK else 1
     definition = EffectDefinition(
@@ -794,6 +779,7 @@ def _quality_profiles() -> dict[str, WeaponQualityProfile]:
 
 
 def build_weapon_mechanic_content() -> WeaponMechanicContent:
+    OFFICIAL_WEAPON_MECHANICS.validate_blueprints(WEAPON_BLUEPRINTS)
     effects: dict[str, EffectDefinition] = {
         WEAPON_MARK_EFFECT_ID: EffectDefinition(
             WEAPON_MARK_EFFECT_ID,

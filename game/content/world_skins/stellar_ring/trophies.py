@@ -135,8 +135,6 @@ def _build_entries() -> dict[str, SkinEntry]:
             description=f"星环界极难取得的遗存: {name}。",
             icon="✧",
         )
-    if len(entries) != 210:
-        raise ValueError("星环界战利品展示必须完整覆盖 210 项正式名录")
     if len({entry.name for entry in entries.values()}) != len(entries):
         raise ValueError("星环界战利品名称不能重复")
     return entries

@@ -10,7 +10,6 @@ import json
 from game.content.catalog.economy import (
     ECONOMY_POLICY_ID,
     ECONOMY_POLICY_VERSION,
-    MARKET_ITEM_POLICIES,
     MARKET_LISTING_LIFETIME_SECONDS,
     MARKET_MAX_SELLER_PRICE_BPS,
     MARKET_MIN_PRICE_BPS,
@@ -89,6 +88,8 @@ class EconomyFeature:
         inventory_engine,
         ledger_engine,
         storage: EconomyStorageKinds,
+        *,
+        market_item_policies,
     ) -> None:
         self.database = database
         self.content = content
@@ -96,6 +97,7 @@ class EconomyFeature:
         self.inventory_engine = inventory_engine
         self.ledger_engine = ledger_engine
         self.storage = storage
+        self.market_item_policies = market_item_policies
         self.prices = GearPriceService(content)
 
     def initialize(self, *, logical_time: datetime) -> MarketState:
@@ -847,10 +849,10 @@ class EconomyFeature:
             raise ValueError("上架价格必须是大于 0 的整数")
         inventory, loadout = self._inventory_loadout(uow, seller_id)
         asset = inventory.asset(asset_id)
-        definition = self.content.items.require(asset.definition_id)
+        self.content.items.require(asset.definition_id)
         if isinstance(asset, ItemInstance):
             self._require_available_unassigned(inventory, loadout, asset.id)
-        policy = MARKET_ITEM_POLICIES.get(str(asset.definition_id))
+        policy = self.market_item_policies.get(str(asset.definition_id))
         if isinstance(asset, ItemStack):
             if policy is None:
                 raise ValueError("该堆叠物品不能进入归航市场")

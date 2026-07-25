@@ -14,6 +14,7 @@ from ..catalog.world import (
 )
 from ..world_skins import MAGIC_SKIN_ID
 from .layouts import MAGIC_LAYOUT
+from .models import OfficialWorldBundle
 
 
 MAGIC_WORLD = WorldDefinition(
@@ -50,6 +51,15 @@ MAGIC_LOCATION_BINDINGS = (
         for value in MAGIC_PEOPLE
     ),
 )
+MAGIC_WORLD_BUNDLE = OfficialWorldBundle(
+    MAGIC_WORLD,
+    tuple(MAGIC_LAYOUT.values()),
+    MAGIC_LOCATION_BINDINGS,
+)
 
 
-__all__ = ["MAGIC_LOCATION_BINDINGS", "MAGIC_WORLD"]
+__all__ = [
+    "MAGIC_LOCATION_BINDINGS",
+    "MAGIC_WORLD",
+    "MAGIC_WORLD_BUNDLE",
+]

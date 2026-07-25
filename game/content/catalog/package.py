@@ -38,12 +38,11 @@ from .enemy import (
     ENCOUNTER_SCOPES,
     ENEMY_BEHAVIOR_CONTENT,
     ENEMY_DEFINITIONS,
-    ENEMY_DISPLAY_CONTENT_IDS,
-    ENEMY_ENCOUNTERS,
+    PERSONAL_ENEMY_ENCOUNTERS,
+    SHARED_ENEMY_DISPLAY_CONTENT_IDS,
     ENEMY_LOOT_TABLES,
     ENEMY_RANKS,
     ENEMY_REWARD_PROFILES,
-    PARTY_BOSS_ENEMIES,
     PARTY_BOSS_LEVEL_PROFILE,
     PARTY_BOSS_REWARD_PROFILE,
     STANDARD_ENEMY_LEVEL_PROFILE,
@@ -74,7 +73,6 @@ from .disaster import (
     DIMENSIONAL_DISASTER_CYCLES,
 )
 from .disaster.combat import (
-    DISASTER_ENEMY_DEFINITIONS,
     DISASTER_ENEMY_LEVEL_PROFILE,
     DISASTER_ENEMY_REWARD_PROFILE,
 )
@@ -92,8 +90,7 @@ from .weapon.definitions import (
 from .weapon.mechanics import WEAPON_MECHANIC_CONTENT
 from .world.definitions import (
     LOCATION_DISPLAY_DEFINITIONS,
-    WORLD_DISPLAY_CONTENT_IDS,
-    WORLD_SPACES,
+    SHARED_WORLD_DISPLAY_CONTENT_IDS,
 )
 from .social import (
     PARTY_INVITATION_REQUEST,
@@ -193,12 +190,10 @@ CATALOG_PACKAGE = ContentPackage(
     ),
     enemies=(
         *ENEMY_DEFINITIONS,
-        *PARTY_BOSS_ENEMIES,
-        *DISASTER_ENEMY_DEFINITIONS,
         *BUILD_TRIAL_TARGETS,
     ),
     encounter_scopes=ENCOUNTER_SCOPES,
-    enemy_encounters=ENEMY_ENCOUNTERS,
+    enemy_encounters=PERSONAL_ENEMY_ENCOUNTERS,
     items=OFFICIAL_ITEMS,
     weapons=(STARTER_WEAPON, *GENERATED_WEAPONS),
     equipment_families=EQUIPMENT_CATALOG_CONTENT.families,
@@ -245,7 +240,6 @@ CATALOG_PACKAGE = ContentPackage(
     target_constraints=WEAPON_MECHANIC_CONTENT.constraints,
     loot_tables=(*ENEMY_LOOT_TABLES, DRAW_CATALOG_CONTENT.loot_table),
     draw_pools=(DRAW_CATALOG_CONTENT.pool,),
-    world_spaces=WORLD_SPACES,
     social_request_types=(
         SPARRING_REQUEST,
         PARTY_INVITATION_REQUEST,
@@ -263,7 +257,7 @@ CATALOG_PACKAGE = ContentPackage(
         | WEAPON_DISPLAY_CONTENT_IDS
         | EQUIPMENT_CATALOG_CONTENT.display_ids
         | EQUIPMENT_PROPERTY_CONTENT.display_ids
-        | ENEMY_DISPLAY_CONTENT_IDS
+        | SHARED_ENEMY_DISPLAY_CONTENT_IDS
         | {DRAW_TICKET_ITEM_ID}
         | {BREAKTHROUGH_TOKEN_ITEM_ID}
         | {str(value.id) for value in SPECIAL_ITEMS}
@@ -271,7 +265,7 @@ CATALOG_PACKAGE = ContentPackage(
         | {str(value.id) for value in EQUIPMENT_SET_BLUEPRINT_ITEMS}
         | {REST_ACTION_ID}
         | {str(value.id) for value in COMPANION_DISPLAY_DEFINITIONS}
-        | WORLD_DISPLAY_CONTENT_IDS
+        | SHARED_WORLD_DISPLAY_CONTENT_IDS
     ),
 )
 

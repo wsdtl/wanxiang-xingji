@@ -22,7 +22,6 @@ from .trade import (
     ITEM_RECYCLE_COMPONENT_ID,
     ITEM_RECYCLE_COMPONENT_TYPE,
     ItemRecycleYield,
-    ItemRecycleValue,
     StackItemRecycleYield,
 )
 from .exchange import *

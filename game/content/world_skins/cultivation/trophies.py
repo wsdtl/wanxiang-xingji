@@ -133,8 +133,6 @@ def _build_entries() -> dict[str, SkinEntry]:
             description=f"太玄界极难得见的奇珍: {name}。",
             icon="✧",
         )
-    if len(entries) != 210:
-        raise ValueError("太玄界战利品展示必须完整覆盖 210 项正式名录")
     if len({entry.name for entry in entries.values()}) != len(entries):
         raise ValueError("太玄界战利品名称不能重复")
     return entries

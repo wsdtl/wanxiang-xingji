@@ -8,13 +8,11 @@ from game.core.gameplay import (
 )
 
 from ..catalog import CATALOG_PACKAGE_ID
-from .cultivation import CULTIVATION_SKIN, CULTIVATION_SKIN_ID
-from .magic import MAGIC_SKIN, MAGIC_SKIN_ID
-from .stellar_ring import STELLAR_RING_SKIN, STELLAR_RING_SKIN_ID
+from ..extensions import OFFICIAL_WORLD_EXTENSIONS
 
 
 WORLD_SKIN_PACKAGE_ID = "content.world_skins.official"
-OFFICIAL_SKIN_IDS = (CULTIVATION_SKIN_ID, MAGIC_SKIN_ID, STELLAR_RING_SKIN_ID)
+OFFICIAL_SKIN_IDS = tuple(value.skin.id for value in OFFICIAL_WORLD_EXTENSIONS)
 
 
 WORLD_SKIN_PACKAGE = ContentPackage(
@@ -29,7 +27,7 @@ WORLD_SKIN_PACKAGE = ContentPackage(
             ),
         ),
     ),
-    skin_packs=(CULTIVATION_SKIN, MAGIC_SKIN, STELLAR_RING_SKIN),
+    skin_packs=tuple(value.skin for value in OFFICIAL_WORLD_EXTENSIONS),
 )
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from game.app import CharacterOverview, CharacterOverviewResult, current_game_services
 from game.content import CHARACTER_LEVEL_PROGRESSION_ID, LOADOUT_PRESET_IDS

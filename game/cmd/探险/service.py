@@ -22,7 +22,7 @@ from game.rules.exploration import (
     ExplorationStopReason,
 )
 from game.rules.item import asset_reference
-from launch import C, config, logger
+from launch import config
 from launch.paths import public_url
 from message import Action, DocumentMessage, M
 

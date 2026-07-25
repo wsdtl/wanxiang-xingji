@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -54,6 +56,10 @@ from game.content.catalog.world import (  # noqa: E402
 from game.content.catalog.item import TROPHY_ITEMS  # noqa: E402
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.core.gameplay import SeededRandomSource  # noqa: E402
+from game.rules.character import (  # noqa: E402
+    CHARACTER_SETTINGS_AGGREGATE,
+    CharacterSettingsState,
+)
 from game.rules.encounter import EnemyEncounterGenerator  # noqa: E402
 from game.rules.exploration import (  # noqa: E402
     EXPLORATION_AGGREGATE,
@@ -237,29 +243,102 @@ def _assert_persisted_loop() -> None:
         assert blocked.status == "main_action_occupied"
 
         before_failure = _persistent_state(services)
+        simulation_started = Event()
+        release_simulation = Event()
+        original_simulate = services.exploration.settlement._simulate_batch
+
+        def blocking_simulate(*args, **kwargs):
+            simulation_started.set()
+            if not release_simulation.wait(timeout=5):
+                raise TimeoutError("测试未及时释放探险模拟")
+            return original_simulate(*args, **kwargs)
+
+        def unrelated_write() -> bool:
+            with services.database.unit_of_work() as uow:
+                uow.insert_transaction(
+                    "test:exploration:unrelated-write",
+                    "unrelated-fingerprint",
+                    character_id,
+                    "{}",
+                    TIME.isoformat(),
+                )
+                uow.commit()
+            return True
+
         with patch.object(
             services.battle_reports,
-            "capture_in_uow",
+            "capture_prepared_in_uow",
             side_effect=RuntimeError("injected exploration report failure"),
+        ), patch.object(
+            services.exploration.settlement,
+            "_simulate_batch",
+            side_effect=blocking_simulate,
         ):
-            try:
-                services.exploration.settle_due(
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                settlement = executor.submit(
+                    services.exploration.settle_due,
                     character_id,
                     logical_time=TIME + timedelta(seconds=EXPLORATION_BATCH_SECONDS),
                 )
-            except RuntimeError as exc:
-                assert str(exc) == "injected exploration report failure"
-            else:
-                raise AssertionError("战报失败应中止整批探险结算")
+                assert simulation_started.wait(timeout=5)
+                writer = executor.submit(unrelated_write)
+                try:
+                    assert writer.result(timeout=2)
+                    before_failure = _persistent_state(services)
+                finally:
+                    release_simulation.set()
+                try:
+                    settlement.result(timeout=10)
+                except RuntimeError as exc:
+                    assert str(exc) == "injected exploration report failure"
+                else:
+                    raise AssertionError("战报失败应中止整批探险结算")
         assert _persistent_state(services) == before_failure
         assert services.battle_reports.reference(
             exploration_battle_report_id(started.state.session_id)
         ) is None
 
-        settled = services.exploration.settle_due(
-            character_id,
-            logical_time=TIME + timedelta(seconds=EXPLORATION_BATCH_SECONDS),
-        )
+        simulations = 0
+        original_simulate = services.exploration.settlement._simulate_batch
+
+        def make_first_result_stale(*args, **kwargs):
+            nonlocal simulations
+            simulations += 1
+            result = original_simulate(*args, **kwargs)
+            if simulations == 1:
+                snapshots = services.character_creation.snapshots
+                with services.database.unit_of_work() as uow:
+                    settings = snapshots.require(
+                        uow,
+                        CHARACTER_SETTINGS_AGGREGATE,
+                        character_id,
+                        CharacterSettingsState,
+                    )
+                    snapshots.update(
+                        uow,
+                        CHARACTER_SETTINGS_AGGREGATE,
+                        character_id,
+                        settings,
+                        replace(
+                            settings,
+                            mood_header_enabled=not settings.mood_header_enabled,
+                            revision=settings.revision + 1,
+                        ),
+                        TIME,
+                    )
+                    uow.commit()
+            return result
+
+        with patch.object(
+            services.exploration.settlement,
+            "_simulate_batch",
+            side_effect=make_first_result_stale,
+        ):
+            settled = services.exploration.settle_due(
+                character_id,
+                logical_time=TIME + timedelta(seconds=EXPLORATION_BATCH_SECONDS),
+            )
+        assert simulations == 2
         assert len(settled.batches) == 1
         assert settled.state is not None and settled.state.completed_batches == 1
         progress = services.world_progress.view(character_id, world_id).require_region(

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any, Iterator
+from typing import Iterator
 
 
 IDENTITY_KEYS = {

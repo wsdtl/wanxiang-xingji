@@ -26,7 +26,6 @@ from game.core.gameplay import (
     CharacterItemUseEngine,
     CharacterProjector,
     CharacterState,
-    ContentRuntime,
     InventoryEngine,
     InventoryAbilityExecutor,
     InscriptionEngine,
@@ -103,16 +102,13 @@ from game.rules.companion import (
 from game.features.exploration import (
     ExplorationFeature,
     ExplorationStorageKinds,
-    exploration_codec_registrations,
 )
 from game.features.world_progress import (
     WorldProgressFeature,
     WorldProgressStorageKinds,
-    world_progress_codec_registrations,
 )
 from game.features.world_lore import (
     WorldLoreFeature,
-    world_lore_codec_registrations,
 )
 from game.features.world_travel import (
     WorldTravelFeature,
@@ -121,29 +117,24 @@ from game.features.world_travel import (
 from game.features.dimensional_disaster import (
     DimensionalDisasterFeature,
     DimensionalDisasterStorageKinds,
-    dimensional_disaster_codec_registrations,
 )
 from game.features.breakthrough import (
     BreakthroughFeature,
     BreakthroughStorageKinds,
-    breakthrough_codec_registrations,
 )
 from game.features.economy import (
     EconomyFeature,
     EconomyStorageKinds,
-    economy_codec_registrations,
 )
 from game.features.draw import (
     DRAW_HISTORY_AGGREGATE,
     DrawFeature,
     DrawStorageKinds,
-    draw_codec_registrations,
 )
 from game.features.lottery import (
     LOTTERY_AGGREGATE,
     LotteryFeature,
     LotteryStorageKinds,
-    lottery_codec_registrations,
 )
 from game.features.battle_report import BattleReportBuilder, BattleReportService
 from game.features.build_trial import BuildTrialFeature, BuildTrialStorageKinds
@@ -152,21 +143,17 @@ from game.features.companion import (
     CompanionGrowthSettlement,
     CompanionSanctuaryBattleSimulator,
     CompanionStorageKinds,
-    companion_codec_registrations,
 )
-from game.features.rest import RestFeature, RestStorageKinds, rest_codec_registrations
+from game.features.rest import RestFeature, RestStorageKinds
 from game.features.sparring import SparringFeature, SparringStorageKinds
 from game.features.special_items import (
     SpecialItemUseService,
-    special_item_codec_registrations,
 )
 from game.features.equipment_blueprint import (
     EquipmentBlueprintFeature,
-    equipment_blueprint_codec_registrations,
 )
 from game.features.exchange import (
     CovenantExchangeFeature,
-    covenant_exchange_codec_registrations,
 )
 from game.features.dimension_shift import (
     DimensionShiftFeature,
@@ -191,8 +178,8 @@ from game.features.party import PartyFeature
 from game.features.party_battle import (
     PartyBattleFeature,
     PartyBattleStorageKinds,
-    party_battle_codec_registrations,
 )
+from game.features.catalog import feature_snapshot_codec_registrations
 from game.features.party_sparring import (
     PartySparringFeature,
     PartySparringStorageKinds,
@@ -514,7 +501,6 @@ _message_flow_store_overridden = False
 
 @dataclass(frozen=True)
 class _ContentAssembly:
-    catalog: ContentRuntime
     world_views: WorldViewCatalog
     content: OfficialContent
     disasters: DimensionalDisasterCatalog
@@ -536,7 +522,6 @@ class _FoundationAssembly:
     player_lineup: PlayerBattleLineupProjector
     item_use: PersistedItemUseService
     character_item_use: PersistedCharacterItemUseService
-    weapon_engine: WeaponEngine
     weapon_item_use: PersistedWeaponItemUseService
     special_item_use: SpecialItemUseService
     equipment_blueprints: EquipmentBlueprintFeature
@@ -576,25 +561,11 @@ def _assemble_content(world_id: str) -> _ContentAssembly:
         gameplay_snapshot_codec(
             (
                 *workflow.codec_registrations(),
-                *dimensional_disaster_codec_registrations(),
-                *breakthrough_codec_registrations(),
-                *exploration_codec_registrations(),
-                *world_progress_codec_registrations(),
-                *world_lore_codec_registrations(),
-                *rest_codec_registrations(),
-                *economy_codec_registrations(),
-                *lottery_codec_registrations(),
-                *draw_codec_registrations(),
-                *special_item_codec_registrations(),
-                *equipment_blueprint_codec_registrations(),
-                *covenant_exchange_codec_registrations(),
-                *companion_codec_registrations(),
-                *party_battle_codec_registrations(),
+                *feature_snapshot_codec_registrations(),
             )
         )
     )
     return _ContentAssembly(
-        catalog,
         world_views,
         content,
         disasters,
@@ -740,7 +711,6 @@ def _assemble_foundation(
         player_lineup,
         item_use,
         character_item_use,
-        weapon_engine,
         weapon_item_use,
         special_item_use,
         equipment_blueprints,
@@ -778,7 +748,6 @@ def build_game_services(
         ),
     )
     content_assembly = _assemble_content(world_id)
-    catalog = content_assembly.catalog
     world_views = content_assembly.world_views
     content = content_assembly.content
     disaster_catalog = content_assembly.disasters
@@ -797,7 +766,6 @@ def build_game_services(
     player_lineup = foundation.player_lineup
     item_use_service = foundation.item_use
     character_item_use_service = foundation.character_item_use
-    weapon_engine = foundation.weapon_engine
     weapon_item_use_service = foundation.weapon_item_use
     special_item_use_service = foundation.special_item_use
     equipment_blueprints = foundation.equipment_blueprints
@@ -954,6 +922,7 @@ def build_game_services(
             LEDGER_AGGREGATE,
             MARKET_AGGREGATE,
         ),
+        market_item_policies=content.market_item_policies,
     )
     lottery = LotteryFeature(
         database,

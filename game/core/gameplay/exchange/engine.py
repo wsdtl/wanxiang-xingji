@@ -20,7 +20,6 @@ from ..inventory import (
     InventoryEngine,
     InventoryState,
     InventoryTransaction,
-    ItemInstance,
     ItemStack,
     MoveAsset,
     ReleaseReservation,

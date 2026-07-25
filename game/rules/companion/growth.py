@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 
 from game.content.catalog.companion import CompanionCatalog
 
-from .models import CompanionInstance, CompanionRosterState
+from .models import CompanionRosterState
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from ..ids import StableId
 from ..tags import TagSet
 from ..valuation import ValuationEngine
 from .catalog import EnemyCatalog
-from .models import EnemyDefinition, EnemyInstance, EnemyPhaseLoadout
+from .models import EnemyInstance, EnemyPhaseLoadout
 
 
 @dataclass(frozen=True)

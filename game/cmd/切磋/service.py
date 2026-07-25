@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from game.app import CurrentCharacterResult, current_game_services
 from game.core.account import ExternalIdentity
-from launch import C, logger
 from launch.adapter import current_message_context
 from launch.paths import public_url
 from message import Action, DocumentMessage, M

@@ -50,7 +50,6 @@ from game.core.gameplay import (
     SourceReceipt,
     TagSet,
     WeaponState,
-    WorldPosition,
     WorldPresence,
     WorldState,
     WorldTransaction,

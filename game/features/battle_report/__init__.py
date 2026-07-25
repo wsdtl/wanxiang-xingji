@@ -10,7 +10,12 @@ from .presentation import (
     present_battle_event,
     resolve_battle_content_name,
 )
-from .service import BattleReportService, DETAIL_RETENTION, SUMMARY_RETENTION
+from .service import (
+    BattleReportService,
+    DETAIL_RETENTION,
+    PreparedBattleReport,
+    SUMMARY_RETENTION,
+)
 
 __all__ = [
     "BATTLE_EVENT_PRESENTATIONS",
@@ -19,6 +24,7 @@ __all__ = [
     "BattleReportBuilder",
     "BattleReportService",
     "DETAIL_RETENTION",
+    "PreparedBattleReport",
     "PUBLIC_BATTLE_REPORT_SCHEMA",
     "PUBLIC_BATTLE_REPORT_VERSION",
     "SUMMARY_RETENTION",

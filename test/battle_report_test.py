@@ -86,8 +86,24 @@ def main() -> None:
         )
         service = services.battle_reports
         first = _draft("segment-1", "第一战", NOW)
-        reference = service.capture(first)
+        prepared = service.prepare_capture(first)
+        assert prepared.detail_payload
+        assert prepared.uncompressed_bytes > len(prepared.detail_payload)
+        with database.unit_of_work() as uow:
+            reference = service.capture_prepared_in_uow(uow, prepared)
+            uow.commit()
+        with database.unit_of_work() as uow:
+            assert service.capture_prepared_in_uow(uow, prepared) == reference
+            uow.commit()
         assert service.capture(first) == reference
+
+        rolled_back = replace(
+            _draft("segment-rollback", "未提交战斗", NOW),
+            report_id="battle-report:rollback",
+        )
+        with database.unit_of_work() as uow:
+            service.capture_prepared_in_uow(uow, service.prepare_capture(rolled_back))
+        assert service.reference(rolled_back.report_id) is None
 
         second = replace(
             _draft("segment-2", "第二战", NOW + timedelta(minutes=10)),

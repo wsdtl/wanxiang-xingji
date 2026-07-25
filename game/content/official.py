@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from game.core.gameplay import (
     ContentAssembler,
@@ -15,34 +16,31 @@ from game.core.gameplay import (
 )
 
 from .catalog import CATALOG_PACKAGE
-from .worlds import PLAYABLE_WORLD_DEFINITIONS, WORLD_PACKAGE
-from .catalog.companion import COMPANION_CATALOG, CompanionCatalog
-from .catalog.disaster import build_dimensional_disaster_catalog
+from .catalog.companion import CompanionCatalog
 from .catalog.draw import DRAW_CATALOG_CONTENT
 from .catalog.economy import audit_market_prices
+from .catalog.economy import MarketItemPolicy
 from .catalog.enemy import (
-    ENEMY_BEHAVIOR_PROFILE_CATALOG,
-    PARTY_BOSS_SOURCE_CATALOG,
     PERSONAL_BOSS_ENEMIES,
     EnemyBehaviorProfileCatalog,
     PartyBossSourceCatalog,
 )
 from .catalog.exploration import EXPLORATION_REGION_CATALOG, ExplorationRegionCatalog
 from .catalog.trial import BUILD_TRIAL_CATALOG, BuildTrialCatalog
-from .catalog.world import PLAYABLE_WORLD_IDS, TAIXUAN_WORLD_ID
+from .extensions import OFFICIAL_EXTENSION_CATALOG
 from .presentation import EnemyNameProjector, GearProjector
-from .world_skins import (
-    CULTIVATION_SKIN_ID,
-    MAGIC_SKIN_ID,
-    WORLD_SKIN_PACKAGE,
-    enemy_presentation_style,
-    gear_presentation_style,
+from .world_lore.models import WorldLoreCatalog
+
+
+OFFICIAL_PACKAGES = OFFICIAL_EXTENSION_CATALOG.packages(CATALOG_PACKAGE)
+PLAYABLE_WORLD_DEFINITIONS = tuple(
+    value.bundle.world for value in OFFICIAL_EXTENSION_CATALOG.worlds
 )
-
-
-OFFICIAL_PACKAGES = (CATALOG_PACKAGE, WORLD_SKIN_PACKAGE, WORLD_PACKAGE)
-DEFAULT_SKIN_ID = CULTIVATION_SKIN_ID
-DEFAULT_WORLD_ID = TAIXUAN_WORLD_ID
+PLAYABLE_WORLD_IDS = OFFICIAL_EXTENSION_CATALOG.world_ids()
+DEFAULT_WORLD_ID = PLAYABLE_WORLD_IDS[0]
+DEFAULT_SKIN_ID = OFFICIAL_EXTENSION_CATALOG.require_world(DEFAULT_WORLD_ID).skin.id
+COMPANION_CATALOG = OFFICIAL_EXTENSION_CATALOG.companions
+WORLD_LORE_CATALOG: WorldLoreCatalog = OFFICIAL_EXTENSION_CATALOG.lore
 
 
 @dataclass(frozen=True)
@@ -58,6 +56,8 @@ class OfficialContent:
     exploration_regions: ExplorationRegionCatalog
     companions: CompanionCatalog
     party_bosses: PartyBossSourceCatalog
+    party_boss_trophy_item_ids: Mapping[StableId, StableId]
+    market_item_policies: Mapping[str, MarketItemPolicy]
     build_trials: BuildTrialCatalog
     world: WorldDefinition
     worlds: WorldRuntimeCatalog
@@ -72,16 +72,19 @@ class WorldViewCatalog:
         playable_worlds: tuple[WorldDefinition, ...] | None = None,
     ) -> None:
         self.catalog = catalog
+        self.extensions = OFFICIAL_EXTENSION_CATALOG
         values = tuple(playable_worlds or PLAYABLE_WORLD_DEFINITIONS)
         for value in values:
             catalog.skins.require(value.skin_id)
         if catalog.world_runtime is None:
             raise ValueError("正式内容没有装配真实世界目录")
-        if tuple(value.id for value in values) != catalog.world_runtime.world_ids():
+        declared_ids = tuple(value.id for value in values)
+        if set(declared_ids) != set(catalog.world_runtime.world_ids()):
             raise ValueError("应用声明的可进入世界与内容包装配结果不一致")
         self.worlds = catalog.world_runtime
-        if self.worlds.world_ids() != PLAYABLE_WORLD_IDS:
-            raise ValueError("正式世界定义顺序必须与可进入世界名录一致")
+        self._world_ids = self.extensions.world_ids()
+        if set(self.worlds.world_ids()) != set(self._world_ids):
+            raise ValueError("正式世界定义必须完整覆盖扩展目录")
         self._views: dict[tuple[StableId, int], OfficialContent] = {}
 
     def require(
@@ -131,7 +134,7 @@ class WorldViewCatalog:
         return None
 
     def world_ids(self) -> tuple[StableId, ...]:
-        return self.worlds.world_ids()
+        return self._world_ids
 
     def skin_ids(self) -> tuple[StableId, ...]:
         return self.worlds.skin_ids()
@@ -147,7 +150,16 @@ def assemble_official_catalog() -> ContentRuntime:
     """装配全部官方内容；应用组合根应在启动时只调用一次。"""
 
     runtime = ContentAssembler().assemble(OFFICIAL_PACKAGES)
-    audit_market_prices(runtime.items, DRAW_CATALOG_CONTENT, runtime.equipment)
+    OFFICIAL_EXTENSION_CATALOG.validate_runtime(runtime)
+    audit_market_prices(
+        runtime.items,
+        DRAW_CATALOG_CONTENT,
+        runtime.equipment,
+        market_item_policies=OFFICIAL_EXTENSION_CATALOG.market_item_policies,
+        expected_party_trophy_ids=frozenset(
+            OFFICIAL_EXTENSION_CATALOG.party_boss_trophy_item_ids.values()
+        ),
+    )
     return runtime
 
 
@@ -168,9 +180,13 @@ def select_world_skin(
     selected_world = world or runtime.world_for_skin(skin.id)
     projector = SkinProjector(skin)
     EXPLORATION_REGION_CATALOG.validate(catalog, runtime)
-    COMPANION_CATALOG.validate(catalog, runtime)
-    PARTY_BOSS_SOURCE_CATALOG.validate(catalog, runtime.world_ids())
-    ENEMY_BEHAVIOR_PROFILE_CATALOG.validate(runtime.world_ids())
+    OFFICIAL_EXTENSION_CATALOG.companions.validate(catalog, runtime)
+    OFFICIAL_EXTENSION_CATALOG.party_bosses.validate(catalog, runtime.world_ids())
+    OFFICIAL_EXTENSION_CATALOG.enemy_behavior_profiles.validate(
+        runtime.world_ids(),
+        catalog.enemies.behaviors.ids(),
+    )
+    OFFICIAL_EXTENSION_CATALOG.validate_runtime(catalog)
     validate_enemy_narrative_identities(projector, selected_world.id, skin.id)
     return OfficialContent(
         catalog,
@@ -178,16 +194,18 @@ def select_world_skin(
         projector,
         GearProjector(
             projector,
-            gear_presentation_style(skin.id, skin.version),
+            OFFICIAL_EXTENSION_CATALOG.gear_presentation(skin.id, skin.version),
         ),
         EnemyNameProjector(
             projector,
-            enemy_presentation_style(skin.id, skin.version),
+            OFFICIAL_EXTENSION_CATALOG.enemy_presentation(skin.id, skin.version),
         ),
-        ENEMY_BEHAVIOR_PROFILE_CATALOG,
+        OFFICIAL_EXTENSION_CATALOG.enemy_behavior_profiles,
         EXPLORATION_REGION_CATALOG,
-        COMPANION_CATALOG,
-        PARTY_BOSS_SOURCE_CATALOG,
+        OFFICIAL_EXTENSION_CATALOG.companions,
+        OFFICIAL_EXTENSION_CATALOG.party_bosses,
+        OFFICIAL_EXTENSION_CATALOG.party_boss_trophy_item_ids,
+        OFFICIAL_EXTENSION_CATALOG.market_item_policies,
         BUILD_TRIAL_CATALOG,
         selected_world,
         runtime,
@@ -218,7 +236,7 @@ def validate_enemy_narrative_identities(
     identities: dict[str, str] = {}
     enemy_ids = (
         *(value.id for value in PERSONAL_BOSS_ENEMIES),
-        *sorted(PARTY_BOSS_SOURCE_CATALOG.require(world_id).enemy_ids),
+        *sorted(OFFICIAL_EXTENSION_CATALOG.party_bosses.require(world_id).enemy_ids),
     )
     for enemy_id in enemy_ids:
         name = projector.name(enemy_id)
@@ -229,7 +247,7 @@ def validate_enemy_narrative_identities(
                 f"世界皮肤的个人与组队首领中文身份重复：{previous} / {name}"
             )
         identities[token] = name
-    disasters = build_dimensional_disaster_catalog().for_source(world_id)
+    disasters = OFFICIAL_EXTENSION_CATALOG.disasters.for_source(world_id)
     collisions = tuple(
         (identities[token], disaster.name)
         for disaster in disasters
@@ -254,15 +272,25 @@ def build_world_view_catalog() -> WorldViewCatalog:
     )
 
 
+def build_dimensional_disaster_catalog():
+    """返回扩展目录冻结的灾厄名录，不再维护第二份世界来源清单。"""
+
+    return OFFICIAL_EXTENSION_CATALOG.disasters
+
+
 __all__ = [
     "DEFAULT_SKIN_ID",
     "DEFAULT_WORLD_ID",
+    "COMPANION_CATALOG",
     "OFFICIAL_PACKAGES",
     "OfficialContent",
     "PLAYABLE_WORLD_DEFINITIONS",
+    "PLAYABLE_WORLD_IDS",
+    "WORLD_LORE_CATALOG",
     "WorldViewCatalog",
     "assemble_official_catalog",
     "build_official_content",
+    "build_dimensional_disaster_catalog",
     "build_world_view_catalog",
     "select_world_skin",
     "validate_enemy_narrative_identities",
