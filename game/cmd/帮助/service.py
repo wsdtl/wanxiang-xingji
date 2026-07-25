@@ -76,9 +76,8 @@ def _home_message() -> DocumentMessage:
 
 def _category_message(category: str) -> DocumentMessage:
     builder = M.document().header(GAME_NAME).section(category, icon="system")
-    for index, entry in enumerate(help_registry.in_category(category), start=1):
-        builder.item(
-            index,
+    for entry in help_registry.in_category(category):
+        builder.line(
             M.command(entry.command, f"帮助 {entry.command}"),
             " - ",
             entry.spec.summary,

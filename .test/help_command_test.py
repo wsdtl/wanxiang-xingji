@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from importlib import import_module
 from pathlib import Path
+import re
 import sys
 from tempfile import TemporaryDirectory
 
@@ -45,6 +46,9 @@ async def _main() -> None:
     assert "世界设定 · 诸界档案 · 游玩手册" in home_payload["content"]
     assert public_url(static_url("main", "index.html")) in home_payload["content"]
     assert "keyboard" not in home_payload
+    for category in HELP_CATEGORY_ORDER:
+        category_payload = render_qq_message(help_service._category_message(category))
+        assert re.search(r"\\\[\d+\\\]", category_payload["content"]) is None
     detail_payload = render_qq_message(
         help_service._detail_message(help_registry.find("开始探险"))
     )
