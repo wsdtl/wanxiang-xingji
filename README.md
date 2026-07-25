@@ -143,7 +143,11 @@ Dockerfile 可以使用：
 CMD ["sh", "./start.sh"]
 ```
 
-`start.sh` 不负责安装依赖。镜像构建阶段应先执行 `pip install -r requirements.txt`。可以通过环境变量 `PYTHON_BIN` 指定容器内的 Python 命令。
+`start.sh` 会统一使用项目根目录的 `.venv`；`.env` 仍然只是项目配置文件。首次启动时，脚本通过系统
+Python 创建 `.venv` 并安装 `requirements.txt`，依赖完整安装后写入就绪标记；后续启动直接使用
+`.venv/bin/python`。就绪标记包含依赖文件指纹；依赖发生变化或启动依赖缺失时会自动补装。安装中断不会
+更新标记，下次启动会自动重试。可以通过环境变量 `PYTHON_BIN` 指定首次创建虚拟环境时使用的系统 Python
+命令。
 
 QQ 回调路径由 `QQ_EVENT_PATH` 配置，默认是 `/qq/events`：
 
