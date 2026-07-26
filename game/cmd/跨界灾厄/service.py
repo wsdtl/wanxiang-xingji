@@ -29,7 +29,7 @@ from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time, current_character_value
 from ..reply import send_command_failure, send_game_reply
-from ..presentation import current_action_action
+from ..presentation import activity_block_feedback, health_depleted_feedback
 from ..reply_intents import DIMENSIONAL_DISASTER_INTENT
 
 
@@ -176,6 +176,9 @@ def _status_message(
 
 def _challenge_message(result: DimensionalDisasterChallengeResult, projector) -> DocumentMessage:
     builder = M.document().section("讨伐灾厄", icon="combat")
+    if result.activity_block is not None:
+        feedback = activity_block_feedback(result.activity_block, "讨伐灾厄")
+        return builder.line(feedback.text).action(feedback.recovery).build()
     if result.status in {"resolved", "defeated", "replayed"} and result.receipt is not None:
         receipt = result.receipt
         builder.row(
@@ -233,23 +236,15 @@ def _challenge_message(result: DimensionalDisasterChallengeResult, projector) ->
     messages = {
         "no_active": "当前没有灾厄降临",
         "ended": "本期灾厄已经产生结局",
+        "content_changed": "内容已经更新，本期灾厄不能继续讨伐，请联系维护者处理",
         "attempt_limit": "今日讨伐次数已经用完",
         "main_action_occupied": "当前正在进行其他主要行动",
         "exploring": "当前正在探险，停止后才能讨伐灾厄",
-        "health_depleted": "血气已经归零，恢复后才能讨伐灾厄",
     }
+    if result.status == "health_depleted":
+        feedback = health_depleted_feedback("讨伐灾厄")
+        return builder.line(feedback.text).actions(feedback.recoveries).build()
     builder.line(messages.get(result.status, "本次讨伐没有完成"))
-    if result.status == "main_action_occupied":
-        builder.action(current_action_action())
-    elif result.status == "exploring":
-        builder.action(Action("disaster.stop_exploration", "停止探险", "停止探险"))
-    elif result.status == "health_depleted":
-        builder.actions(
-            (
-                Action("disaster.inventory", "查看纳戒", "纳戒", style="secondary"),
-                Action("disaster.rest", "休息", "休息"),
-            )
-        )
     return builder.build()
 
 

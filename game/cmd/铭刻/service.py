@@ -459,6 +459,8 @@ def _ability_home(
                 ability_command,
                 submit=medium is None,
             ),
+            FieldSeparator(),
+            M.command("特效", f"特效 {_projected_name(ability_id, view)}"),
         )
     if not entries:
         builder.line("当前没有可以铭刻能力的武器")

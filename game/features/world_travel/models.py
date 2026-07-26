@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from game.core.gameplay import StableId, stable_id
+from game.features.player_activity import (
+    PlayerActivityBlock,
+    validate_activity_block_contract,
+)
 
 
 WORLD_LOCATION_INTENT_MARKER = "@world_location"
@@ -12,8 +16,6 @@ WORLD_LOCATION_INTENT_MARKER = "@world_location"
 
 @dataclass(frozen=True)
 class WorldTravelStorageKinds:
-    action: str
-    exploration: str
     world: str
     character_world: str
 
@@ -22,6 +24,10 @@ class WorldTravelStorageKinds:
 class WorldTravelResult:
     status: str
     anchor_id: StableId | None = None
+    activity_block: PlayerActivityBlock | None = None
+
+    def __post_init__(self) -> None:
+        validate_activity_block_contract(self.status, self.activity_block)
 
 
 @dataclass(frozen=True)

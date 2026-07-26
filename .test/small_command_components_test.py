@@ -25,6 +25,7 @@ from game.content import (  # noqa: E402
     PRIMARY_CURRENCY_ID,
 )
 from game.content.catalog.character import REST_ACTION_ID  # noqa: E402
+from game.content.presentation import MechanicProjector  # noqa: E402
 from game.core.gameplay import (  # noqa: E402
     INSCRIPTION_MEDIUM_DATA_KEY,
     GrantInstance,
@@ -40,6 +41,7 @@ from game.core.gameplay import (  # noqa: E402
     InventoryTransaction,
     SourceReceipt,
     WEAPON_SLOT_ID,
+    equipment_state_from_instance,
     equipment_state_data,
 )
 from game.core.persistence import CHARACTER_AGGREGATE, INVENTORY_AGGREGATE  # noqa: E402
@@ -58,8 +60,11 @@ from game.cmd import 装配 as loadout_component  # noqa: E402,F401
 from game.cmd import 物品 as item_component  # noqa: E402,F401
 from game.cmd import 伙伴 as companion_component  # noqa: E402,F401
 from game.cmd import 探险 as exploration_component  # noqa: E402,F401
+from game.cmd import 特效 as mechanic_component  # noqa: E402,F401
+from game.cmd.铭刻.service import _ability_home  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
+from launch.message_events import snapshot_from_message  # noqa: E402
 
 
 def main() -> None:
@@ -82,6 +87,7 @@ async def _main() -> None:
         "配装",
         "纳戒",
         "跃迁",
+        "特效",
     ):
         assert len(LocalEventHandler.exact_rules[command]) == 1
         assert len(QqEventHandler.exact_rules[command]) == 1
@@ -113,6 +119,58 @@ async def _main() -> None:
             initial_overview = services.load_character_overview(character).overview
             assert initial_overview is not None
             initial_view = services.world_views.require(initial_overview.character_world.world_id)
+            ability_home = snapshot_from_message(
+                _ability_home(
+                    initial_overview.inventory,
+                    initial_overview.inscription_preference,
+                    initial_view,
+                    1,
+                )
+            )
+            ability_detail_links = tuple(
+                value
+                for value in ability_home.interactions
+                if value.kind == "command_link" and value.label == "特效"
+            )
+            assert ability_detail_links
+            assert all(
+                value.data.startswith("特效 ")
+                and value.behavior == "send"
+                and value.submit
+                for value in ability_detail_links
+            )
+            current_mechanics = await dispatch(
+                client_id="small-command-player",
+                raw_message="特效",
+                sender_name="试剑客",
+                event_id="small-command-current-mechanics",
+            )
+            assert "当前特效" in current_mechanics.replies[0].message.content
+            assert "基础攻击" in current_mechanics.replies[0].message.content
+            mechanic_catalog = await dispatch(
+                client_id="small-command-player",
+                raw_message="特效 全部",
+                sender_name="试剑客",
+                event_id="small-command-mechanic-catalog",
+            )
+            assert "1/4" in mechanic_catalog.replies[0].message.content
+            assert "164" in mechanic_catalog.replies[0].message.content
+            assert tuple(
+                value.data for value in mechanic_catalog.replies[0].message.actions
+            ) == ("特效 全部 2", "特效")
+            initial_mechanic_projector = MechanicProjector(
+                services.content.catalog,
+                initial_view.projector,
+            )
+            first_mechanic = initial_mechanic_projector.catalog_entries()[0]
+            mechanic_detail = await dispatch(
+                client_id="small-command-player",
+                raw_message=f"特效 {first_mechanic.name}",
+                sender_name="试剑客",
+                event_id="small-command-mechanic-detail",
+            )
+            assert first_mechanic.name in mechanic_detail.replies[0].message.content
+            assert "固定机制" in mechanic_detail.replies[0].message.content
             starter_weapon_id = initial_overview.loadout.slots[WEAPON_SLOT_ID]
             starter_weapon_ref = initial_overview.inventory.reference_number(starter_weapon_id)
             starter_weapon_detail = await dispatch(
@@ -332,7 +390,15 @@ async def _main() -> None:
                 original_view.world.id,
                 logical_time=datetime.now(ZoneInfo("Asia/Shanghai")),
             )
-            assert exploration_blocked.status == "main_action_occupied"
+            assert exploration_blocked.status == "exploring"
+            exploration_blocked_reply = await dispatch(
+                client_id="small-command-player",
+                raw_message=f"跃迁 {original_view.skin.name}",
+                sender_name="试剑客",
+                event_id="small-command-shift-exploring",
+            )
+            assert "当前正在探险" in exploration_blocked_reply.replies[0].message.content
+            assert exploration_blocked_reply.replies[0].message.actions[0].data == "停止探险"
             services.exploration.stop(
                 character.id,
                 logical_time=datetime.now(ZoneInfo("Asia/Shanghai")),
@@ -421,6 +487,36 @@ async def _main() -> None:
                 feather_ref,
                 slot_name,
             ) = _grant_test_assets(services, character.id)
+            inscription_overview = services.load_character_overview(character).overview
+            assert inscription_overview is not None
+            inscription_view = services.world_view(inscription_overview.character_world)
+            ability_home_with_medium = snapshot_from_message(
+                _ability_home(
+                    inscription_overview.inventory,
+                    inscription_overview.inscription_preference,
+                    inscription_view,
+                    1,
+                )
+            )
+            inscription_links = tuple(
+                value
+                for value in ability_home_with_medium.interactions
+                if value.kind == "command_link" and value.data.startswith("铭刻能力 ")
+            )
+            mechanic_links = tuple(
+                value
+                for value in ability_home_with_medium.interactions
+                if value.kind == "command_link" and value.label == "特效"
+            )
+            assert inscription_links and mechanic_links
+            assert all(
+                value.behavior == "fill" and not value.submit
+                for value in inscription_links
+            )
+            assert all(
+                value.behavior == "send" and value.submit
+                for value in mechanic_links
+            )
 
             nacre_after_grant = await dispatch(
                 client_id="small-command-player",
@@ -446,6 +542,47 @@ async def _main() -> None:
             assert f"E{equipment_ref}" in equipped.replies[0].message.content
             assert f"E{candidate_ref}" in equipped.replies[0].message.content
             assert f"E{inferior_ref}" not in equipped.replies[0].message.content
+
+            equipped_overview = services.load_character_overview(character).overview
+            assert equipped_overview is not None
+            equipped_asset_id = equipped_overview.inventory.asset_id_for_reference(
+                equipment_ref
+            )
+            equipped_asset = equipped_overview.inventory.instances[equipped_asset_id]
+            equipped_state = equipment_state_from_instance(equipped_asset)
+            assert equipped_state.roll is not None
+            rolled = equipped_state.roll.properties[0]
+            equipped_view = services.world_view(equipped_overview.character_world)
+            equipped_projector = MechanicProjector(
+                services.content.catalog,
+                equipped_view.projector,
+            )
+            rolled_detail = equipped_projector.detail(rolled.property_id)
+            actual = equipped_projector.roll_summary(
+                rolled.property_id,
+                rolled.tier,
+                rolled.values,
+            )
+            current_after_equip = await dispatch(
+                client_id="small-command-player",
+                raw_message="特效",
+                sender_name="试剑客",
+                event_id="small-command-mechanics-after-equip",
+            )
+            assert rolled_detail.name in current_after_equip.replies[0].message.content
+            assert f"E{equipment_ref}" in current_after_equip.replies[0].message.content
+            rolled_mechanic = await dispatch(
+                client_id="small-command-player",
+                raw_message=f"特效 {rolled_detail.name}",
+                sender_name="试剑客",
+                event_id="small-command-rolled-mechanic",
+            )
+            rolled_text = rolled_mechanic.replies[0].message.content
+            assert "当前配装" in rolled_text
+            assert f"E{equipment_ref}" in rolled_text
+            assert f"T{rolled.tier}" in rolled_text
+            if actual:
+                assert actual in rolled_text
 
             comparison = await dispatch(
                 client_id="small-command-player",

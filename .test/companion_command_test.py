@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -20,7 +21,12 @@ from game.cmd import 物品 as item_component  # noqa: E402,F401
 from game.cmd import 装配 as loadout_component  # noqa: E402,F401
 from game.cmd import 角色 as character_component  # noqa: E402,F401
 from game.cmd import 探险 as exploration_component  # noqa: E402,F401
-from game.content import COMPANION_SANCTUARY_ITEM_ID  # noqa: E402
+from game.cmd import 特效 as mechanic_component  # noqa: E402,F401
+from game.cmd.伙伴.service import _companion_detail  # noqa: E402
+from game.content import (  # noqa: E402
+    COMPANION_SANCTUARY_ITEM_ID,
+    MAGIC_WORLD_ID,
+)
 from game.core.gameplay import (  # noqa: E402
     GrantStack,
     InventoryState,
@@ -29,12 +35,18 @@ from game.core.gameplay import (  # noqa: E402
     Ruleset,
     SeededRandomSource,
     SourceReceipt,
+    WorldState,
 )
 from game.core.persistence import CHARACTER_AGGREGATE, INVENTORY_AGGREGATE  # noqa: E402
 from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules.item import asset_reference  # noqa: E402
+from game.rules.character import (  # noqa: E402
+    MULTIVERSE_WORLD_STATE_ID,
+    CharacterWorldState,
+)
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
+from launch.message_events import snapshot_from_message  # noqa: E402
 
 
 TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -82,6 +94,7 @@ async def _main() -> None:
                 ).fetchone()
             character = services.characters.load_character(str(row[0])) if row else None
             assert character is not None
+            _move_to_world(services, character.id, MAGIC_WORLD_ID)
             reference = _grant_key(services, character.id)
 
             nacre = await _dispatch("纳戒", "companion-nacre")
@@ -90,7 +103,19 @@ async def _main() -> None:
             sanctuary_item_name = services.world_view(
                 overview.character_world
             ).projector.name(COMPANION_SANCTUARY_ITEM_ID)
+            assert sanctuary_item_name == "幻兽庭钥印"
             assert sanctuary_item_name in nacre.replies[0].message.content
+
+            empty = await _dispatch("宠物秘境", "companion-sanctuary-empty")
+            assert sanctuary_item_name in empty.replies[0].message.content
+
+            invalid = await _dispatch(
+                f"使用 {reference} 2",
+                "companion-open-invalid-quantity",
+            )
+            assert f"{sanctuary_item_name}每次只能使用一枚" in (
+                invalid.replies[0].message.content
+            )
 
             opened = await _dispatch(f"使用 {reference}", "companion-open")
             opened_message = opened.replies[0].message
@@ -121,6 +146,24 @@ async def _main() -> None:
             assert "资质" in detail.replies[0].message.content
             assert "主动行动" in detail.replies[0].message.content
             assert "特色效果" in detail.replies[0].message.content
+            companion_view = services.companions.view(character.id, logical_time=_now())
+            mechanic_snapshot = snapshot_from_message(
+                _companion_detail(companion_view.roster, "C1", overview)
+            )
+            mechanic_links = tuple(
+                value
+                for value in mechanic_snapshot.interactions
+                if value.kind == "command_link" and value.data.startswith("特效 @")
+            )
+            assert len(mechanic_links) == 2
+            assert all(value.behavior == "send" and value.submit for value in mechanic_links)
+            mechanic_detail = await _dispatch(
+                mechanic_links[0].data,
+                "companion-mechanic-detail",
+            )
+            assert "战斗机制" in mechanic_detail.replies[0].message.content
+            assert "固定机制" in mechanic_detail.replies[0].message.content
+            assert "世界: _魔法世界_" in mechanic_detail.replies[0].message.content
 
             bound = await _dispatch("伙伴出战 C1", "companion-bind")
             assert "随当前配装出战" in bound.replies[0].message.content
@@ -259,6 +302,65 @@ def _grant_key(services, character_id: str) -> str:
         next_inventory.stacks["stack:companion-command-key"],
         services.content.catalog.items,
     )
+
+
+def _move_to_world(services, character_id: str, world_id: str) -> None:
+    with services.database.unit_of_work() as uow:
+        current = services.companions.snapshots.require(
+            uow,
+            services.companions.storage.character_world,
+            character_id,
+            CharacterWorldState,
+        )
+        updated = replace(
+            current,
+            world_id=world_id,
+            arrived_at=_now(),
+            revision=current.revision + 1,
+        )
+        world = services.companions.snapshots.require(
+            uow,
+            services.companions.storage.world,
+            MULTIVERSE_WORLD_STATE_ID,
+            WorldState,
+        )
+        presence = next(
+            value
+            for value in world.presences.values()
+            if value.owner_id == character_id
+        )
+        target_world = services.world_views.worlds.require_world(world_id)
+        destination = services.world_views.worlds.position(
+            world_id,
+            target_world.spawn_anchor_id,
+        )
+        updated_presence = replace(
+            presence,
+            position=destination,
+            revision=presence.revision + 1,
+        )
+        updated_world = replace(
+            world,
+            presences={**world.presences, presence.id: updated_presence},
+            revision=world.revision + 1,
+        )
+        services.companions.snapshots.update(
+            uow,
+            services.companions.storage.character_world,
+            character_id,
+            current,
+            updated,
+            _now(),
+        )
+        services.companions.snapshots.update(
+            uow,
+            services.companions.storage.world,
+            MULTIVERSE_WORLD_STATE_ID,
+            world,
+            updated_world,
+            _now(),
+        )
+        uow.commit()
 
 
 def _grant_gift(services, character_id: str, definition_id: str, quantity: int) -> str:

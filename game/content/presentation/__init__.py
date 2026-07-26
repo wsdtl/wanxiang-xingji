@@ -12,6 +12,13 @@ from .branding import (
 )
 from .gear import GearDisplay, GearPresentationStyle, GearProjector
 from .enemy import EnemyDisplay, EnemyNameProjector, EnemyPresentationStyle
+from .mechanics import (
+    MechanicCatalogEntry,
+    MechanicDetail,
+    MechanicPresentationError,
+    MechanicProjector,
+    MechanicTierDetail,
+)
 
 
 __all__ = [
@@ -21,6 +28,11 @@ __all__ = [
     "GearDisplay",
     "GearPresentationStyle",
     "GearProjector",
+    "MechanicCatalogEntry",
+    "MechanicDetail",
+    "MechanicPresentationError",
+    "MechanicProjector",
+    "MechanicTierDetail",
     "COVENANT_MARKET_NAME",
     "COVENANT_MEMBER_NAME",
     "COVENANT_NAME",

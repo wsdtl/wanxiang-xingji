@@ -4,8 +4,6 @@ from dataclasses import replace
 from datetime import datetime
 
 from game.core.gameplay import (
-    ActionSlotKind,
-    ActionState,
     HEALTH_CURRENT,
     CharacterState,
     WorldState,
@@ -21,6 +19,8 @@ from game.rules.exploration import (
     stop_exploration,
 )
 from game.rules.character import CharacterWorldState
+from game.features.player_activity import PlayerActivityBlock
+from game.rules.player_activity import PlayerActivityKind
 
 from .models import (
     MAX_CATCH_UP_BATCHES,
@@ -45,6 +45,7 @@ class ExplorationFeature:
         inventory_engine,
         player_lineup,
         battle_reports,
+        player_activity,
         storage: ExplorationStorageKinds,
         reward_keys_factory,
         companion_growth,
@@ -54,6 +55,7 @@ class ExplorationFeature:
         self.database = database
         self.content = content
         self.snapshots = snapshots
+        self.player_activity = player_activity
         self.storage = storage
         self.rest = ExplorationRestCoordinator(database, snapshots, rest)
         self.settlement = ExplorationSettlementService(
@@ -74,16 +76,20 @@ class ExplorationFeature:
 
     def start(self, character_id: str, *, logical_time: datetime) -> ExplorationOperationResult:
         with self.database.unit_of_work() as uow:
-            action_state = self.snapshots.load(
-                uow, self.storage.action, character_id, ActionState
-            )
-            if action_state is not None and action_state.running(ActionSlotKind.MAIN):
-                return ExplorationOperationResult("main_action_occupied")
             previous = self.snapshots.load(
                 uow, EXPLORATION_AGGREGATE, character_id, ExplorationState
             )
-            if previous is not None and previous.active:
+            activity = self.player_activity.load_in_uow(uow, character_id)
+            if activity.exploration_active:
                 return ExplorationOperationResult("already_running", previous)
+            if activity.kind is PlayerActivityKind.MAIN_ACTION:
+                return ExplorationOperationResult(
+                    "main_action_occupied",
+                    activity_block=PlayerActivityBlock.from_projection(
+                        character_id,
+                        activity,
+                    ),
+                )
             character = self.snapshots.require(
                 uow, self.storage.character, character_id, CharacterState
             )

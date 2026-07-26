@@ -35,18 +35,18 @@ from ...catalog.world import (
 
 _REGION_NAMES = {
     GREEN_CLOUD_PLAIN_ID: ("晨露草", "风语种", "白鹿绒", "青辉石", "云雀羽", "黎明晶髓"),
-    SUNSET_RIDGE_ID: ("曦光花", "红枫叶", "赤岩砂", "狮鹫绒羽", "暮光晶", "晨曦宝石"),
-    BLACK_WIND_RAVINE_ID: ("阴影苔", "乌木枝", "黑曜砂", "夜枭羽", "暗影石", "风蚀魔核"),
+    SUNSET_RIDGE_ID: ("曦光花", "红枫叶", "晨霞砂", "狮鹫绒羽", "曙光棱晶", "晨曦宝石"),
+    BLACK_WIND_RAVINE_ID: ("阴影苔", "乌木枝", "幽影砂", "暗羽翎", "暗影石", "风蚀魔核"),
     MIRROR_LAKE_MARSH_ID: ("镜湖珠", "沼泽兰根", "湖蚌珍珠", "龟甲片", "幻雾囊", "镜心水晶"),
-    SCARLET_FLAME_VALLEY_ID: ("火纹石", "烈焰草", "熔金砂", "火鸟羽", "地火晶", "熔岩之心"),
-    VERDANT_WILDERNESS_ID: ("翡翠叶", "魔力藤", "古树脂", "精灵羽", "翡翠木心", "世界树残芯"),
-    THUNDER_MARSH_STEPPE_ID: ("雷击木", "电纹砂", "雷兽皮", "风暴鹰羽", "霆光晶", "雷霆源质"),
-    NORTHERN_ABYSS_SNOWFIELD_ID: ("寒霜花", "冻土玉屑", "雪兽绒", "冰蚕丝", "永冬晶", "极寒源质"),
-    BROKEN_PILLAR_RELIC_ID: ("泰坦石屑", "大地尘", "古神骨片", "泰坦铜", "地脉晶核", "神铸遗石"),
+    SCARLET_FLAME_VALLEY_ID: ("炎脉石", "烈焰草", "炎金砂", "火鸟羽", "地火晶", "熔岩之心"),
+    VERDANT_WILDERNESS_ID: ("翡翠叶", "魔力藤", "翡翠树脂", "精灵羽", "翡翠木心", "世界树残芯"),
+    THUNDER_MARSH_STEPPE_ID: ("风暴木", "雷纹砂", "雷兽皮", "风暴鹰羽", "风暴晶", "雷霆源质"),
+    NORTHERN_ABYSS_SNOWFIELD_ID: ("寒霜花", "冻土玉屑", "雪兽绒", "永冬蛛丝", "永冬晶", "极寒源质"),
+    BROKEN_PILLAR_RELIC_ID: ("泰坦石屑", "大地尘", "泰坦骨片", "泰坦铜", "地脉晶核", "神铸遗石"),
     KUNLUN_SKY_RUINS_ID: ("神域圣露", "天穹晶屑", "圣兽毫", "天门守卫甲", "神界晶", "金苹果核"),
     MYRIAD_SWORD_TOMB_ID: ("锈蚀剑片", "英灵披带", "断锋魔钢", "武魂尘", "英雄铭牌", "兵冢魂髓"),
-    HEAVENLY_CRAFT_RELIC_ID: ("机关齿轮", "秘银铜片", "魔像木心", "泰坦轴承", "奥械核心", "神炉火种"),
-    RETURNING_RUIN_ABYSS_ID: ("深渊黑砂", "混沌潮晶", "邪魔骨", "魔血琥珀", "深渊魂核", "混沌魔髓"),
+    HEAVENLY_CRAFT_RELIC_ID: ("奥术齿轮", "秘银铜片", "魔像木心", "泰坦轴承", "奥械核心", "神炉火种"),
+    RETURNING_RUIN_ABYSS_ID: ("深渊黑砂", "混沌潮晶", "邪魔骨", "灾兽血珀", "混沌魂核", "混沌魔髓"),
 }
 
 _REGULAR_TROPHY_NAMES = (

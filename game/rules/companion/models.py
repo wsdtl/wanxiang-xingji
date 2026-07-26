@@ -275,6 +275,7 @@ class CompanionSanctuaryState:
     opened_at: datetime
     expires_at: datetime
     traces: tuple[CompanionTrace, ...]
+    content_version: str
     status: CompanionSanctuaryStatus = CompanionSanctuaryStatus.OPEN
     selected_trace_index: int | None = None
     attempt_count: int = 0
@@ -288,6 +289,10 @@ class CompanionSanctuaryState:
             raise ValueError("宠物秘境时间必须包含时区")
         if self.expires_at <= self.opened_at:
             raise ValueError("宠物秘境结束时间必须晚于开启时间")
+        content_version = str(self.content_version or "").strip()
+        if not content_version:
+            raise ValueError("宠物秘境缺少内容版本")
+        object.__setattr__(self, "content_version", content_version)
         indices = tuple(value.index for value in self.traces)
         if not indices or len(indices) != len(set(indices)):
             raise ValueError("宠物秘境踪迹不能为空或重复")

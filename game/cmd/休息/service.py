@@ -16,7 +16,7 @@ from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time, current_character_value
 from ..reply import send_command_failure, send_game_reply
-from ..presentation import current_action_action
+from ..presentation import activity_block_feedback
 
 
 async def start(current: CurrentCharacterResult) -> None:
@@ -59,6 +59,9 @@ async def stop(current: CurrentCharacterResult) -> None:
 
 def _start_message(result, view) -> DocumentMessage:
     builder = M.document().section(view.projector.name(REST_ACTION_ID), icon="notice")
+    if result.activity_block is not None:
+        feedback = activity_block_feedback(result.activity_block, "休息")
+        return builder.line(feedback.text).action(feedback.recovery).build()
     if result.status in {"started", "already_running"}:
         return (
             builder.line("已经开始休息")
@@ -69,40 +72,22 @@ def _start_message(result, view) -> DocumentMessage:
         )
     if result.status == "full":
         return builder.line("当前状态已经完全恢复").build()
-    if result.status == "exploring":
-        return (
-            builder.line("探险进行中，停止探险后才能休息")
-            .action(Action("rest.stop_exploration", "停止探险", "停止探险"))
-            .build()
-        )
-    if result.status == "main_action_occupied":
-        return (
-            builder.line("当前正在进行其他主要行动")
-            .action(current_action_action())
-            .build()
-        )
-    if result.status == "exploration_managed":
-        return (
-            builder.line("当前由探险自动休整接管")
-            .action(Action("rest.stop_exploration", "停止探险", "停止探险"))
-            .build()
-        )
     return builder.line(result.failure_message or "休息没有开始").build()
 
 
 def _stop_message(result, view) -> DocumentMessage:
     action_name = view.projector.name(REST_ACTION_ID)
     builder = M.document().section(f"{action_name}结束", icon="notice")
+    if result.activity_block is not None:
+        feedback = activity_block_feedback(
+            result.activity_block,
+            "单独结束休息",
+        )
+        return builder.line(feedback.text).action(feedback.recovery).build()
     if result.status == "not_running":
         return builder.line("当前没有正在进行的休息").build()
     if result.status == "failed":
         return builder.line(result.failure_message or "休息没有结束").build()
-    if result.status == "exploration_managed":
-        return (
-            builder.line("当前由探险自动休整接管")
-            .action(Action("rest.stop_exploration", "停止探险", "停止探险"))
-            .build()
-        )
     builder.row(
         (f"恢复{_resource_name(view, HEALTH_CURRENT)}", _number(result.recovered_health)),
         (f"恢复{_resource_name(view, SPIRIT_CURRENT)}", _number(result.recovered_spirit)),

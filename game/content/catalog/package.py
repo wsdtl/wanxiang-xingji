@@ -115,6 +115,7 @@ COMBAT_MECHANISM_DISPLAY_IDS = frozenset(
     str(definition.id)
     for definition in (
         *BASE_DAMAGE_TYPES,
+        *BASE_CONTROLS,
         *BASE_EFFECTS,
         *WEAPON_MECHANIC_CONTENT.effects,
         *EQUIPMENT_PROPERTY_CONTENT.effects,
@@ -145,7 +146,7 @@ validate_nacre_item_categories(OFFICIAL_ITEMS)
 CATALOG_PACKAGE = ContentPackage(
     manifest=ContentPackageManifest(
         id=CATALOG_PACKAGE_ID,
-        version=ContentVersion(3, 30, 0),
+        version=ContentVersion(3, 32, 0),
     ),
     item_component_types=(
         ITEM_RECYCLE_COMPONENT_TYPE,
@@ -221,6 +222,7 @@ CATALOG_PACKAGE = ContentPackage(
         *BASE_EFFECTS,
         *WEAPON_MECHANIC_CONTENT.effects,
         *EQUIPMENT_PROPERTY_CONTENT.effects,
+        *ENEMY_BEHAVIOR_CONTENT.effects,
     ),
     abilities=(
         *BASE_ABILITIES,
@@ -235,6 +237,7 @@ CATALOG_PACKAGE = ContentPackage(
     triggers=(
         *WEAPON_MECHANIC_CONTENT.triggers,
         *EQUIPMENT_PROPERTY_CONTENT.triggers,
+        *ENEMY_BEHAVIOR_CONTENT.triggers,
     ),
     interceptors=WEAPON_MECHANIC_CONTENT.interceptors,
     target_constraints=WEAPON_MECHANIC_CONTENT.constraints,

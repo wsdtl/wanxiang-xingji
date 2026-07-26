@@ -10,6 +10,10 @@ from typing import Mapping
 from game.content.catalog import CHARACTER_MAXIMUM_LEVEL
 from game.content.catalog.social import PARTY_BATTLE_DAILY_REWARD_WINS
 from game.core.gameplay import EnemyEncounterInstance, StableId, stable_id
+from game.features.player_activity import (
+    PlayerActivityBlock,
+    validate_activity_block_contract,
+)
 
 
 PARTY_BATTLE_CHALLENGE_AGGREGATE = "game.party_battle.challenge"
@@ -96,6 +100,10 @@ class PartyBattleSelectionResult:
     status: str
     challenge: PartyBattleChallengeState | None = None
     failure_message: str = ""
+    activity_block: PlayerActivityBlock | None = None
+
+    def __post_init__(self) -> None:
+        validate_activity_block_contract(self.status, self.activity_block)
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,8 @@ class PartyBattleResult:
     enemy_name: str = ""
     reward_summaries: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     failure_message: str = ""
+    activity_block: PlayerActivityBlock | None = None
+    blocked_character_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -117,6 +127,21 @@ class PartyBattleResult:
             "reward_summaries",
             MappingProxyType({str(key): tuple(value) for key, value in self.reward_summaries.items()}),
         )
+        validate_activity_block_contract(
+            self.status,
+            self.activity_block,
+            status_map={
+                "member_exploring": "exploring",
+                "member_main_action_occupied": "main_action_occupied",
+            },
+        )
+        blocked_character_id = str(self.blocked_character_id or "").strip()
+        if self.status in {"health_depleted", "loadout_changed"}:
+            if not blocked_character_id:
+                raise ValueError("组队挑战阻塞结果缺少对应成员")
+        elif blocked_character_id:
+            raise ValueError("非成员状态阻塞结果不能携带对应成员")
+        object.__setattr__(self, "blocked_character_id", blocked_character_id)
 
 
 @dataclass(frozen=True)

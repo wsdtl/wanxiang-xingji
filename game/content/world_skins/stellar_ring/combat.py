@@ -8,7 +8,7 @@ from ...catalog import (
     BREAKING_STRIKE_ABILITY_ID,
     PHYSICAL_DAMAGE_ID,
 )
-from ...catalog.combat.definitions import BASE_DAMAGE_TYPES, BASE_EFFECTS
+from ...catalog.combat.definitions import BASE_CONTROLS, BASE_DAMAGE_TYPES, BASE_EFFECTS
 from ...catalog.equipment.properties import EQUIPMENT_PROPERTY_CONTENT
 from ...catalog.weapon.mechanics import (
     WEAPON_CHARGE_EFFECT_ID,
@@ -33,6 +33,7 @@ _MECHANISM_ENTRIES = build_combat_mechanism_entries(
     interceptors=WEAPON_MECHANIC_CONTENT.interceptors,
     target_constraints=WEAPON_MECHANIC_CONTENT.constraints,
     damage_types=BASE_DAMAGE_TYPES,
+    controls=BASE_CONTROLS,
     owner_entries={
         **STELLAR_RING_WEAPON_ENTRIES,
         **STELLAR_RING_EQUIPMENT_ENTRIES,
@@ -40,9 +41,9 @@ _MECHANISM_ENTRIES = build_combat_mechanism_entries(
     base_effect_names={
         "effect.basic_attack": "基础攻击·战技效果",
         "effect.breaking_strike": "过载斩·战技效果",
-        "effect.recover_small_health": "初级生命药剂·恢复效果",
-        "effect.recover_medium_health": "中级生命药剂·恢复效果",
-        "effect.recover_large_health": "高级生命药剂·恢复效果",
+        "effect.recover_small_health": "初级生命修复剂·恢复效果",
+        "effect.recover_medium_health": "中级生命修复剂·恢复效果",
+        "effect.recover_large_health": "高级生命修复剂·恢复效果",
         "effect.recover_small_spirit": "小型同步剂·恢复效果",
         "effect.recover_medium_spirit": "中型同步剂·恢复效果",
         "effect.recover_large_spirit": "大型同步剂·恢复效果",
@@ -64,6 +65,11 @@ _MECHANISM_ENTRIES = build_combat_mechanism_entries(
     constraint_names={
         "target_constraint.weapon.taunt": "强制锁定",
         "target_constraint.weapon.untargetable": "不可选取",
+    },
+    control_names={
+        "control.stun": "震荡失能",
+        "control.freeze": "冻结锁定",
+        "control.sleep": "休眠侵入",
     },
 )
 

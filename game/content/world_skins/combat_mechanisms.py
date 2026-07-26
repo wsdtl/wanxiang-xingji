@@ -18,6 +18,7 @@ _EFFECT_SUFFIXES = {
     "bleed_status": "流血状态",
     "bleed_tick": "流血结算",
     "blood_cost": "血契代价",
+    "shared_mark": "印记",
     "echo_status": "回响标记",
     "echo_release": "回响结算",
     "tier_1": "一阶",
@@ -53,11 +54,13 @@ def build_combat_mechanism_entries(
     interceptors: Iterable,
     target_constraints: Iterable,
     damage_types: Iterable,
+    controls: Iterable,
     owner_entries: Mapping[str, SkinEntry],
     base_effect_names: Mapping[str, str],
     damage_names: Mapping[str, str],
     interceptor_names: Mapping[str, str],
     constraint_names: Mapping[str, str],
+    control_names: Mapping[str, str],
 ) -> dict[str, SkinEntry]:
     """用武器/装备已经投影出的名称，生成每个运行期机制的唯一可见名称。"""
 
@@ -96,6 +99,33 @@ def build_combat_mechanism_entries(
         content_id = str(definition.id)
         name = _reserve_name(damage_names.get(content_id, "特殊伤害"), used_names)
         entries[content_id] = SkinEntry(name=name)
+        used_names.add(name)
+    for definition in controls:
+        content_id = str(definition.id)
+        name = _reserve_name(control_names.get(content_id, "控制状态"), used_names)
+        entries[content_id] = SkinEntry(name=name)
+        used_names.add(name)
+    return entries
+
+
+def build_enemy_behavior_mechanism_entries(
+    display_owners: Mapping[str, str],
+    behavior_entries: Mapping[str, SkinEntry],
+) -> dict[str, SkinEntry]:
+    """为独立敌技 Effect/Trigger 建立世界内术语，不借用武器名称。"""
+
+    entries: dict[str, SkinEntry] = {}
+    used_names = {value.name for value in behavior_entries.values()}
+    for content_id, behavior_key in display_owners.items():
+        ability = behavior_entries[f"ability.enemy.{behavior_key}"]
+        suffix = content_id.rsplit(".", 1)[-1]
+        labels = _TRIGGER_SUFFIXES if content_id.startswith("trigger.") else _EFFECT_SUFFIXES
+        visible_suffix = labels.get(suffix, "触发" if content_id.startswith("trigger.") else "效果")
+        name = _reserve_name(f"{ability.name}·{visible_suffix}", used_names)
+        entries[content_id] = SkinEntry(
+            name=name,
+            compact_name=f"{behavior_entries[f'enemy.behavior.{behavior_key}'].name}·{visible_suffix}",
+        )
         used_names.add(name)
     return entries
 
@@ -137,4 +167,7 @@ def _reserve_name(name: str, used_names: set[str]) -> str:
     return f"{name}·战斗机制{index}"
 
 
-__all__ = ["build_combat_mechanism_entries"]
+__all__ = [
+    "build_combat_mechanism_entries",
+    "build_enemy_behavior_mechanism_entries",
+]

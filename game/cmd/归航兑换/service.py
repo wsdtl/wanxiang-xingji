@@ -9,6 +9,7 @@ from game.content.catalog.economy import EQUIPMENT_SET_BLUEPRINT_PRICE
 from game.content.catalog.item import EXCHANGE_MATERIAL_ITEM_ID
 from launch.adapter import current_message_context
 from message import Action, DocumentMessage, M
+from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
 from ..interaction import (
@@ -138,9 +139,11 @@ async def covenant_exchange_history(current: CurrentCharacterResult) -> None:
         await send_game_reply(builder.line("暂无兑换记录").build())
         return
     for index, record in enumerate(reversed(history.records), start=1):
+        set_name = view.projector.name(record.set_id)
         builder.item(
             index,
-            f"{view.projector.name(record.set_id)} | "
+            M.command(set_name, f"特效 {set_name}"),
+            FieldSeparator(),
             f"{record.material_quantity} {view.projector.name(record.material_definition_id)}",
         )
     await send_game_reply(builder.build())
@@ -157,10 +160,14 @@ async def _set_page(actor_id: str, page: int, view) -> DocumentMessage:
         .field(view.projector.name(EXCHANGE_MATERIAL_ITEM_ID), balance)
     )
     for index, set_id in enumerate(window.values, start=window.start + 1):
+        set_name = view.projector.name(set_id)
         builder.item(
             index,
-            M.command(view.projector.name(set_id), f"归航兑换 {set_id}"),
-            f" | {EQUIPMENT_SET_BLUEPRINT_PRICE} 定相尘",
+            M.command(set_name, f"归航兑换 {set_id}"),
+            FieldSeparator(),
+            M.command("套装效果", f"特效 {set_name}"),
+            FieldSeparator(),
+            f"{EQUIPMENT_SET_BLUEPRINT_PRICE} 定相尘",
         )
     builder.row(("页码", window.label), ("总计", window.total)).actions(
         pagination_actions("归航兑换 套装", window)

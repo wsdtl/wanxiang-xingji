@@ -127,11 +127,20 @@ def _assert_runtime_triggers_do_not_repeat_rolled_mechanics() -> None:
         "game.cmd.角色.service.equipment_state_from_instance",
         side_effect=(first, second),
     ):
-        assert _mechanic_names(overview, entity, view) == (
-            "暴击回流 T1",
-            "暴击回流 T2",
-            "处决回响",
-        )
+        mechanics = _mechanic_names(overview, entity, view)
+    assert tuple(value.command for value in mechanics) == (
+        "特效 暴击回流",
+        "特效 暴击回流",
+        "特效 处决回响",
+    )
+    builder = M.document().section("战斗机制", icon="item")
+    _append_value_group(builder, "特效", mechanics, 4)
+    content = render_markdown(builder.build().document)
+    assert (
+        "> > 特效: 暴击回流 T1&nbsp;|&nbsp;暴击回流 T2"
+        "&nbsp;|&nbsp;处决回响"
+        in content
+    )
 
 
 def _assert_wrapped_mechanics_use_one_text_style() -> None:
@@ -143,8 +152,8 @@ def _assert_wrapped_mechanics_use_one_text_style() -> None:
         4,
     )
     content = render_markdown(builder.build().document)
-    assert "> > 特效: 机制 1 | 机制 2 | 机制 3 | 机制 4" in content
-    assert "> > 机制 5 | 机制 6 | 机制 7 | 机制 8" in content
+    assert "> > 特效: 机制 1&nbsp;|&nbsp;机制 2&nbsp;|&nbsp;机制 3&nbsp;|&nbsp;机制 4" in content
+    assert "> > 机制 5&nbsp;|&nbsp;机制 6&nbsp;|&nbsp;机制 7&nbsp;|&nbsp;机制 8" in content
     assert "> > 机制 9" in content
     assert "_机制" not in content
 

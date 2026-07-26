@@ -7,6 +7,11 @@ from .codec import (
     encode_segment,
 )
 from .events import KNOWN_BATTLE_EVENT_KINDS
+from .identity import (
+    CONTENT_SCOPE_MARKER,
+    content_scoped_report_id,
+    report_id_matches_content_scope,
+)
 from .models import (
     BattleReportCombatantDraft,
     BattleReportDraft,
@@ -33,6 +38,7 @@ from .snapshot import BattleSnapshotProjector
 __all__ = [
     "BATTLE_REPORT_CODEC_VERSION",
     "COMPRESSION_LEVEL",
+    "CONTENT_SCOPE_MARKER",
     "KNOWN_BATTLE_EVENT_KINDS",
     "BattleReportCombatantDraft",
     "BattleReportDraft",
@@ -56,4 +62,6 @@ __all__ = [
     "StoredBattleTransition",
     "decode_segment",
     "encode_segment",
+    "content_scoped_report_id",
+    "report_id_matches_content_scope",
 ]

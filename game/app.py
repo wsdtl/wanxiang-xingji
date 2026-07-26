@@ -89,7 +89,6 @@ from game.rules.character import (
     CharacterCreationPlanner,
     CharacterCreationWorkflow,
     CharacterSettingsState,
-    WorldShiftResult,
 )
 from game.rules.activity import (
     GLOBAL_ACTIVITY_SCOPE_ID,
@@ -173,7 +172,12 @@ from game.features.exchange import (
 )
 from game.features.dimension_shift import (
     DimensionShiftFeature,
+    DimensionShiftResult,
     DimensionShiftStorageKinds,
+)
+from game.features.player_activity import (
+    PlayerActivityFeature,
+    PlayerActivityStorageKinds,
 )
 from game.features.player import (
     CharacterCreationCommandResult,
@@ -229,6 +233,7 @@ class GameServices:
     inventory_engine: InventoryEngine
     inventory_protection: PersistedInventoryProtectionService
     player: PlayerFeature
+    player_activity: PlayerActivityFeature
     dimension_shift: DimensionShiftFeature
     breakthrough: BreakthroughFeature
     loadouts: PersistedLoadoutService
@@ -366,7 +371,7 @@ class GameServices:
         target_world_id: str,
         *,
         logical_time: datetime,
-    ) -> WorldShiftResult:
+    ) -> DimensionShiftResult:
         """转发到跃迁业务的唯一写入口。"""
 
         return self.dimension_shift.shift(
@@ -808,6 +813,7 @@ def _assemble_world_features(
     content_assembly: _ContentAssembly,
     foundation: _FoundationAssembly,
     rest: RestFeature,
+    player_activity: PlayerActivityFeature,
 ) -> _WorldFeatureAssembly:
     content = content_assembly.content
     world_views = content_assembly.world_views
@@ -898,11 +904,10 @@ def _assemble_world_features(
             foundation.player_lineup,
             foundation.companion_combat,
         ),
+        player_activity,
         CompanionStorageKinds(
-            action=ACTION_AGGREGATE,
             character=CHARACTER_AGGREGATE,
             character_world=CHARACTER_WORLD_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
             inventory=INVENTORY_AGGREGATE,
             loadout=LOADOUT_AGGREGATE,
             roster=COMPANION_ROSTER_AGGREGATE,
@@ -916,9 +921,8 @@ def _assemble_world_features(
         database,
         content,
         snapshots,
+        player_activity,
         WorldTravelStorageKinds(
-            action=ACTION_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
             world=WORLD_AGGREGATE,
             character_world=CHARACTER_WORLD_AGGREGATE,
         ),
@@ -932,8 +936,8 @@ def _assemble_world_features(
         foundation.inventory_engine,
         foundation.player_lineup,
         battle_reports,
+        player_activity,
         ExplorationStorageKinds(
-            ACTION_AGGREGATE,
             CHARACTER_AGGREGATE,
             INVENTORY_AGGREGATE,
             LOADOUT_AGGREGATE,
@@ -960,12 +964,11 @@ def _assemble_world_features(
         foundation.reward_settlement,
         foundation.player_lineup,
         battle_reports,
+        player_activity,
         DimensionalDisasterStorageKinds(
-            ACTION_AGGREGATE,
             ACTIVITY_AGGREGATE,
             CHARACTER_AGGREGATE,
             CHARACTER_WORLD_AGGREGATE,
-            EXPLORATION_AGGREGATE,
             INVENTORY_AGGREGATE,
             LOADOUT_AGGREGATE,
             COMPANION_ROSTER_AGGREGATE,
@@ -995,6 +998,7 @@ def _assemble_economy_features(
     content_assembly: _ContentAssembly,
     foundation: _FoundationAssembly,
     account_identity_secret: str,
+    player_activity: PlayerActivityFeature,
 ) -> _EconomyFeatureAssembly:
     content = content_assembly.content
     snapshots = content_assembly.snapshots
@@ -1060,6 +1064,7 @@ def _assemble_economy_features(
         foundation.actions,
         CharacterEngine(content.catalog.characters),
         foundation.character_projector,
+        player_activity,
         RestStorageKinds(
             ACTION_AGGREGATE,
             CHARACTER_AGGREGATE,
@@ -1076,6 +1081,7 @@ def _assemble_player_features(
     secret: str,
     content_assembly: _ContentAssembly,
     foundation: _FoundationAssembly,
+    player_activity: PlayerActivityFeature,
 ) -> _PlayerFeatureAssembly:
     content = content_assembly.content
     snapshots = content_assembly.snapshots
@@ -1101,6 +1107,7 @@ def _assemble_player_features(
         notifications,
         activities,
         content_assembly.global_activities,
+        player_activity,
         PlayerStorageKinds(
             character=CHARACTER_AGGREGATE,
             inventory=INVENTORY_AGGREGATE,
@@ -1108,7 +1115,6 @@ def _assemble_player_features(
             ledger=LEDGER_AGGREGATE,
             world=WORLD_AGGREGATE,
             character_world=CHARACTER_WORLD_AGGREGATE,
-            action=ACTION_AGGREGATE,
             settings=CHARACTER_SETTINGS_AGGREGATE,
             inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
         ),
@@ -1119,11 +1125,10 @@ def _assemble_player_features(
         content_assembly.world_views,
         snapshots,
         foundation.inventory_engine,
+        player_activity,
         DimensionShiftStorageKinds(
             character_world=CHARACTER_WORLD_AGGREGATE,
             world=WORLD_AGGREGATE,
-            action=ACTION_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
             inventory=INVENTORY_AGGREGATE,
         ),
     )
@@ -1155,6 +1160,7 @@ def _assemble_social_features(
     content_assembly: _ContentAssembly,
     foundation: _FoundationAssembly,
     world_features: _WorldFeatureAssembly,
+    player_activity: PlayerActivityFeature,
 ) -> _SocialFeatureAssembly:
     content = content_assembly.content
     snapshots = content_assembly.snapshots
@@ -1179,14 +1185,13 @@ def _assemble_social_features(
         foundation.reward_settlement,
         world_features.battle_reports,
         foundation.player_lineup,
+        player_activity,
         PartyBattleStorageKinds(
             party=PARTY_AGGREGATE,
             character=CHARACTER_AGGREGATE,
             inventory=INVENTORY_AGGREGATE,
             loadout=LOADOUT_AGGREGATE,
             companion_roster=COMPANION_ROSTER_AGGREGATE,
-            action=ACTION_AGGREGATE,
-            exploration=EXPLORATION_AGGREGATE,
             reward_claim=REWARD_CLAIM_AGGREGATE,
             weapon=WEAPON_AGGREGATE,
             character_world=CHARACTER_WORLD_AGGREGATE,
@@ -1259,6 +1264,14 @@ def build_game_services(
         ),
     )
     content_assembly = _assemble_content(world_id)
+    player_activity = PlayerActivityFeature(
+        database,
+        content_assembly.snapshots,
+        PlayerActivityStorageKinds(
+            ACTION_AGGREGATE,
+            EXPLORATION_AGGREGATE,
+        ),
+    )
     foundation = _assemble_foundation(
         database,
         content_assembly.content,
@@ -1269,24 +1282,28 @@ def build_game_services(
         content_assembly,
         foundation,
         secret,
+        player_activity,
     )
     world_features = _assemble_world_features(
         database,
         content_assembly,
         foundation,
         economy_features.rest,
+        player_activity,
     )
     player_features = _assemble_player_features(
         database,
         secret,
         content_assembly,
         foundation,
+        player_activity,
     )
     social_features = _assemble_social_features(
         database,
         content_assembly,
         foundation,
         world_features,
+        player_activity,
     )
     return GameServices(
         database=database,
@@ -1305,6 +1322,7 @@ def build_game_services(
         inventory_engine=foundation.inventory_engine,
         inventory_protection=foundation.inventory_protection,
         player=player_features.player,
+        player_activity=player_activity,
         dimension_shift=player_features.dimension_shift,
         breakthrough=player_features.breakthrough,
         loadouts=foundation.loadouts,

@@ -68,7 +68,7 @@ from game.cmd import 角色 as character_component  # noqa: E402,F401
 from game.cmd import 铭刻 as inscription_component  # noqa: E402,F401
 from game.cmd.跨界灾厄 import service as disaster_command_service  # noqa: E402
 from game.features.dimensional_disaster import service as disaster_feature_service  # noqa: E402
-from game.features.battle_report import build_public_battle_report  # noqa: E402
+from game.features.battle_report import build_public_battle_participants  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
 
@@ -146,6 +146,46 @@ async def _main() -> None:
                 services.activities.load(GLOBAL_ACTIVITY_SCOPE_ID),
                 logical_time=TIME,
             )
+
+            stale_event = replace(
+                event,
+                combat=replace(event.combat, content_version="stale-content"),
+                revision=event.revision + 1,
+            )
+            with services.database.unit_of_work() as uow:
+                services.dimensional_disasters.snapshots.update(
+                    uow,
+                    DIMENSIONAL_DISASTER_AGGREGATE,
+                    event.event_id,
+                    event,
+                    stale_event,
+                    TIME,
+                )
+                uow.commit()
+            content_changed = services.dimensional_disasters.challenge(
+                first_character.id,
+                "disaster-stale-content",
+                logical_time=TIME,
+            )
+            assert content_changed.status == "content_changed"
+            event = replace(
+                stale_event,
+                combat=replace(
+                    stale_event.combat,
+                    content_version=services.content.catalog.report.content_fingerprint,
+                ),
+                revision=stale_event.revision + 1,
+            )
+            with services.database.unit_of_work() as uow:
+                services.dimensional_disasters.snapshots.update(
+                    uow,
+                    DIMENSIONAL_DISASTER_AGGREGATE,
+                    stale_event.event_id,
+                    stale_event,
+                    event,
+                    TIME,
+                )
+                uow.commit()
 
             initial_dimension = services.load_character_overview(first_character).overview.character_world
             target_world = next(
@@ -248,12 +288,13 @@ async def _main() -> None:
                 disaster_manifest.terms[f"enemy.source_{index}"].name
                 for index in range(len(expected_permanent_terms))
             ) == expected_permanent_terms
-            public_segment = build_public_battle_report(battle_report)["detail"][
-                "segments"
-            ][0]
             public_disaster = next(
                 value
-                for value in public_segment["initial_participants"]
+                for value in build_public_battle_participants(
+                    first_segment,
+                    segment_index=0,
+                    snapshot="before",
+                )["participants"]
                 if value["unit_kind"] == "dimensional_disaster"
             )
             permanent_group = next(

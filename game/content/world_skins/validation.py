@@ -1,6 +1,13 @@
 """具体世界皮肤共享的展示完整性校验。"""
 
-from game.core.gameplay import SkinEntry, character_name_display_width
+from collections.abc import Iterable
+
+from game.core.gameplay import (
+    SkinEntry,
+    SkinPack,
+    StableId,
+    character_name_display_width,
+)
 
 from ..catalog import CHARACTER_REALMS
 
@@ -25,4 +32,29 @@ def build_character_realm_entries(
     }
 
 
-__all__ = ["build_character_realm_entries"]
+def validate_distinct_item_skin_names(
+    skins: tuple[SkinPack, ...],
+    item_ids: Iterable[StableId],
+    *,
+    invariant_item_ids: frozenset[StableId],
+) -> None:
+    """除明确恒定物品外，每个世界必须提供独立物品名。"""
+
+    conflicts: list[str] = []
+    for item_id in sorted(set(item_ids) - set(invariant_item_ids)):
+        names = tuple(skin.entries[item_id].name for skin in skins)
+        if len(names) != len(set(names)):
+            projected = ", ".join(
+                f"{skin.id}={name}" for skin, name in zip(skins, names)
+            )
+            conflicts.append(f"{item_id}: {projected}")
+    if conflicts:
+        raise ValueError(
+            "非恒定物品不能跨世界共用名称：" + "; ".join(conflicts)
+        )
+
+
+__all__ = [
+    "build_character_realm_entries",
+    "validate_distinct_item_skin_names",
+]

@@ -17,8 +17,6 @@ from game.features.errors import StalePreparationError
 from game.core.gameplay import (
     HEALTH_CURRENT,
     SPIRIT_CURRENT,
-    ActionSlotKind,
-    ActionState,
     CharacterState,
     InscriptionPreference,
     InventoryState,
@@ -42,8 +40,6 @@ from game.rules.battle_report import (
 from game.rules.character import CharacterWorldState, PRIMARY_LEDGER_ID
 from game.rules.companion import CompanionRosterState
 from game.rules.encounter import EnemyEncounterGenerator
-from game.rules.exploration import ExplorationState
-
 from .battle import PartyBattleSimulator
 from .models import (
     PARTY_BATTLE_CHALLENGE_AGGREGATE,
@@ -67,8 +63,6 @@ class PartyBattleStorageKinds:
     inventory: str
     loadout: str
     companion_roster: str
-    action: str
-    exploration: str
     reward_claim: str
     weapon: str
     character_world: str
@@ -81,8 +75,6 @@ class _PartyMemberInputs:
     inventory: InventoryState
     loadout: LoadoutState
     roster: CompanionRosterState
-    action: ActionState | None
-    exploration: ExplorationState | None
     character_world: CharacterWorldState
     inscription_preference: InscriptionPreference | None
     loadout_fingerprint: str
@@ -114,6 +106,7 @@ class PartyBattleFeature:
         rewards,
         battle_reports,
         player_lineup,
+        player_activity,
         storage: PartyBattleStorageKinds,
         reward_keys_factory,
         companion_growth,
@@ -126,6 +119,7 @@ class PartyBattleFeature:
         self.snapshots = snapshots
         self.rewards = rewards
         self.battle_reports = battle_reports
+        self.player_activity = player_activity
         self.storage = storage
         self.reward_keys_factory = reward_keys_factory
         self.companion_growth = companion_growth
@@ -145,6 +139,15 @@ class PartyBattleFeature:
                 PARTY_BATTLE_CHALLENGE_AGGREGATE,
                 normalized,
                 PartyBattleChallengeState,
+            )
+        if (
+            challenge is not None
+            and challenge.status == "selected"
+            and not self._challenge_uses_current_content(challenge)
+        ):
+            return PartyBattleSelectionResult(
+                "content_changed",
+                failure_message="内容已经更新，请由队长重新选择组队首领",
             )
         return PartyBattleSelectionResult(
             "selected" if challenge is not None and challenge.status == "selected" else "completed" if challenge is not None else "empty",
@@ -175,6 +178,15 @@ class PartyBattleFeature:
             replay = self._replay(uow, operation_id, fingerprint, party_id)
             if replay is not None:
                 challenge = self._load_challenge(uow, party_id)
+                if (
+                    challenge is not None
+                    and challenge.status == "selected"
+                    and not self._challenge_uses_current_content(challenge)
+                ):
+                    return PartyBattleSelectionResult(
+                        "content_changed",
+                        failure_message="内容已经更新，请由队长重新选择组队首领",
+                    )
                 return PartyBattleSelectionResult("replayed", challenge)
             party = self._party(uow, party_id)
             failure = self._leader_failure(party, actor_id)
@@ -186,7 +198,11 @@ class PartyBattleFeature:
                     failure_message=f"组队挑战至少需要{PARTY_BATTLE_MINIMUM_MEMBERS}名玩家",
                 )
             previous = self._load_challenge(uow, party_id)
-            if previous is not None and previous.status == "selected":
+            if (
+                previous is not None
+                and previous.status == "selected"
+                and self._challenge_uses_current_content(previous)
+            ):
                 return PartyBattleSelectionResult("already_selected", previous, "当前首领尚未击破")
 
             source_id = context.random.choice(self.content.party_bosses.source_ids())
@@ -243,7 +259,17 @@ class PartyBattleFeature:
         with self.database.unit_of_work() as uow:
             replay = self._replay(uow, operation_id, fingerprint, party_id)
             if replay is not None:
-                return PartyBattleSelectionResult("replayed", self._load_challenge(uow, party_id))
+                challenge = self._load_challenge(uow, party_id)
+                if (
+                    challenge is not None
+                    and challenge.status == "selected"
+                    and not self._challenge_uses_current_content(challenge)
+                ):
+                    return PartyBattleSelectionResult(
+                        "content_changed",
+                        failure_message="内容已经更新，请由队长重新选择组队首领",
+                    )
+                return PartyBattleSelectionResult("replayed", challenge)
             party = self._party(uow, party_id)
             if party is None or actor_id not in party.members:
                 return PartyBattleSelectionResult("not_member", failure_message="当前角色不在这支队伍中")
@@ -254,12 +280,36 @@ class PartyBattleFeature:
                     challenge,
                     "当前没有已锁定的组队挑战",
                 )
+            if not self._challenge_uses_current_content(challenge):
+                return PartyBattleSelectionResult(
+                    "content_changed",
+                    failure_message="内容已经更新，请由队长重新选择组队首领",
+                )
             if dict(challenge.member_slots) != {
                 key: value.slot for key, value in party.members.items()
             }:
                 return PartyBattleSelectionResult("party_changed", challenge, "队伍成员已经变化，请由队长重新选择挑战")
             values = dict(challenge.ready_fingerprints)
             if ready:
+                activity_block = self.player_activity.block_in_uow(uow, actor_id)
+                if activity_block is not None:
+                    return PartyBattleSelectionResult(
+                        activity_block.status,
+                        challenge,
+                        activity_block=activity_block,
+                    )
+                character = self.snapshots.require(
+                    uow,
+                    self.storage.character,
+                    actor_id,
+                    CharacterState,
+                )
+                if character.resources[HEALTH_CURRENT] <= 0:
+                    return PartyBattleSelectionResult(
+                        "health_depleted",
+                        challenge,
+                        "当前血气已经归零，恢复后才能准备组队挑战",
+                    )
                 values[actor_id] = self._loadout_fingerprint(uow, actor_id)
             else:
                 values.pop(actor_id, None)
@@ -342,6 +392,11 @@ class PartyBattleFeature:
             challenge = self._load_challenge(uow, party_id)
             if challenge is None or challenge.status != "selected":
                 return PartyBattleResult("no_challenge", challenge, failure_message="当前没有可挑战的组队首领")
+            if not self._challenge_uses_current_content(challenge):
+                return PartyBattleResult(
+                    "content_changed",
+                    failure_message="内容已经更新，请由队长重新选择组队首领",
+                )
             if dict(challenge.member_slots) != {
                 key: value.slot for key, value in party.members.items()
             }:
@@ -353,13 +408,28 @@ class PartyBattleFeature:
             for member in sorted(party.members.values(), key=lambda value: value.slot):
                 character_id = member.subject_id
                 inputs = self._load_member_inputs(uow, character_id)
-                occupied = self._occupied_inputs(inputs)
-                if occupied:
-                    return PartyBattleResult("member_busy", challenge, failure_message=f"{occupied}正在进行其他主要行动")
+                activity_block = self.player_activity.block_in_uow(
+                    uow,
+                    character_id,
+                )
+                if activity_block is not None:
+                    return PartyBattleResult(
+                        f"member_{activity_block.status}",
+                        challenge,
+                        activity_block=activity_block,
+                    )
                 if inputs.character.resources[HEALTH_CURRENT] <= 0:
-                    return PartyBattleResult("health_depleted", challenge, failure_message=f"{inputs.character.name}的血气已经归零")
+                    return PartyBattleResult(
+                        "health_depleted",
+                        challenge,
+                        blocked_character_id=inputs.character.id,
+                    )
                 if inputs.loadout_fingerprint != challenge.ready_fingerprints[character_id]:
-                    return PartyBattleResult("loadout_changed", challenge, failure_message=f"{inputs.character.name}准备后的状态或配装已经变化")
+                    return PartyBattleResult(
+                        "loadout_changed",
+                        challenge,
+                        blocked_character_id=inputs.character.id,
+                    )
                 members.append(inputs)
 
         context = _context(operation_id, logical_time)
@@ -705,18 +775,6 @@ class PartyBattleFeature:
             inventory,
             loadout,
             roster,
-            self.snapshots.load(
-                uow,
-                self.storage.action,
-                character_id,
-                ActionState,
-            ),
-            self.snapshots.load(
-                uow,
-                self.storage.exploration,
-                character_id,
-                ExplorationState,
-            ),
             self.snapshots.require(
                 uow,
                 self.storage.character_world,
@@ -768,17 +826,6 @@ class PartyBattleFeature:
             WeaponState,
         )
         return {weapon.asset_id: weapon.revision}
-
-    @staticmethod
-    def _occupied_inputs(inputs: _PartyMemberInputs) -> str:
-        if inputs.action is not None and inputs.action.running(ActionSlotKind.MAIN):
-            return "队员"
-        if (
-            inputs.exploration is not None
-            and inputs.exploration.active
-        ):
-            return "队员"
-        return ""
 
     def _party(self, uow, party_id: str):
         state = self.snapshots.require(
@@ -936,6 +983,19 @@ class PartyBattleFeature:
 
     def _report_id(self, challenge: PartyBattleChallengeState) -> str:
         return f"battle-report:party:{challenge.session_id}:attempt:{challenge.attempt_count + 1}"
+
+    def _challenge_uses_current_content(
+        self,
+        challenge: PartyBattleChallengeState,
+    ) -> bool:
+        fingerprint = self.content.catalog.report.content_fingerprint
+        return (
+            challenge.encounter.content_version == fingerprint
+            and all(
+                enemy.content_version == fingerprint
+                for enemy in challenge.encounter.enemies
+            )
+        )
 
     def _replay(self, uow, operation_id, fingerprint, party_id):
         committed = uow.load_transaction(operation_id)

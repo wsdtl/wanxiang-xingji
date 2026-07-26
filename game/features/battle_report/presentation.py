@@ -9,6 +9,7 @@ from types import MappingProxyType
 
 from game.content.catalog.combat.stats import SHIELD_CURRENT
 from game.core.gameplay import (
+    BattleStatus,
     COMBAT_DEFENSE,
     HEALTH_CURRENT,
     HEALTH_MAXIMUM,
@@ -29,19 +30,68 @@ from game.rules.battle_report import (
 
 
 PUBLIC_BATTLE_REPORT_SCHEMA = "game.battle_report.presentation"
-PUBLIC_BATTLE_REPORT_VERSION = 2
+PUBLIC_BATTLE_REPORT_VERSION = 3
 
-_PRIVATE_VALUE_KEYS = frozenset(
-    {
-        "battle_id",
-        "grant_source_id",
-        "instance_id",
-        "operation_id",
-        "owner_id",
-        "request_id",
-        "use_id",
-    }
-)
+# 公共事实采用逐事件允许列表。核心以后新增任何审计字段时，默认不会外发。
+_EVENT_VALUE_KEYS = {
+    "ability.completed": frozenset({"interrupted"}),
+    "ability.cooldown_changed": frozenset({"before", "after", "delta"}),
+    "ability.cooldown_started": frozenset({"turns"}),
+    "ability.ready": frozenset(),
+    "ability.started": frozenset(),
+    "combat.action.interrupted": frozenset(),
+    "combat.attack.blocked": frozenset({"block_reduction"}),
+    "combat.attack.critical": frozenset({"critical_multiplier"}),
+    "combat.attack.hit": frozenset(),
+    "combat.attack.missed": frozenset({"hit_chance"}),
+    "combat.battle.finished": frozenset({"reason"}),
+    "combat.battle.started": frozenset(),
+    "combat.control.resolved": frozenset(
+        {"applied", "chance", "duration_turns"}
+    ),
+    "combat.damage.dealt": frozenset(
+        {
+            "effective_damage",
+            "health_damage",
+            "shield_damage",
+            "overkill",
+        }
+    ),
+    "combat.damage.intercepted": frozenset(
+        {"before_amount", "after_amount"}
+    ),
+    "combat.damage.prevented": frozenset({"requested_damage"}),
+    "combat.damage.redirected": frozenset({"amount"}),
+    "combat.healing.resolved": frozenset({"actual", "overheal"}),
+    "combat.participant.joined": frozenset(),
+    "combat.participant.left": frozenset(),
+    "combat.phase.activated": frozenset({"behavior_ids"}),
+    "combat.round.started": frozenset({"round"}),
+    "combat.shield.broken": frozenset({"shield_damage"}),
+    "combat.shield.damaged": frozenset(
+        {"shield_damage", "shield_before", "shield_after"}
+    ),
+    "combat.shield.granted": frozenset({"actual", "before", "after"}),
+    "combat.target.defeated": frozenset({"overkill"}),
+    "combat.target.revived": frozenset({"current"}),
+    "combat.timeline.delay_requested": frozenset({"positions"}),
+    "combat.timeline.extra_turn_requested": frozenset(),
+    "combat.turn.ended": frozenset({"round", "turn", "skipped"}),
+    "combat.turn.skipped": frozenset({"reason"}),
+    "combat.turn.started": frozenset({"round", "turn"}),
+    "effect.applied": frozenset({"stacks"}),
+    "effect.application.rejected": frozenset({"reason"}),
+    "effect.choice.selected": frozenset({"branch"}),
+    "effect.duration_changed": frozenset({"remaining_turns", "delta"}),
+    "effect.expired": frozenset(),
+    "effect.removed": frozenset({"reason"}),
+    "effect.stacks_changed": frozenset({"stacks", "delta"}),
+    "resource.changed": frozenset({"delta", "current"}),
+    "resource.transferred": frozenset(
+        {"drained", "received", "overflow", "efficiency"}
+    ),
+    "trigger.activated": frozenset({"chance"}),
+}
 
 _FACT_LABELS = {
     "raw": "原始值",
@@ -96,10 +146,9 @@ _FACT_LABELS = {
 }
 
 _STATUS_NAMES = {
-    "created": "已经建立",
-    "running": "进行中",
-    "finished": "已经结束",
-    "resolved": "已经结算",
+    BattleStatus.ACTIVE.value: "进行中",
+    BattleStatus.FINISHED.value: "已经结束",
+    BattleStatus.DRAW.value: "平局结束",
 }
 
 _UI = {
@@ -257,7 +306,7 @@ class BattleEventPresentationRegistry:
             descriptor = self._entries[event.kind]
         except KeyError as exc:
             raise RuntimeError(f"战报事件没有展示注册: {event.kind}") from exc
-        public_values, omitted_keys = _public_values(event.values)
+        public_values = _public_values(event.kind, event.values)
         subject = context.subject(
             event,
             owner=descriptor.subject_owner,
@@ -267,7 +316,6 @@ class BattleEventPresentationRegistry:
             "label": descriptor.label,
             "tone": descriptor.tone,
             "category": descriptor.category,
-            "compact_visible": descriptor.compact_visible,
             "text": descriptor.render(event, context),
             "source": {"key": event.source, "label": context.actor(event.source)},
             "target": {"key": event.target, "label": context.actor(event.target)},
@@ -275,15 +323,6 @@ class BattleEventPresentationRegistry:
             "phase": event.phase,
             "logical_time": event.logical_time.isoformat(),
             "facts": _fact_entries(event, public_values, context),
-            "raw": {
-                "kind": event.kind,
-                "source": event.source,
-                "target": event.target,
-                "subject": event.subject,
-                "phase": event.phase,
-                "values": public_values,
-                "omitted_private_keys": omitted_keys,
-            },
         }
 
 
@@ -806,11 +845,13 @@ def build_public_battle_report(
     *,
     event_registry: BattleEventPresentationRegistry | None = None,
 ) -> dict[str, object]:
-    """建立自解释公共战报；Web 不接触战斗语义。"""
+    """建立公共战报 v3；默认走轻量、按需加载协议。"""
 
-    return BattleReportPresenter(
-        event_registry or BATTLE_EVENT_PRESENTATIONS,
-    ).build(report)
+    if event_registry is not None:
+        return BattleReportPresenter(event_registry).build(report)
+    from .public_protocol import build_public_battle_report as build_v3
+
+    return build_v3(report)
 
 
 def present_battle_event(
@@ -896,12 +937,12 @@ def _build_event_registry() -> BattleEventPresentationRegistry:
     add("combat.timeline.delay_requested", "行动延后", "control", "status", True, _timeline_delay_text)
     add("effect.applied", "施加效果", "status", "status", True, _effect_applied_text)
     add("effect.application.rejected", "效果未生效", "status", "status", True, _effect_rejected_text)
-    add("effect.expired", "效果结束", "status", "status", True, lambda e, c: f"{c.actor(e.target)} 的 {c.subject(e)} 结束")
-    add("effect.removed", "移除效果", "status", "status", True, lambda e, c: f"{c.actor(e.target)} 的 {c.subject(e)} 被移除")
+    add("effect.expired", "效果结束", "status", "status", True, lambda e, c: f"{c.actor(e.target)} 身上的 {c.subject(e)} 结束")
+    add("effect.removed", "移除效果", "status", "status", True, lambda e, c: f"{c.actor(e.target)} 身上的 {c.subject(e)} 被移除")
     add("effect.stacks_changed", "层数变化", "status", "status", True, _effect_stacks_text)
     add("effect.duration_changed", "持续变化", "status", "status", True, _effect_duration_text)
     add("effect.choice.selected", "效果分支", "status", "status", True, _effect_choice_text)
-    add("trigger.activated", "机制触发", "status", "status", True, lambda e, c: f"{c.actor(e.source)} 的 {c.subject(e, '触发机制')} 被触发")
+    add("trigger.activated", "机制触发", "status", "status", True, lambda e, c: f"{c.actor(e.source)} 的 {c.subject(e, '触发机制')}触发")
     add("combat.participant.joined", "加入战斗", "system", "system", True, lambda e, c: f"{c.actor(e.source)} 加入战斗")
     add("combat.phase.activated", "阶段变化", "phase", "system", True, _phase_activated_text)
     add("combat.participant.left", "退出战斗", "system", "system", True, lambda e, c: f"{c.actor(e.source)} 退出战斗")
@@ -953,7 +994,7 @@ def _resource_changed_text(event, context):
     if delta > 0:
         return f"{target} 恢复 {_number(delta)} 点{resource}"
     if delta < 0:
-        return f"{target} 消耗 {_number(abs(delta))} 点{resource}"
+        return f"{target} 的{resource}减少 {_number(abs(delta))} 点"
     return f"{target} 的{resource}没有变化"
 
 
@@ -975,11 +1016,19 @@ def _critical_text(event, context):
 def _damage_dealt_text(event, context):
     health = context.term(event.target, str(HEALTH_CURRENT), "生命", compact=True)
     shield = context.term(event.target, str(SHIELD_CURRENT), "护盾", compact=True)
+    damage_type = context.subject(event, "伤害", compact=True)
+    breakdown = []
+    health_damage = _float(event.values.get("health_damage"))
+    shield_damage = _float(event.values.get("shield_damage"))
+    if health_damage > 0:
+        breakdown.append(f"{health} {_number(health_damage)}")
+    if shield_damage > 0:
+        breakdown.append(f"{shield} {_number(shield_damage)}")
+    suffix = f"（{'，'.join(breakdown)}）" if breakdown else ""
     return (
         f"{context.actor(event.source)} 对 {context.actor(event.target)} 造成 "
-        f"{_number(event.values.get('effective_damage'))} 点有效伤害"
-        f"（{health} {_number(event.values.get('health_damage'))}，"
-        f"{shield} {_number(event.values.get('shield_damage'))}）"
+        f"{_number(event.values.get('effective_damage'))} 点{damage_type}"
+        f"{suffix}"
     )
 
 
@@ -1097,6 +1146,14 @@ def _fact_label(event, key, context):
 
 
 def _fact_display(event, key, value, context):
+    if key in {
+        "block_reduction",
+        "chance",
+        "critical_chance",
+        "hit_chance",
+        "rate_multiplier",
+    }:
+        return _percentage(value)
     owner = event.target if key in {"conditions"} else event.source
     return _display_value(value, owner, context)
 
@@ -1222,16 +1279,13 @@ def _duration_label(started_at, finished_at):
     return f"用时 {_number(seconds / 60)} 分钟"
 
 
-def _public_values(values):
-    omitted = sorted(key for key in values if key in _PRIVATE_VALUE_KEYS)
-    return (
-        {
-            str(key): _json_value(value)
-            for key, value in values.items()
-            if key not in _PRIVATE_VALUE_KEYS
-        },
-        omitted,
-    )
+def _public_values(kind, values):
+    allowed = _EVENT_VALUE_KEYS[kind]
+    return {
+        str(key): _json_value(value)
+        for key, value in values.items()
+        if key in allowed
+    }
 
 
 def _json_value(value):
@@ -1262,12 +1316,24 @@ def _number(value):
     return str(round(number)) if number.is_integer() else f"{number:.2f}".rstrip("0").rstrip(".")
 
 
+def _percentage(value):
+    return f"{_number(_float(value) * 100)}%"
+
+
 BATTLE_EVENT_PRESENTATIONS = _build_event_registry()
 
 if BATTLE_EVENT_PRESENTATIONS.registered_kinds != KNOWN_BATTLE_EVENT_KINDS:
     missing = sorted(KNOWN_BATTLE_EVENT_KINDS - BATTLE_EVENT_PRESENTATIONS.registered_kinds)
     extra = sorted(BATTLE_EVENT_PRESENTATIONS.registered_kinds - KNOWN_BATTLE_EVENT_KINDS)
     raise RuntimeError(f"战报事件展示注册不完整: missing={missing}, extra={extra}")
+
+if frozenset(_EVENT_VALUE_KEYS) != KNOWN_BATTLE_EVENT_KINDS:
+    missing = sorted(KNOWN_BATTLE_EVENT_KINDS - frozenset(_EVENT_VALUE_KEYS))
+    extra = sorted(frozenset(_EVENT_VALUE_KEYS) - KNOWN_BATTLE_EVENT_KINDS)
+    raise RuntimeError(f"战报公共事实白名单不完整: missing={missing}, extra={extra}")
+
+if frozenset(_STATUS_NAMES) != frozenset(value.value for value in BattleStatus):
+    raise RuntimeError("战报状态名称没有完整覆盖 BattleStatus")
 
 
 __all__ = [

@@ -28,6 +28,7 @@ class ExplorationStopReason(str, Enum):
     CAPACITY_FULL = "capacity_full"
     BATCH_LIMIT = "batch_limit"
     INVALID_LOCATION = "invalid_location"
+    RECOVERY_INVALID = "recovery_invalid"
 
 
 class ExplorationRestReason(str, Enum):

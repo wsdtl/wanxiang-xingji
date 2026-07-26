@@ -290,7 +290,7 @@ def _assert_persisted_loop() -> None:
             anchor(SUNSET_RIDGE_ID),
             logical_time=TIME,
         )
-        assert blocked.status == "main_action_occupied"
+        assert blocked.status == "exploring"
 
         before_failure = _persistent_state(services)
         simulation_started = Event()
@@ -344,9 +344,29 @@ def _assert_persisted_loop() -> None:
                 else:
                     raise AssertionError("战报失败应中止整批探险结算")
         assert _persistent_state(services) == before_failure
+        current_fingerprint = services.content.catalog.report.content_fingerprint
         assert services.battle_reports.reference(
-            exploration_battle_report_id(started.state.session_id)
+            exploration_battle_report_id(
+                started.state.session_id,
+                current_fingerprint,
+            )
         ) is None
+
+        old_fingerprint = "content-fingerprint.before-upgrade"
+        prepared_before_upgrade = services.exploration.settlement._prepare_next(
+            character_id,
+            logical_time=TIME + timedelta(seconds=EXPLORATION_BATCH_SECONDS),
+        )
+        assert prepared_before_upgrade is not None
+        assert prepared_before_upgrade.report is not None
+        legacy_report_id = f"battle-report:{started.state.session_id}"
+        old_reference = services.battle_reports.capture(
+            replace(
+                prepared_before_upgrade.report.draft,
+                report_id=legacy_report_id,
+                content_fingerprint=old_fingerprint,
+            )
+        )
 
         simulations = 0
         original_simulate = services.exploration.settlement._simulate_batch
@@ -402,15 +422,28 @@ def _assert_persisted_loop() -> None:
         )
         assert progress.points == expected_progress
         if settled.batches[0].plan.encounter is not None:
+            current_report_id = exploration_battle_report_id(
+                settled.state.session_id,
+                current_fingerprint,
+            )
             reference = services.battle_reports.reference(
-                exploration_battle_report_id(settled.state.session_id)
+                current_report_id
             )
             assert reference is not None
+            assert reference.report_id != old_reference.report_id
+            assert reference.share_id != old_reference.share_id
+            old_report = services.battle_reports.load_public(
+                old_reference.share_id,
+                logical_time=TIME + timedelta(seconds=EXPLORATION_BATCH_SECONDS),
+            )
+            assert old_report is not None
+            assert old_report.content_fingerprint == old_fingerprint
             report = services.battle_reports.load_public(
                 reference.share_id,
                 logical_time=TIME + timedelta(seconds=EXPLORATION_BATCH_SECONDS),
             )
             assert report is not None and report.segments
+            assert report.content_fingerprint == current_fingerprint
             assert report.segments[0].transitions
             assert all(
                 transition.after.participants

@@ -111,9 +111,14 @@ class ItemUseRoute:
         if self.argument_policy is ItemUseArgumentPolicy.NONE and not self.argument_error:
             raise ValueError(f"无参数物品使用路由必须声明错误文案：{self.component_id}")
 
-    def validate_arguments(self, parts: tuple[str, ...]) -> None:
+    def validate_arguments(
+        self,
+        parts: tuple[str, ...],
+        *,
+        item_name: str,
+    ) -> None:
         if self.argument_policy is ItemUseArgumentPolicy.NONE and len(parts) != 1:
-            raise ValueError(self.argument_error)
+            raise ValueError(self.argument_error.format(item=item_name))
 
     def action(self, reference: str) -> Action:
         return Action(
@@ -160,7 +165,10 @@ async def use_item(message: str, current: CurrentCharacterResult) -> None:
         available = initial.inventory.available_quantity(asset.id)
         if available < 1:
             raise ValueError("物品当前不可使用")
-        route.validate_arguments(parts)
+        route.validate_arguments(
+            parts,
+            item_name=_view(initial).projector.name(definition.id),
+        )
     except (KeyError, TypeError, ValueError) as exc:
         await send_game_reply(_invalid("使用", str(exc)))
         return
@@ -309,10 +317,11 @@ async def _use_equipment_blueprint(request: ItemUseRequest) -> None:
         inscription_preference=final.inscription_preference,
     )
     reference = _reference(final.inventory, asset)
+    set_name = view.projector.name(result.receipt.set_id)
     await send_game_reply(
         M.document()
         .section("套装图纸", icon="reward")
-        .field("套装", view.projector.name(result.receipt.set_id))
+        .field("套装", M.command(set_name, f"特效 {set_name}"))
         .field("获得", M.command(display.name, f"查看 {reference}"))
         .row(("品阶", view.projector.name(state.quality_id)), ("编号", reference))
         .note("部位、底座、品阶、词条与词条数值均由本次生成独立决定。")
@@ -515,6 +524,7 @@ async def _use_companion_sanctuary(request: ItemUseRequest) -> None:
     if character is None or dimension is None:
         await send_game_reply(_unavailable("使用"))
         return
+    item_name = _view(request.overview).projector.name(request.definition.id)
     services = current_game_services()
     operation_id = f"companion-sanctuary-open:{_evidence_id()}"
     try:
@@ -530,11 +540,17 @@ async def _use_companion_sanctuary(request: ItemUseRequest) -> None:
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("宠物秘境开启失败"), C.kv("character", character.id))
         )
-        await send_game_reply(_invalid("使用", "万灵引没有成功生效"))
+        await send_game_reply(_invalid("使用", f"{item_name}没有成功生效"))
         return
     if result.status != "opened" or result.sanctuary is None:
+        failure_message = {
+            "item_unknown": f"找不到要使用的{item_name}",
+            "item_forbidden": f"{item_name}不属于当前角色",
+            "item_unavailable": f"{item_name}当前被其他流程占用",
+            "item_consume_failed": f"{item_name}扣除失败",
+        }.get(result.status, result.failure_message or "当前不能开启宠物秘境")
         await send_game_reply(
-            _invalid("使用", result.failure_message or "当前不能开启宠物秘境")
+            _invalid("使用", failure_message)
         )
         return
     await send_game_reply(_opened_sanctuary_message(result.sanctuary, dimension))
@@ -669,7 +685,7 @@ ITEM_USE_ROUTES = (
         COMPANION_SANCTUARY_ITEM_COMPONENT_ID,
         _use_companion_sanctuary,
         ItemUseArgumentPolicy.NONE,
-        "万灵引每次只能使用一枚",
+        "{item}每次只能使用一枚",
     ),
     ItemUseRoute(
         EQUIPMENT_SET_BLUEPRINT_COMPONENT_ID,

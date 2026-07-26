@@ -9,14 +9,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
 def FastAPIAllowed(app: FastAPI) -> None:
-    """配置 FastAPI 跨域。"""
+    """配置跨域与公开 JSON 的统一压缩。"""
 
+    app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

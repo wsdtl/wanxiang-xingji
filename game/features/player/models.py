@@ -1,10 +1,9 @@
 """玩家入口、总览、设置与提醒使用的稳定应用模型。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from game.core.gameplay import (
     ActionRecord,
-    ActionState,
     CharacterState,
     InscriptionPreference,
     InventoryState,
@@ -18,6 +17,10 @@ from game.rules.character import (
     CharacterCreationReceipt,
     CharacterWorldState,
     CharacterSettingsState,
+)
+from game.rules.player_activity import (
+    PlayerActivityKind,
+    PlayerActivityProjection,
 )
 
 
@@ -33,7 +36,6 @@ class PlayerStorageKinds:
     ledger: str
     world: str
     character_world: str
-    action: str
     settings: str
     inscription_preference: str
 
@@ -53,8 +55,11 @@ class CharacterOverview:
     ledger: LedgerState
     world: WorldState
     character_world: CharacterWorldState
+    settings: CharacterSettingsState
     inscription_preference: InscriptionPreference | None = None
-    action: ActionState | None = None
+    activity: PlayerActivityProjection = field(
+        default_factory=lambda: PlayerActivityProjection(PlayerActivityKind.IDLE)
+    )
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,9 @@ class PlayerReplyState:
     character: CharacterState
     settings: CharacterSettingsState
     character_world: CharacterWorldState
+    activity: PlayerActivityProjection = field(
+        default_factory=lambda: PlayerActivityProjection(PlayerActivityKind.IDLE)
+    )
     activity_spotlights: tuple[GlobalActivityView, ...] = ()
     additional_activity_count: int = 0
     unread_notification_count: int = 0

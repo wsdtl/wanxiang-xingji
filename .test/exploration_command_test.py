@@ -26,13 +26,21 @@ from game.cmd.探险.service import (  # noqa: E402
     _start_message,
     _summary_message,
 )
+from game.cmd.角色.service import (  # noqa: E402
+    _character_overview_message,
+)
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.features.exploration import ExplorationOperationResult  # noqa: E402
+from game.features.player_activity import PlayerActivityBlock  # noqa: E402
 from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules.battle_report import BattleReportReference  # noqa: E402
 from game.rules.exploration import (  # noqa: E402
     ExplorationRestReason,
     ExplorationStatus,
+)
+from game.rules.player_activity import (  # noqa: E402
+    PlayerActivityKind,
+    PlayerActivityProjection,
 )
 from launch import config  # noqa: E402
 from game.cmd import 探险 as exploration_component  # noqa: E402,F401
@@ -154,6 +162,14 @@ async def _main() -> None:
             )
             assert "抵达:" in moved.replies[0].message.content
 
+            disabled_auto_rest = await dispatch(
+                client_id="exploration-player",
+                raw_message="自动休整 关闭",
+                sender_name="巡山客",
+                event_id="exploration-auto-rest-disable",
+            )
+            assert "当前状态: _关闭_" in disabled_auto_rest.replies[0].message.content
+
             started = await dispatch(
                 client_id="exploration-player",
                 raw_message="开始探险",
@@ -161,7 +177,35 @@ async def _main() -> None:
                 event_id="exploration-start",
             )
             assert "首次结算" in started.replies[0].message.content
+            assert "自动休整: _关闭_" in started.replies[0].message.content
             assert started.replies[0].message.actions[0].data == "停止探险"
+
+            active_exploration = await dispatch(
+                client_id="exploration-player",
+                raw_message="探险",
+                sender_name="巡山客",
+                event_id="exploration-active-view",
+            )
+            assert "状态: _探险中_" in active_exploration.replies[0].message.content
+            assert "自动休整: _关闭_" in active_exploration.replies[0].message.content
+
+            active_profile = await dispatch(
+                client_id="exploration-player",
+                raw_message="我的角色",
+                sender_name="巡山客",
+                event_id="exploration-active-profile",
+            )
+            assert "行动: _探险中_" in active_profile.replies[0].message.content
+            assert "自动休整: _关闭_" in active_profile.replies[0].message.content
+
+            blocked_move = await dispatch(
+                client_id="exploration-player",
+                raw_message=f"前往 {destination}",
+                sender_name="巡山客",
+                event_id="exploration-active-move",
+            )
+            assert "当前正在探险" in blocked_move.replies[0].message.content
+            assert blocked_move.replies[0].message.actions[0].data == "停止探险"
 
             summary = await dispatch(
                 client_id="exploration-player",
@@ -170,7 +214,8 @@ async def _main() -> None:
                 event_id="exploration-summary",
             )
             assert "药物掉落" in summary.replies[0].message.content
-            assert "状态: _进行中_" in summary.replies[0].message.content
+            assert "状态: _探险中_" in summary.replies[0].message.content
+            assert "自动休整: _关闭_" in summary.replies[0].message.content
             assert summary.replies[0].message.actions[0].data == "停止探险"
 
             logical_time = datetime.now(ZoneInfo(config.project.timezone))
@@ -193,7 +238,13 @@ async def _main() -> None:
             overview = services.load_character_overview(current.character).overview
             assert overview is not None
             blocked_message = _start_message(
-                ExplorationOperationResult("main_action_occupied"),
+                ExplorationOperationResult(
+                    "main_action_occupied",
+                    activity_block=PlayerActivityBlock(
+                        current.character.id,
+                        PlayerActivityKind.MAIN_ACTION,
+                    ),
+                ),
                 services.world_view(overview.character_world),
             )
             assert blocked_message.document.actions[0].data == "我的角色"
@@ -234,10 +285,23 @@ async def _main() -> None:
                     services.world_view(overview.character_world),
                 )
             )
-            assert "状态: _休整中_" in resting_message.content
+            assert "状态: _自动休整中_" in resting_message.content
             assert "休整原因: _资源过低_" in resting_message.content
             assert "休整次数: _1_" in resting_message.content
             assert resting_message.actions[0].data == "停止探险"
+            resting_profile_message = _character_overview_message(
+                replace(
+                    overview,
+                    activity=PlayerActivityProjection(
+                        PlayerActivityKind.EXPLORATION_RESTING,
+                        resting_state,
+                    ),
+                )
+            )
+            resting_profile = render_local_message(resting_profile_message)
+            assert "行动: _自动休整中" in resting_profile.content
+            resting_profile_qq = render_qq_message(resting_profile_message)
+            assert f"command={quote('停止探险', safe='')}" in resting_profile_qq["content"]
 
             stopped = await dispatch(
                 client_id="exploration-player",
@@ -246,6 +310,10 @@ async def _main() -> None:
                 event_id="exploration-stop",
             )
             assert stopped.replies[0].message.actions[0].data == "探险总结"
+            assert {action.data for action in stopped.replies[0].message.actions} == {
+                "探险总结",
+                "跃迁",
+            }
             stopped_summary = await dispatch(
                 client_id="exploration-player",
                 raw_message="探险总结",
@@ -253,6 +321,25 @@ async def _main() -> None:
                 event_id="exploration-stopped-summary",
             )
             assert stopped_summary.replies[0].message.actions[0].data == "回收战利品"
+
+            stopped_profile = await dispatch(
+                client_id="exploration-player",
+                raw_message="我的角色",
+                sender_name="巡山客",
+                event_id="exploration-stopped-profile",
+            )
+            assert "行动: _空闲_" in stopped_profile.replies[0].message.content
+            target_world_id = next(
+                item.world.id
+                for item in services.world_views.latest_views()
+                if item.world.id != overview.character_world.world_id
+            )
+            shift_after_stop = services.shift_character_world(
+                current.character.id,
+                target_world_id,
+                logical_time=logical_time,
+            )
+            assert shift_after_stop.status == "item_missing"
 
             empty_sale = await dispatch(
                 client_id="exploration-player",

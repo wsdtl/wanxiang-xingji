@@ -1,5 +1,7 @@
 """正式敌人名录、遭遇生成、共享特效、AI 与展示回归测试。"""
 
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -23,7 +25,9 @@ from game.content.catalog.enemy import (  # noqa: E402
     PERSONAL_BOSS_ENEMIES,
     REGULAR_ENEMIES,
 )
+from game.content.catalog.enemy.behaviors import ENEMY_BEHAVIOR_CONTENT  # noqa: E402
 from game.content.catalog.weapon.blueprints import WEAPON_BLUEPRINTS  # noqa: E402
+from game.content.catalog.weapon.mechanics import WEAPON_MECHANIC_CONTENT  # noqa: E402
 from game.content.catalog.weapon.official_mechanics import (  # noqa: E402
     OFFICIAL_WEAPON_MECHANICS,
 )
@@ -56,6 +60,7 @@ def main() -> None:
     assert ENEMY_FOUNDATION_VERSION == "enemy.foundation.v3"
     cultivation = build_official_content()
     magic = build_official_content("skin.magic")
+    stellar = build_official_content("skin.stellar_ring")
     catalog = cultivation.catalog
 
     assert BEHAVIOR_BLUEPRINTS
@@ -102,11 +107,10 @@ def main() -> None:
         for field_name in ("default_behavior_ids", "available_behavior_ids", "phases")
     )
 
-    shared_enemy = catalog.abilities.require("ability.enemy.heavy_strike")
-    shared_weapon = catalog.abilities.require("ability.weapon.mountain_cleaver")
-    assert shared_enemy.effects == shared_weapon.effects
-    assert shared_enemy.costs == shared_weapon.costs
-    assert shared_enemy.cooldown_turns == shared_weapon.cooldown_turns
+    _assert_enemy_mechanics_are_identity_isolated(catalog)
+    assert "反击" not in cultivation.projector.name("ability.enemy.counter")
+    assert "反击" not in magic.projector.name("ability.enemy.counter")
+    assert "反击" not in stellar.projector.name("ability.enemy.counter")
 
     generator = EnemyEncounterGenerator(
         catalog.enemies,
@@ -197,6 +201,113 @@ def main() -> None:
     _assert_ai_executes(cultivation)
     _assert_all_behavior_abilities_execute(cultivation)
     print("official enemy catalog test passed")
+
+
+def _assert_enemy_mechanics_are_identity_isolated(catalog) -> None:
+    enemy_effects = {str(value.id): value for value in ENEMY_BEHAVIOR_CONTENT.effects}
+    enemy_triggers = {str(value.id): value for value in ENEMY_BEHAVIOR_CONTENT.triggers}
+    weapon_effects = {str(value.id): value for value in WEAPON_MECHANIC_CONTENT.effects}
+    weapon_triggers = {str(value.id): value for value in WEAPON_MECHANIC_CONTENT.triggers}
+
+    for blueprint in BEHAVIOR_BLUEPRINTS:
+        behavior_key = blueprint.key
+        weapon_key = blueprint.mechanic_recipe_id.removeprefix("combat.recipe.")
+        enemy_ability = catalog.abilities.require(f"ability.enemy.{behavior_key}")
+        weapon_ability = catalog.abilities.require(f"ability.weapon.{weapon_key}")
+        assert enemy_ability.costs == weapon_ability.costs
+        assert enemy_ability.cooldown_turns == weapon_ability.cooldown_turns
+        assert len(enemy_ability.effects) == len(weapon_ability.effects)
+        assert enemy_ability.effects != weapon_ability.effects
+        for enemy_reference, weapon_reference in zip(
+            enemy_ability.effects,
+            weapon_ability.effects,
+            strict=True,
+        ):
+            assert enemy_reference.target == weapon_reference.target
+            assert enemy_reference.phase == weapon_reference.phase
+            assert str(enemy_reference.effect_id).startswith(
+                f"effect.enemy.{behavior_key}."
+            )
+            assert _source_identity(
+                str(enemy_reference.effect_id),
+                behavior_key,
+            ) == str(weapon_reference.effect_id)
+
+        effect_prefix = f"effect.enemy.{behavior_key}."
+        trigger_prefix = f"trigger.enemy.{behavior_key}."
+        replacements = (
+            (effect_prefix, "effect.weapon."),
+            (trigger_prefix, "trigger.weapon."),
+        )
+        for identifier, definition in enemy_effects.items():
+            if not identifier.startswith(effect_prefix):
+                continue
+            source_id = _source_identity(identifier, behavior_key)
+            assert catalog.effects.require(identifier) == definition
+            assert source_id in weapon_effects
+            assert _mechanic_shape(definition, replacements) == _mechanic_shape(
+                weapon_effects[source_id],
+                replacements,
+            )
+        for identifier, definition in enemy_triggers.items():
+            if not identifier.startswith(trigger_prefix):
+                continue
+            source_id = _source_identity(identifier, behavior_key)
+            assert catalog.triggers.require(identifier) == definition
+            assert source_id in weapon_triggers
+            assert _mechanic_shape(definition, replacements) == _mechanic_shape(
+                weapon_triggers[source_id],
+                replacements,
+            )
+
+    assert enemy_effects
+    assert all(value.startswith("effect.enemy.") for value in enemy_effects)
+    assert all(value.startswith("trigger.enemy.") for value in enemy_triggers)
+    assert not set(enemy_effects) & set(weapon_effects)
+    assert not set(enemy_triggers) & set(weapon_triggers)
+
+
+def _source_identity(identifier: str, behavior_key: str) -> str:
+    return identifier.replace(
+        f"effect.enemy.{behavior_key}.",
+        "effect.weapon.",
+        1,
+    ).replace(
+        f"trigger.enemy.{behavior_key}.",
+        "trigger.weapon.",
+        1,
+    )
+
+
+def _mechanic_shape(value, replacements):
+    if isinstance(value, str):
+        result = value
+        for source, target in replacements:
+            result = result.replace(source, target)
+        return result
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            type(value).__qualname__,
+            tuple(
+                (field.name, _mechanic_shape(getattr(value, field.name), replacements))
+                for field in fields(value)
+            ),
+        )
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted(
+                (
+                    _mechanic_shape(key, replacements),
+                    _mechanic_shape(item, replacements),
+                )
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(_mechanic_shape(item, replacements) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_mechanic_shape(item, replacements) for item in value)
+    return value
 
 
 def _assert_ai_executes(content) -> None:

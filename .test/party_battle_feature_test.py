@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -19,6 +20,8 @@ from game.core.gameplay import PartyState  # noqa: E402
 from game.core.persistence import PARTY_AGGREGATE  # noqa: E402
 from game.features.party_battle import PARTY_BATTLE_CHALLENGE_AGGREGATE  # noqa: E402
 from game.features.party_battle.models import PartyBattleChallengeState  # noqa: E402
+from game.rules.exploration import EXPLORATION_AGGREGATE, start_exploration  # noqa: E402
+from game.rules.player_activity import PlayerActivityKind  # noqa: E402
 
 
 def main() -> None:
@@ -57,6 +60,58 @@ def main() -> None:
             logical_time=now,
         )
         assert selected.status == "selected" and selected.challenge is not None
+        with services.database.unit_of_work() as uow:
+            current_challenge = services.party_battles.snapshots.require(
+                uow,
+                PARTY_BATTLE_CHALLENGE_AGGREGATE,
+                party.id,
+                PartyBattleChallengeState,
+            )
+            stale_encounter = replace(
+                current_challenge.encounter,
+                content_version="stale-content",
+                enemies=tuple(
+                    replace(enemy, content_version="stale-content")
+                    for enemy in current_challenge.encounter.enemies
+                ),
+            )
+            stale_challenge = replace(
+                current_challenge,
+                encounter=stale_encounter,
+                revision=current_challenge.revision + 1,
+            )
+            services.party_battles.snapshots.update(
+                uow,
+                PARTY_BATTLE_CHALLENGE_AGGREGATE,
+                party.id,
+                current_challenge,
+                stale_challenge,
+                now,
+            )
+            uow.commit()
+        content_changed = services.party_battles.view(party.id)
+        assert content_changed.status == "content_changed"
+        assert content_changed.challenge is None
+        stale_ready = services.party_battles.set_ready(
+            "party-battle-stale-content-ready",
+            party.id,
+            characters[0].id,
+            True,
+            logical_time=now,
+        )
+        assert stale_ready.status == "content_changed"
+        selected = services.party_battles.select(
+            "party-battle-reselect-current-content",
+            party.id,
+            characters[0].id,
+            1,
+            logical_time=now,
+        )
+        assert selected.status == "selected" and selected.challenge is not None
+        assert (
+            selected.challenge.encounter.content_version
+            == services.content.catalog.report.content_fingerprint
+        )
         moved = services.party.set_slot(
             "party-battle-move-slot",
             characters[0].id,
@@ -81,6 +136,41 @@ def main() -> None:
             logical_time=now,
         )
         assert restored.party is not None
+        exploring = start_exploration(
+            characters[0].id,
+            "party-battle-ready-exploration",
+            "region.test",
+            "location.test",
+            logical_time=now,
+        )
+        with services.database.unit_of_work() as uow:
+            services.player_activity.snapshots.insert(
+                uow,
+                EXPLORATION_AGGREGATE,
+                characters[0].id,
+                exploring,
+                now,
+            )
+            uow.commit()
+        busy_ready = services.party_battles.set_ready(
+            "party-battle-busy-ready",
+            party.id,
+            characters[0].id,
+            True,
+            logical_time=now,
+        )
+        assert busy_ready.status == "exploring"
+        assert busy_ready.activity_block is not None
+        assert busy_ready.activity_block.kind is PlayerActivityKind.EXPLORING
+        with services.database.unit_of_work() as uow:
+            deleted = services.player_activity.snapshots.delete(
+                uow,
+                EXPLORATION_AGGREGATE,
+                characters[0].id,
+                expected_revision=exploring.revision,
+            )
+            assert deleted
+            uow.commit()
         for index, character in enumerate(characters):
             prepared = services.party_battles.set_ready(
                 f"party-battle-ready-{index}",

@@ -11,6 +11,7 @@ from ..models import WorldExtension
 
 def build_world_extension(
     *,
+    version: ContentVersion,
     order: int,
     bundle,
     space,
@@ -31,7 +32,7 @@ def build_world_extension(
     disaster_values = tuple(disasters)
     return WorldExtension(
         id=world_id,
-        version=ContentVersion(1, 0, 0),
+        version=version,
         order=order,
         space=space,
         bundle=bundle,

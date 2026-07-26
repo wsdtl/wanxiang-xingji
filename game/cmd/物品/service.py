@@ -27,6 +27,7 @@ from game.content.catalog.item import (
     CurrencyRecycleYield,
     StackItemRecycleYield,
 )
+from game.content.presentation import MechanicProjector
 from game.core.gameplay import (
     HEALTH_CURRENT,
     HEALTH_MAXIMUM,
@@ -442,7 +443,12 @@ def _asset_detail(asset, overview: CharacterOverview) -> DocumentMessage:
             projector = InscriptionProjector(overview.inscription_preference)
             for ability_id in sorted(abilities):
                 base = view.projector.name(ability_id)
-                builder.line(projector.weapon_ability_name(base, asset, ability_id))
+                builder.line(
+                    M.command(
+                        projector.weapon_ability_name(base, asset, ability_id),
+                        f"特效 {base}",
+                    )
+                )
         _append_gear_status(builder, asset, overview)
         actions.extend(_gear_actions(asset, overview))
     elif definition.tags.has("item.equipment"):
@@ -458,7 +464,8 @@ def _asset_detail(asset, overview: CharacterOverview) -> DocumentMessage:
             ("部位", view.projector.name(equipment.slot_id)),
         )
         if state.set_id is not None:
-            builder.field("套装", view.projector.name(state.set_id))
+            set_name = view.projector.name(state.set_id)
+            builder.field("套装", M.command(set_name, f"特效 {set_name}"))
         _append_gear_origin(builder, asset)
         if display.score_text:
             builder.line(display.score_text)
@@ -506,12 +513,32 @@ def _append_roll(
 ) -> None:
     if state.roll is None:
         return
-    projector = _view(overview).projector
+    view = _view(overview)
+    projector = MechanicProjector(
+        current_game_services().content.catalog,
+        view.projector,
+    )
     builder.section("词条", icon="item")
     for rolled in state.roll.properties:
-        values = ", ".join(_number(value) for value in rolled.values.values())
-        suffix = f" {values}" if values else ""
-        builder.line(f"{projector.name(rolled.property_id)} T{rolled.tier}{suffix}")
+        detail = projector.detail(rolled.property_id)
+        tier = (
+            detail.tiers[0].label
+            if detail.category == "武器核心" and len(detail.tiers) == 1
+            else f"T{rolled.tier}"
+        )
+        parts: list[object] = [
+            M.command(detail.name, f"特效 {detail.name}"),
+            FieldSeparator(),
+            tier,
+        ]
+        actual = projector.roll_summary(
+            rolled.property_id,
+            rolled.tier,
+            rolled.values,
+        )
+        if actual:
+            parts.extend((FieldSeparator(), actual))
+        builder.line(*parts)
 
 
 def _append_gear_status(builder, asset: ItemInstance, overview: CharacterOverview) -> None:
@@ -636,8 +663,8 @@ def _append_gear_comparison(
         )
     else:
         builder.row(
-            ("候选套装", _set_name(candidate_state.set_id, view)),
-            ("当前套装", _set_name(current_state.set_id, view)),
+            ("候选套装", _set_link(candidate_state.set_id, view)),
+            ("当前套装", _set_link(current_state.set_id, view)),
         )
         _append_set_progress(builder, candidate_state, current_state, overview)
 
@@ -687,18 +714,23 @@ def _append_set_progress(
         if before_count == after_count:
             continue
         maximum = definition.bonuses[-1].required_pieces
-        rows.append(
-            f"{_set_name(set_id, _view(overview))}："
-            f"{before_count}/{maximum} -> {after_count}/{maximum}"
-        )
+        rows.append((set_id, f"{before_count}/{maximum} -> {after_count}/{maximum}"))
     if rows:
         builder.section("套装进度", icon="equipment")
-        for row in rows:
-            builder.line(row)
+        view = _view(overview)
+        for set_id, progress in rows:
+            builder.line(_set_link(set_id, view), "：", progress)
 
 
 def _set_name(set_id: str | None, view) -> str:
     return view.projector.name(set_id) if set_id is not None else "无套装"
+
+
+def _set_link(set_id: str | None, view):
+    if set_id is None:
+        return "无套装"
+    name = _set_name(set_id, view)
+    return M.command(name, f"特效 {name}")
 
 
 def _score_text(value: float | None) -> str:

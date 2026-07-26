@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -75,6 +76,47 @@ def main() -> None:
         restored = reloaded.companions.view(character.id, logical_time=NOW)
         assert restored.sanctuary is not None
         assert restored.sanctuary.traces == traces
+        assert (
+            restored.sanctuary.content_version
+            == reloaded.content.catalog.report.content_fingerprint
+        )
+        stale_sanctuary = replace(
+            restored.sanctuary,
+            content_version="stale-content",
+            revision=restored.sanctuary.revision + 1,
+        )
+        with reloaded.database.unit_of_work() as uow:
+            reloaded.companions.snapshots.update(
+                uow,
+                reloaded.companions.storage.sanctuary,
+                character.id,
+                restored.sanctuary,
+                stale_sanctuary,
+                NOW,
+            )
+            uow.commit()
+        content_changed = reloaded.companions.hunt(
+            "companion-hunt-stale-content",
+            character.id,
+            1,
+            logical_time=NOW,
+        )
+        assert content_changed.status == "content_changed"
+        current_sanctuary = replace(
+            stale_sanctuary,
+            content_version=reloaded.content.catalog.report.content_fingerprint,
+            revision=stale_sanctuary.revision + 1,
+        )
+        with reloaded.database.unit_of_work() as uow:
+            reloaded.companions.snapshots.update(
+                uow,
+                reloaded.companions.storage.sanctuary,
+                character.id,
+                stale_sanctuary,
+                current_sanctuary,
+                NOW,
+            )
+            uow.commit()
 
         hunted = reloaded.companions.hunt(
             "companion-hunt-1",

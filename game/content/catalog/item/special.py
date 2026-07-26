@@ -84,7 +84,7 @@ class CompanionSanctuaryItemComponent:
 
     def __post_init__(self) -> None:
         if self.quantity != 1:
-            raise ValueError("每次开启宠物秘境必须且只能消耗一枚万灵引")
+            raise ValueError("每次开启宠物秘境必须且只能消耗一枚秘境凭证")
 
 
 COMPANION_SANCTUARY_ITEM_COMPONENT_TYPE = ItemComponentType(

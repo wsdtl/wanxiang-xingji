@@ -8,7 +8,7 @@ from ...catalog import (
     BREAKING_STRIKE_ABILITY_ID,
     PHYSICAL_DAMAGE_ID,
 )
-from ...catalog.combat.definitions import BASE_DAMAGE_TYPES, BASE_EFFECTS
+from ...catalog.combat.definitions import BASE_CONTROLS, BASE_DAMAGE_TYPES, BASE_EFFECTS
 from ...catalog.equipment.properties import EQUIPMENT_PROPERTY_CONTENT
 from ...catalog.weapon.mechanics import (
     WEAPON_CHARGE_EFFECT_ID,
@@ -33,6 +33,7 @@ _MECHANISM_ENTRIES = build_combat_mechanism_entries(
     interceptors=WEAPON_MECHANIC_CONTENT.interceptors,
     target_constraints=WEAPON_MECHANIC_CONTENT.constraints,
     damage_types=BASE_DAMAGE_TYPES,
+    controls=BASE_CONTROLS,
     owner_entries={
         **CULTIVATION_WEAPON_ENTRIES,
         **CULTIVATION_EQUIPMENT_ENTRIES,
@@ -64,6 +65,11 @@ _MECHANISM_ENTRIES = build_combat_mechanism_entries(
     constraint_names={
         "target_constraint.weapon.taunt": "强制应战",
         "target_constraint.weapon.untargetable": "遁形避战",
+    },
+    control_names={
+        "control.stun": "眩晕",
+        "control.freeze": "冰封",
+        "control.sleep": "昏睡",
     },
 )
 

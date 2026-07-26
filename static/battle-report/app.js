@@ -1,37 +1,47 @@
 import {
-  buildActorVisualMap,
+  applyVisual,
   renderCompactTimeline,
   renderDetailedTimeline,
-  renderDetailedTimelineEntries,
   renderRawDataAccess,
-} from "./timeline.js?v=18";
+} from "./timeline.js?v=19";
 import {
   activateMotion,
-  animateRegion,
   controlButton,
   formatTime,
   node,
-  rawBlock,
   renderGauge,
   renderParticipantRecord,
   renderStatusGroup,
-  replaceRegion,
   safeToken,
-} from "./ui.js?v=18";
+} from "./ui.js?v=19";
 
 const root = document.querySelector("#reportRoot");
+const announcer = node("p", "visually-hidden", "");
+announcer.setAttribute("aria-live", "polite");
+announcer.setAttribute("aria-atomic", "true");
+document.body.append(announcer);
 
 const state = {
   report: null,
   segmentIndex: 0,
-  mode: "",
-  filter: "",
-  snapshot: "",
-  participantExpanded: !window.matchMedia("(max-width: 640px)").matches,
+  mode: "compact",
+  filter: "all",
+  snapshot: "after",
+  participantExpanded: false,
+  segments: new Map(),
+  events: new Map(),
+  participants: new Map(),
+  transitions: new Map(),
+  raw: new Map(),
+  previewBundle: null,
 };
 
-root.addEventListener("click", handleControlClick);
-root.addEventListener("change", handleControlChange);
+root.addEventListener("click", (event) => {
+  void handleControlClick(event);
+});
+root.addEventListener("change", (event) => {
+  void handleControlChange(event);
+});
 
 main().catch((error) => {
   renderError(error instanceof Error ? error.message : String(error));
@@ -39,7 +49,7 @@ main().catch((error) => {
 
 async function main() {
   const report = await loadReport();
-  if (report.schema !== "game.battle_report.presentation" || report.version !== 2) {
+  if (report.schema !== "game.battle_report.presentation" || report.version !== 3) {
     renderUnsupportedReport(report);
     return;
   }
@@ -47,6 +57,10 @@ async function main() {
   state.mode = report.ui.modes[0].id;
   state.filter = report.ui.filters[0].id;
   state.snapshot = report.ui.snapshots[report.ui.snapshots.length - 1].id;
+  report.detail.segments.forEach((segment) => state.segments.set(segment.index, segment));
+  if (report.detail.segments.length) {
+    state.segmentIndex = report.detail.segments[0].index;
+  }
   document.title = `${report.game_name || "万象行纪"} · ${report.summary.title}`;
   renderReport();
 }
@@ -56,205 +70,245 @@ async function loadReport() {
   if (embedded) {
     return JSON.parse(embedded.textContent || "null");
   }
-  const shareId = reportShareId();
-  if (!shareId) {
+  const path = reportBasePath();
+  if (!path) {
     throw new Error("分享地址无效。");
   }
-  const path = window.location.pathname.replace(/\/$/, "");
-  const response = await fetch(`${path}/data`, {
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => null);
-    throw new Error(detail?.detail || "内容读取失败。");
-  }
-  return response.json();
+  return fetchJson(`${path}/data`);
 }
 
-function reportShareId() {
-  const match = window.location.pathname.match(/^\/battle\/([^/]+)\/?$/);
-  return match ? decodeURIComponent(match[1]) : "";
-}
-
-function handleControlClick(event) {
+async function handleControlClick(event) {
   const button = event.target.closest("button[data-action]");
   if (!button || !root.contains(button) || !state.report) {
     return;
   }
   const action = button.dataset.action;
   const value = button.dataset.value;
-  if (action === "mode" && optionExists(state.report.ui.modes, value)) {
-    if (state.mode !== value) {
+  try {
+    if (action === "mode" && optionExists(state.report.ui.modes, value)) {
+      if (state.mode === value) {
+        return;
+      }
+      if (value === "detail") {
+        announce("正在读取全部事件");
+        await ensureEvents(state.segmentIndex);
+      }
       state.mode = value;
-      updateModeView();
+      renderReport();
+      focusControl("mode", value);
+      return;
     }
-    return;
-  }
-  if (action === "segment") {
-    selectSegment(Number(value));
-    return;
-  }
-  if (action === "segment-step") {
-    selectSegment(state.segmentIndex + Number(value));
-    return;
-  }
-  if (action === "snapshot" && optionExists(state.report.ui.snapshots, value)) {
-    if (state.snapshot !== value) {
+    if (action === "segment") {
+      await selectSegment(Number(value));
+      return;
+    }
+    if (action === "segment-step") {
+      await selectSegment(state.segmentIndex + Number(value));
+      return;
+    }
+    if (action === "snapshot" && optionExists(state.report.ui.snapshots, value)) {
+      if (state.snapshot === value) {
+        return;
+      }
       state.snapshot = value;
-      updateSnapshotView();
+      if (state.participantExpanded) {
+        announce("正在读取参战者状态");
+        await ensureParticipants(state.segmentIndex, state.snapshot);
+      }
+      renderReport();
+      focusControl("snapshot", value);
+      return;
     }
-    return;
-  }
-  if (action === "participant-disclosure") {
-    state.participantExpanded = !state.participantExpanded;
-    updateParticipantDisclosure();
-    return;
-  }
-  if (action === "filter" && optionExists(state.report.ui.filters, value)) {
-    if (state.filter !== value) {
+    if (action === "participant-disclosure") {
+      state.participantExpanded = !state.participantExpanded;
+      if (state.participantExpanded) {
+        renderReport();
+        announce("正在读取参战者状态");
+        await ensureParticipants(state.segmentIndex, state.snapshot);
+      }
+      renderReport();
+      focusControl("participant-disclosure", "");
+      return;
+    }
+    if (action === "filter" && optionExists(state.report.ui.filters, value)) {
       state.filter = value;
-      updateFilterView();
+      renderReport();
+      focusControl("filter", value);
     }
+  } catch (error) {
+    announce(error instanceof Error ? error.message : String(error));
+    renderInlineError(error);
   }
 }
 
-function handleControlChange(event) {
+async function handleControlChange(event) {
   const select = event.target.closest('select[data-action="segment-select"]');
   if (!select || !root.contains(select) || !state.report) {
     return;
   }
-  selectSegment(Number(select.value));
+  try {
+    await selectSegment(Number(select.value));
+  } catch (error) {
+    renderInlineError(error);
+  }
 }
 
-function selectSegment(index) {
-  const segments = state.report.detail.segments;
-  if (!Number.isInteger(index) || !segments[index] || state.segmentIndex === index) {
+async function selectSegment(index) {
+  const count = state.report.detail.segment_count;
+  if (!Number.isInteger(index) || index < 0 || index >= count || index === state.segmentIndex) {
     return;
   }
+  announce(`正在读取第 ${index + 1} 个战斗片段`);
+  await ensureSegment(index);
   state.segmentIndex = index;
   state.filter = state.report.ui.filters[0].id;
-  updateSegmentView();
-}
-
-function updateModeView() {
-  document.body.dataset.mode = state.mode;
-  root.querySelectorAll('[data-action="mode"]').forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.value === state.mode));
-  });
-  const panel = root.querySelector(`.mode-panel[data-mode="${CSS.escape(state.mode)}"]`);
-  animateRegion(panel);
-}
-
-function updateSegmentView() {
-  const segment = currentSegment();
-  const ui = state.report.ui;
-  replaceRegion(root, ".segment-tabs", renderSegmentNavigation(state.report.detail.segments));
-  replaceRegion(root, ".segment-overview", renderMatchup(segment));
-  replaceRegion(root, ".report-body", renderReportBody(segment));
-  replaceRegion(root, ".raw-report-details", renderRawDataAccess(segment, ui));
-  animateRegion(root.querySelector(".segment-overview"));
-  animateRegion(root.querySelector(".report-body"));
-  requestAnimationFrame(() => activateMotion(root));
-}
-
-function updateSnapshotView() {
-  const segment = currentSegment();
-  const participants = snapshotParticipants(segment);
-  const actorVisuals = buildActorVisualMap(segment.combatants);
-  const disclosure = root.querySelector(".participant-disclosure");
-  if (!disclosure) {
-    return;
+  state.participantExpanded = false;
+  if (state.mode === "detail") {
+    await ensureEvents(index);
   }
-  const option = state.report.ui.snapshots.find((item) => item.id === state.snapshot);
-  const label = disclosure.querySelector(".participant-disclosure-title span");
-  if (label) {
-    label.textContent = option.label;
-  }
-  const snapshotSwitch = disclosure.querySelector(".snapshot-switch");
-  if (snapshotSwitch) {
-    snapshotSwitch.dataset.snapshot = state.snapshot;
-    snapshotSwitch.querySelectorAll('[data-action="snapshot"]').forEach((button) => {
-      button.setAttribute("aria-pressed", String(button.dataset.value === state.snapshot));
-    });
-  }
-  replaceRegion(
-    root,
-    ".participant-stack",
-    node(
-      "div",
-      "participant-stack region-update",
-      participants.map((participant) => renderParticipantSummary(participant, actorVisuals)),
-    ),
-  );
-  requestAnimationFrame(() => activateMotion(root));
+  renderReport();
+  const heading = root.querySelector(".segment-overview");
+  heading?.setAttribute("tabindex", "-1");
+  heading?.focus({ preventScroll: true });
+  heading?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+  announce(`已切换到第 ${index + 1} 个战斗片段`);
 }
 
-function updateParticipantDisclosure() {
-  const disclosure = root.querySelector(".participant-disclosure");
-  const button = disclosure?.querySelector(".participant-disclosure-title");
-  const content = disclosure?.querySelector(".participant-disclosure-content");
-  if (!disclosure || !button || !content) {
-    return;
+async function ensureSegment(index) {
+  if (state.segments.has(index)) {
+    return state.segments.get(index);
   }
-  disclosure.dataset.expanded = String(state.participantExpanded);
-  button.setAttribute("aria-expanded", String(state.participantExpanded));
-  content.setAttribute("aria-hidden", String(!state.participantExpanded));
-  content.toggleAttribute("inert", !state.participantExpanded);
-  if (state.participantExpanded) {
-    animateRegion(content);
-  }
+  const payload = await loadEndpoint("segment", { segmentIndex: index });
+  assertProtocol(payload);
+  state.segments.set(index, payload.segment);
+  return payload.segment;
 }
 
-function updateFilterView() {
-  root.querySelectorAll('[data-action="filter"]').forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.value === state.filter));
-  });
-  replaceRegion(
-    root,
-    ".detailed-timeline",
-    renderDetailedTimelineEntries(currentSegment(), state.filter, state.report.ui),
-  );
+async function ensureEvents(index) {
+  if (state.events.has(index)) {
+    return state.events.get(index);
+  }
+  const payload = await loadEndpoint("events", { segmentIndex: index });
+  assertProtocol(payload);
+  state.events.set(index, payload);
+  return payload;
 }
 
-function currentSegment() {
-  return state.report.detail.segments[state.segmentIndex];
+async function ensureParticipants(index, snapshot) {
+  const key = `${index}:${snapshot}`;
+  if (state.participants.has(key)) {
+    return state.participants.get(key);
+  }
+  const payload = await loadEndpoint("participants", { segmentIndex: index, snapshot });
+  assertProtocol(payload);
+  state.participants.set(key, payload);
+  return payload;
+}
+
+async function ensureTransition(index, sequence) {
+  const key = `${index}:${sequence}`;
+  if (state.transitions.has(key)) {
+    return state.transitions.get(key);
+  }
+  const payload = await loadEndpoint("transition", { segmentIndex: index, sequence });
+  assertProtocol(payload);
+  state.transitions.set(key, payload);
+  return payload;
+}
+
+async function ensureRaw(index) {
+  if (state.raw.has(index)) {
+    return state.raw.get(index);
+  }
+  const payload = await loadEndpoint("raw", { segmentIndex: index });
+  assertProtocol(payload);
+  state.raw.set(index, payload);
+  return payload;
+}
+
+async function loadEndpoint(kind, values) {
+  const preview = document.querySelector('meta[name="battle-report-preview-data"]');
+  if (preview) {
+    const bundle = await loadPreviewBundle(preview.content);
+    return previewValue(bundle, kind, values);
+  }
+  const base = reportBasePath();
+  const index = values.segmentIndex;
+  const paths = {
+    segment: `${base}/segments/${index}`,
+    events: `${base}/segments/${index}/events`,
+    participants: `${base}/segments/${index}/participants/${encodeURIComponent(values.snapshot || "")}`,
+    transition: `${base}/segments/${index}/transitions/${values.sequence}`,
+    raw: `${base}/segments/${index}/raw`,
+  };
+  return fetchJson(paths[kind]);
+}
+
+async function loadPreviewBundle(url) {
+  if (!state.previewBundle) {
+    state.previewBundle = fetchJson(url);
+  }
+  return state.previewBundle;
+}
+
+function previewValue(bundle, kind, values) {
+  const index = String(values.segmentIndex);
+  if (kind === "segment") {
+    return bundle.segments[index];
+  }
+  if (kind === "events") {
+    return bundle.events[index];
+  }
+  if (kind === "participants") {
+    return bundle.participants[`${index}:${values.snapshot}`];
+  }
+  if (kind === "transition") {
+    return bundle.transitions[`${index}:${values.sequence}`];
+  }
+  if (kind === "raw") {
+    return bundle.raw[index];
+  }
+  throw new Error("预览数据类型不受支持。");
 }
 
 function renderReport() {
   const report = state.report;
-  const text = report.ui.text;
-  document.body.dataset.mode = state.mode;
   root.replaceChildren();
   root.className = "report-shell report-ready";
-
+  document.body.dataset.mode = state.mode;
+  root.append(renderSummaryHeader(report));
   if (!report.detail.available) {
-    root.append(renderSummaryHeader(report));
     root.append(
       node("section", "notice", [
-        node("p", "section-kicker", text.archive_kicker),
-        node("h2", "", text.archive_title),
+        node("p", "section-kicker", report.ui.text.archive_kicker),
+        node("h2", "", report.ui.text.archive_title),
         node("p", "", report.detail.retention_notice),
       ]),
     );
     return;
   }
-
-  const segments = report.detail.segments;
-  state.segmentIndex = Math.min(state.segmentIndex, Math.max(segments.length - 1, 0));
-  const segment = segments[state.segmentIndex];
-  root.append(renderSummaryHeader(report));
-  if (segments.length > 1) {
-    root.append(renderSegmentNavigation(segments));
+  const segment = currentSegment();
+  if (!segment) {
+    root.append(node("section", "error-state", "战报片段读取失败。"));
+    return;
+  }
+  if (report.detail.segment_count > 1) {
+    root.append(renderSegmentNavigation());
   }
   root.append(renderMatchup(segment));
   root.append(renderViewToolbar());
   root.append(renderReportBody(segment));
-  root.append(renderRawDataAccess(segment, report.ui));
+  root.append(
+    renderRawDataAccess(report.ui, () => ensureRaw(state.segmentIndex)),
+  );
   requestAnimationFrame(() => activateMotion(root));
 }
 
 function renderSummaryHeader(report) {
   const text = report.ui.text;
+  const start = formatTime(report.started_at);
+  const finish = formatTime(report.finished_at);
+  const time = report.started_at === report.finished_at ? start : `${start} 至 ${finish}`;
   const header = node("header", "report-header");
   header.append(
     node("div", "brand-line", [
@@ -266,7 +320,7 @@ function renderSummaryHeader(report) {
     node("div", "title-row", [
       node("div", "title-copy", [
         node("h1", "", report.summary.title),
-        node("p", "report-time", `${formatTime(report.started_at)} 至 ${formatTime(report.finished_at)}`),
+        node("p", "report-time", time),
       ]),
       node("div", `result-stamp ${safeToken(report.summary.tone)}`, [
         node("span", "", text.settlement_label),
@@ -305,14 +359,10 @@ function renderMatchup(segment) {
   return node("section", "matchup segment-overview", [
     first,
     node("div", "versus", [
-      node("strong", "", segment.outcome),
+      node("strong", "", "VS"),
       segment.duration_label ? node("span", "", segment.duration_label) : null,
       middleTeams
-        ? node(
-            "small",
-            "",
-            state.report.ui.text.additional_team_template.replace("{count}", String(middleTeams)),
-          )
+        ? node("small", "", state.report.ui.text.additional_team_template.replace("{count}", String(middleTeams)))
         : null,
     ]),
     last,
@@ -322,44 +372,47 @@ function renderMatchup(segment) {
 function renderTeamSummary(team, reverse = false) {
   const names = team.participants.map((item) => item.label).join("、");
   return node("div", `combat-side${reverse ? " enemy" : ""}`, [
-    node("div", "side-name", [
-      node("span", "", team.label),
-      node("strong", "", names),
-    ]),
+    node("div", "side-name", [node("span", "", team.label), node("strong", "", names)]),
   ]);
 }
 
-function renderSegmentNavigation(segments) {
+function renderSegmentNavigation() {
+  const count = state.report.detail.segment_count;
   const text = state.report.ui.text;
-  const many = segments.length > 6;
-  const select = node(
-    "select",
-    "segment-select",
-    segments.map((segment, index) => {
-      const option = node("option", "", `${String(index + 1).padStart(2, "0")}/${segments.length} · ${segment.title}`);
-      option.value = String(index);
-      option.selected = index === state.segmentIndex;
-      return option;
-    }),
-  );
+  const options = Array.from({ length: count }, (_, index) => {
+    const segment = state.segments.get(index);
+    const option = node("option", "", `${index + 1} / ${count} · ${segment?.title || `片段 ${index + 1}`}`);
+    option.value = String(index);
+    option.selected = index === state.segmentIndex;
+    return option;
+  });
+  const select = node("select", "segment-select", options);
   select.dataset.action = "segment-select";
   select.setAttribute("aria-label", text.segment_select_label);
-  return node("nav", `segment-tabs${many ? " many-segments" : ""}`, [
+  const compactButtons = count <= 6
+    ? node(
+        "div",
+        "segment-scroll",
+        Array.from({ length: count }, (_, index) =>
+          controlButton(
+            state.segments.get(index)?.title || `片段 ${index + 1}`,
+            "segment",
+            String(index),
+            index === state.segmentIndex,
+          ),
+        ),
+      )
+    : null;
+  return node("nav", `segment-tabs${count > 6 ? " many-segments" : ""}`, [
     node("span", "segment-label", [
       document.createTextNode(text.segment_label),
-      node("small", "segment-count", `${state.segmentIndex + 1} / ${segments.length}`),
+      node("small", "segment-count", `${state.segmentIndex + 1} / ${count}`),
     ]),
     node("div", "segment-navigation", [
       segmentStepButton(text.previous_segment_label, -1, state.segmentIndex === 0),
       node("label", "segment-picker", [select]),
-      node(
-        "div",
-        "segment-scroll",
-        segments.map((segment, index) =>
-          controlButton(segment.title, "segment", String(index), index === state.segmentIndex),
-        ),
-      ),
-      segmentStepButton(text.next_segment_label, 1, state.segmentIndex === segments.length - 1),
+      compactButtons,
+      segmentStepButton(text.next_segment_label, 1, state.segmentIndex === count - 1),
     ]),
   ]);
 }
@@ -390,77 +443,84 @@ function renderViewToolbar() {
 function renderReportBody(segment) {
   return node("section", "report-body view-panel", [
     renderSummaryPanel(segment),
-    node("section", "timeline-panel", [
-      renderCompactTimeline(segment, state.report.ui),
-      renderDetailedTimeline(segment, state.filter, state.report.ui),
-    ]),
+    node("section", "timeline-panel", [renderActiveTimeline(segment)]),
   ]);
+}
+
+function renderActiveTimeline(segment) {
+  const comparison = (sequence) => ensureTransition(state.segmentIndex, sequence);
+  if (state.mode === "detail") {
+    const detail = state.events.get(state.segmentIndex);
+    return detail
+      ? renderDetailedTimeline(detail, state.filter, state.report.ui, comparison)
+      : loadingPanel("全部事件读取中");
+  }
+  return renderCompactTimeline(segment, state.report.ui, comparison);
 }
 
 function renderSummaryPanel(segment) {
-  const participants = snapshotParticipants(segment);
-  const actorVisuals = buildActorVisualMap(segment.combatants);
   const selected = state.report.ui.snapshots.find((item) => item.id === state.snapshot);
-  const snapshotSwitch = node(
-    "div",
-    "snapshot-switch",
-    state.report.ui.snapshots.map((option) =>
-      controlButton(option.label, "snapshot", option.id, state.snapshot === option.id),
-    ),
-  );
-  snapshotSwitch.dataset.snapshot = state.snapshot;
-  const disclosureButton = node("button", "participant-disclosure-title", [
+  const button = node("button", "participant-disclosure-title", [
     node("strong", "", state.report.ui.text.participant_panel_title),
     node("span", "", selected.label),
   ]);
-  disclosureButton.type = "button";
-  disclosureButton.dataset.action = "participant-disclosure";
-  disclosureButton.setAttribute("aria-controls", "participantDetails");
-  disclosureButton.setAttribute("aria-expanded", String(state.participantExpanded));
-  const disclosureContent = node("div", "participant-disclosure-content", [
-    node("div", "participant-disclosure-inner", [
-      node("div", "panel-heading", [snapshotSwitch]),
-      node(
-        "div",
-        "participant-stack",
-        participants.map((participant) => renderParticipantSummary(participant, actorVisuals)),
-      ),
-    ]),
-  ]);
-  disclosureContent.id = "participantDetails";
-  disclosureContent.setAttribute("aria-hidden", String(!state.participantExpanded));
-  disclosureContent.toggleAttribute("inert", !state.participantExpanded);
-  const disclosure = node("section", "participant-disclosure", [disclosureButton, disclosureContent]);
+  button.type = "button";
+  button.dataset.action = "participant-disclosure";
+  button.setAttribute("aria-controls", "participantDetails");
+  button.setAttribute("aria-expanded", String(state.participantExpanded));
+  const disclosure = node("section", "participant-disclosure", [button]);
   disclosure.dataset.expanded = String(state.participantExpanded);
+  if (state.participantExpanded) {
+    const key = `${state.segmentIndex}:${state.snapshot}`;
+    const loaded = state.participants.get(key);
+    const snapshotSwitch = node(
+      "div",
+      "snapshot-switch",
+      state.report.ui.snapshots.map((option) =>
+        controlButton(option.label, "snapshot", option.id, state.snapshot === option.id),
+      ),
+    );
+    snapshotSwitch.dataset.snapshot = state.snapshot;
+    const body = loaded
+      ? node(
+          "div",
+          "participant-stack",
+          loaded.participants.map((participant) => renderParticipantSummary(participant)),
+        )
+      : loadingPanel("参战者状态读取中");
+    const content = node("div", "participant-disclosure-content", [
+      node("div", "participant-disclosure-inner", [
+        node("div", "panel-heading", [snapshotSwitch]),
+        body,
+      ]),
+    ]);
+    content.id = "participantDetails";
+    disclosure.append(content);
+  }
   return node("aside", "summary-panel", disclosure);
 }
 
-function renderParticipantSummary(participant, actorVisuals) {
-  const actor = actorVisuals.get(participant.key);
-  const actorColor = actor?.color || "system";
-  const actorNumber = actor ? String(actor.number).padStart(2, "0") : "--";
-  const badge = node("span", `participant-index actor-${actorColor}`, actorNumber);
-  badge.dataset.actorKey = participant.key;
-  badge.dataset.actorColor = actorColor;
-  return node("article", "participant-summary", [
+function renderParticipantSummary(participant) {
+  const number = String(participant.visual?.number || 0).padStart(2, "0");
+  const badge = node("span", "participant-index", number);
+  applyVisual(badge, participant.visual);
+  badge.dataset.actorKey = participant.visual?.key || "system";
+  const children = [
     node("div", "participant-heading", [
       badge,
       node("div", "", [node("strong", "", participant.label)]),
     ]),
     ...(participant.gauges || []).map((gauge) => renderGauge(gauge)),
     renderStatusGroup(participant.status_group),
-    renderParticipantRecord(participant),
-  ]);
+  ];
+  if (participant.detail_groups?.length) {
+    children.push(renderParticipantRecord(participant));
+  }
+  return node("article", "participant-summary", children);
 }
 
-function snapshotParticipants(segment) {
-  const firstId = state.report.ui.snapshots[0].id;
-  if (state.snapshot === firstId) {
-    return segment.initial_participants;
-  }
-  return segment.final_participants.length
-    ? segment.final_participants
-    : segment.initial_participants;
+function currentSegment() {
+  return state.segments.get(state.segmentIndex);
 }
 
 function groupByTeam(participants) {
@@ -479,12 +539,31 @@ function optionExists(options, value) {
   return options.some((item) => item.id === value);
 }
 
+function assertProtocol(value) {
+  if (value?.schema !== "game.battle_report.presentation" || value?.version !== 3) {
+    throw new Error("战报明细协议暂不支持。");
+  }
+}
+
+function reportBasePath() {
+  const path = window.location.pathname.replace(/\/$/, "");
+  return /^\/battle\/[^/]+$/.test(path) ? path : "";
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.detail || "内容读取失败。");
+  }
+  return response.json();
+}
+
 function renderUnsupportedReport(report) {
   root.replaceChildren(
     node("section", "error-state", [
       node("h1", "", "内容协议暂不支持"),
       node("p", "", `收到协议版本 ${String(report?.version ?? "-")}。`),
-      rawBlock(report),
     ]),
   );
 }
@@ -496,4 +575,38 @@ function renderError(message) {
       node("p", "", message),
     ]),
   );
+}
+
+function renderInlineError(error) {
+  const current = root.querySelector(".inline-page-error");
+  current?.remove();
+  const message = error instanceof Error ? error.message : String(error);
+  const notice = node("p", "inline-page-error", message);
+  notice.setAttribute("role", "alert");
+  root.querySelector(".view-toolbar")?.after(notice);
+}
+
+function loadingPanel(message) {
+  const status = node("p", "inline-status", message);
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  return status;
+}
+
+function announce(message) {
+  announcer.textContent = "";
+  requestAnimationFrame(() => {
+    announcer.textContent = message;
+  });
+}
+
+function focusControl(action, value) {
+  requestAnimationFrame(() => {
+    const suffix = value ? `[data-value="${CSS.escape(value)}"]` : "";
+    root.querySelector(`[data-action="${CSS.escape(action)}"]${suffix}`)?.focus();
+  });
+}
+
+function reducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }

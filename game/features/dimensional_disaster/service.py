@@ -50,8 +50,6 @@ from game.core.gameplay import (
     RuleContext,
     Ruleset,
     SeededRandomSource,
-    ActionSlotKind,
-    ActionState,
     INSCRIPTION_MEDIUM_DATA_KEY,
 )
 from game.features.errors import StalePreparationError
@@ -73,7 +71,6 @@ from game.rules.disaster import (
     record_disaster_challenge,
     roll_draw_ticket_drop,
 )
-from game.rules.exploration import ExplorationState
 from game.rules.encounter import EnemyEncounterGenerator
 from game.rules.battle_report import (
     BattleReportDraft,
@@ -95,8 +92,6 @@ SYSTEM_ACTOR_ID = "system.dimensional_disaster"
 
 @dataclass(frozen=True)
 class _DisasterPlayerInputs:
-    action: ActionState | None
-    exploration: ExplorationState | None
     character: CharacterState
     character_world: CharacterWorldState
     inventory: InventoryState
@@ -132,6 +127,7 @@ class DimensionalDisasterFeature:
         rewards,
         player_lineup,
         battle_reports,
+        player_activity,
         storage: DimensionalDisasterStorageKinds,
         reward_keys_factory,
         companion_growth,
@@ -147,6 +143,7 @@ class DimensionalDisasterFeature:
         self.snapshots = snapshots
         self.rewards = rewards
         self.battle_reports = battle_reports
+        self.player_activity = player_activity
         self.companion_growth = companion_growth
         self.storage = storage
         self.reward_keys_factory = reward_keys_factory
@@ -258,6 +255,15 @@ class DimensionalDisasterFeature:
                     ),
                 )
             if (
+                event.combat.content_version
+                != self.content.catalog.report.content_fingerprint
+            ):
+                return DimensionalDisasterChallengeResult(
+                    "content_changed",
+                    event,
+                    activity,
+                )
+            if (
                 event.status is not DimensionalDisasterStatus.OPEN
                 or event.outcome is not DimensionalDisasterOutcome.NONE
                 or activity.status is not ActivityStatus.OPEN
@@ -273,13 +279,14 @@ class DimensionalDisasterFeature:
                     activity,
                 )
             inputs = self._load_player_inputs(uow, character_id)
-            if inputs.action is not None and inputs.action.running(ActionSlotKind.MAIN):
-                return DimensionalDisasterChallengeResult("main_action_occupied", event, activity)
-            if (
-                inputs.exploration is not None
-                and inputs.exploration.active
-            ):
-                return DimensionalDisasterChallengeResult("exploring", event, activity)
+            activity_block = self.player_activity.block_in_uow(uow, character_id)
+            if activity_block is not None:
+                return DimensionalDisasterChallengeResult(
+                    activity_block.status,
+                    event,
+                    activity,
+                    activity_block=activity_block,
+                )
             if inputs.character.resources[HEALTH_CURRENT] <= 0:
                 return DimensionalDisasterChallengeResult("health_depleted", event, activity)
         context = _context(operation_id, logical_time)
@@ -554,18 +561,6 @@ class DimensionalDisasterFeature:
         character_id: str,
     ) -> _DisasterPlayerInputs:
         return _DisasterPlayerInputs(
-            self.snapshots.load(
-                uow,
-                self.storage.action,
-                character_id,
-                ActionState,
-            ),
-            self.snapshots.load(
-                uow,
-                self.storage.exploration,
-                character_id,
-                ExplorationState,
-            ),
             self.snapshots.require(
                 uow,
                 self.storage.character,

@@ -58,6 +58,7 @@ def main() -> None:
         session_id="sanctuary-a",
         world_id=TAIXUAN_WORLD_ID,
         character_level=37,
+        content_version="content-test-v1",
         logical_time=NOW,
         random=SeededRandomSource("sanctuary-a"),
     )
@@ -67,6 +68,7 @@ def main() -> None:
         session_id="sanctuary-a",
         world_id=TAIXUAN_WORLD_ID,
         character_level=37,
+        content_version="content-test-v1",
         logical_time=NOW,
         random=SeededRandomSource("sanctuary-a"),
     )
@@ -225,6 +227,7 @@ def main() -> None:
             session_id="sanctuary-full",
             world_id=TAIXUAN_WORLD_ID,
             character_level=37,
+            content_version="content-test-v1",
             logical_time=NOW,
             random=SeededRandomSource("sanctuary-full"),
         ),

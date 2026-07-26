@@ -404,7 +404,15 @@ def _assert_borrowed_force_and_report_projection(
     assert all(event["text"] for event in presented)
     assert any("移星换斗镜·主效" in event["text"] for event in presented)
     assert any("移星换斗镜·辅效" in event["text"] for event in presented)
-    assert any("126 点有效伤害" in event["text"] for event in presented)
+    assert any(
+        event["kind"] == "combat.damage.dealt"
+        and "126 点" in event["text"]
+        and any(
+            fact["key"] == "effective_damage" and fact["value"] == 126
+            for fact in event["facts"]
+        )
+        for event in presented
+    )
 
 
 def _assert_deferred_echo_and_report_projection(
@@ -494,7 +502,16 @@ def _assert_deferred_echo_and_report_projection(
     assert all(event["text"] for event in presented)
     assert any("空桑回音璧·回响标记" in event["text"] for event in presented)
     assert any("空桑回音璧·回响结算" in event["text"] for event in presented)
-    assert any("61.2 点有效伤害" in event["text"] for event in presented)
+    assert any(
+        event["kind"] == "combat.damage.dealt"
+        and "61.2 点" in event["text"]
+        and any(
+            fact["key"] == "effective_damage"
+            and round(float(fact["value"]), 1) == 61.2
+            for fact in event["facts"]
+        )
+        for event in presented
+    )
 
 
 def _frozen_combatants(view, labels, events):

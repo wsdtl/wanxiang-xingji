@@ -336,11 +336,13 @@ def _weapon_overlays(
                 interceptors=(),
                 target_constraints=(),
                 damage_types=(),
+                controls=(),
                 owner_entries=entries,
                 base_effect_names={},
                 damage_names={},
                 interceptor_names={},
                 constraint_names={},
+                control_names={},
             )
         )
         overlays[skin_id] = entries
@@ -422,11 +424,13 @@ def _equipment_mechanic_overlays(
                 interceptors=(),
                 target_constraints=(),
                 damage_types=(),
+                controls=(),
                 owner_entries=entries,
                 base_effect_names={},
                 damage_names={},
                 interceptor_names={},
                 constraint_names={},
+                control_names={},
             )
         )
         overlays[skin_id] = entries

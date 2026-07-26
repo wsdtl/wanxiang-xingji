@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from game.features.player_activity import (
+    PlayerActivityBlock,
+    validate_activity_block_contract,
+)
 from game.rules.battle_report import BattleReportReference
 from game.rules.companion import (
     CompanionInstance,
@@ -14,10 +18,8 @@ from game.rules.companion import (
 
 @dataclass(frozen=True)
 class CompanionStorageKinds:
-    action: str
     character: str
     character_world: str
-    exploration: str
     inventory: str
     loadout: str
     roster: str
@@ -67,6 +69,10 @@ class CompanionOperationResult:
     quantity: int = 0
     failure_message: str = ""
     replayed: bool = False
+    activity_block: PlayerActivityBlock | None = None
+
+    def __post_init__(self) -> None:
+        validate_activity_block_contract(self.status, self.activity_block)
 
 
 @dataclass(frozen=True)

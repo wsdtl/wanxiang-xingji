@@ -38,9 +38,11 @@ from game.rules.exploration import ExplorationState, ExplorationStatus
 from game.rules.rest import (
     REST_RECOVERY_AGGREGATE,
     REST_RULESET_VERSION,
-    RestOperationResult,
     RestRecoveryState,
 )
+from game.features.player_activity import PlayerActivityBlock
+
+from .models import RestOperationResult
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class RestFeature:
         actions,
         character_engine,
         character_projector,
+        player_activity,
         storage: RestStorageKinds,
     ) -> None:
         self.database = database
@@ -71,6 +74,7 @@ class RestFeature:
         self.actions = actions
         self.character_engine = character_engine
         self.character_projector = character_projector
+        self.player_activity = player_activity
         self.storage = storage
 
     def view(self, character_id: str, *, logical_time: datetime) -> RestOperationResult:
@@ -114,11 +118,15 @@ class RestFeature:
     ) -> RestOperationResult:
         context = game_operation_context(operation_id, logical_time=logical_time)
         with self.database.unit_of_work() as uow:
-            exploration = self.snapshots.load(
-                uow, self.storage.exploration, character_id, ExplorationState
-            )
-            if exploration is not None and exploration.active:
-                return RestOperationResult("exploring")
+            activity = self.player_activity.load_in_uow(uow, character_id)
+            if activity.exploration_active:
+                return RestOperationResult(
+                    "exploring",
+                    activity_block=PlayerActivityBlock.from_projection(
+                        character_id,
+                        activity,
+                    ),
+                )
             result = self._start_in_uow(
                 uow,
                 operation_id,
@@ -126,6 +134,14 @@ class RestFeature:
                 logical_time=logical_time,
                 context=context,
             )
+            if result.status == "main_action_occupied":
+                result = replace(
+                    result,
+                    activity_block=PlayerActivityBlock.from_projection(
+                        character_id,
+                        activity,
+                    ),
+                )
             if result.status == "started":
                 uow.commit()
             return result
@@ -299,8 +315,22 @@ class RestFeature:
             action = self._running_rest(action_state)
             if action is None or action_state is None:
                 return RestOperationResult("not_running")
-            if self._exploration_session_id(action) is not None:
-                return RestOperationResult("exploration_managed", action=action)
+            exploration_session_id = self._exploration_session_id(action)
+            if exploration_session_id is not None:
+                activity = self.player_activity.load_in_uow(uow, character_id)
+                if (
+                    activity.exploration_active
+                    and activity.exploration is not None
+                    and activity.exploration.session_id == exploration_session_id
+                ):
+                    return RestOperationResult(
+                        "exploration_managed",
+                        action=action,
+                        activity_block=PlayerActivityBlock.from_projection(
+                            character_id,
+                            activity,
+                        ),
+                    )
             result = self._stop_in_uow(
                 uow,
                 operation_id,

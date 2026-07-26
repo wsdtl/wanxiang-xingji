@@ -3,7 +3,6 @@
 from dataclasses import replace
 
 from game.core.gameplay import (
-    ActionState,
     CharacterState,
     InscriptionPreference,
     InventoryState,
@@ -23,7 +22,6 @@ from game.rules.character import (
     MULTIVERSE_WORLD_STATE_ID,
     character_creation_context,
 )
-
 from .models import (
     CharacterCreationCommandResult,
     CharacterOverview,
@@ -53,6 +51,7 @@ class PlayerFeature:
         notifications,
         activities,
         global_activities,
+        player_activity,
         storage: PlayerStorageKinds,
     ) -> None:
         self.database = database
@@ -63,6 +62,7 @@ class PlayerFeature:
         self.notifications = notifications
         self.activities = activities
         self.global_activities = global_activities
+        self.player_activity = player_activity
         self.storage = storage
 
     def create_character(
@@ -133,6 +133,7 @@ class PlayerFeature:
             )
             if stored_character.account_id != character.account_id:
                 raise PlayerOwnershipError("角色详情账号归属不一致")
+            activity = self.player_activity.load_in_uow(uow, character.id)
             overview = CharacterOverview(
                 character=stored_character,
                 inventory=self.snapshots.require(
@@ -153,15 +154,19 @@ class PlayerFeature:
                     character.id,
                     CharacterWorldState,
                 ),
+                settings=self.snapshots.require(
+                    uow,
+                    self.storage.settings,
+                    character.id,
+                    CharacterSettingsState,
+                ),
                 inscription_preference=self.snapshots.load(
                     uow,
                     self.storage.inscription_preference,
                     character.id,
                     InscriptionPreference,
                 ),
-                action=self.snapshots.load(
-                    uow, self.storage.action, character.id, ActionState
-                ),
+                activity=activity,
             )
         return CharacterOverviewResult("ok", overview)
 
@@ -192,9 +197,7 @@ class PlayerFeature:
                 character.id,
                 CharacterWorldState,
             )
-            action = self.snapshots.load(
-                uow, self.storage.action, character.id, ActionState
-            )
+            player_activity = self.player_activity.load_in_uow(uow, character.id)
         selection = self.global_activities.spotlight(
             self.activities.load(GLOBAL_ACTIVITY_SCOPE_ID),
             logical_time=evidence.logical_time,
@@ -206,13 +209,14 @@ class PlayerFeature:
                 character,
                 settings,
                 dimension,
+                player_activity,
                 activity_spotlights=selection.activities,
                 additional_activity_count=selection.additional_count,
                 unread_notification_count=self.notifications.count_unread(
                     character.account_id,
                     logical_time=evidence.logical_time,
                 ),
-                pending_action_count=len(action.completed()) if action else 0,
+                pending_action_count=len(player_activity.pending_actions),
             ),
         )
 
@@ -290,9 +294,7 @@ class PlayerFeature:
         notification_limit: int = 20,
     ) -> PlayerReminderDetailsResult:
         with self.database.unit_of_work(write=False) as uow:
-            action = self.snapshots.load(
-                uow, self.storage.action, character.id, ActionState
-            )
+            player_activity = self.player_activity.load_in_uow(uow, character.id)
         return PlayerReminderDetailsResult(
             "ok",
             PlayerReminderDetails(
@@ -301,7 +303,7 @@ class PlayerFeature:
                     logical_time=logical_time,
                     limit=notification_limit,
                 ),
-                action.completed() if action else (),
+                player_activity.pending_actions,
             ),
         )
 

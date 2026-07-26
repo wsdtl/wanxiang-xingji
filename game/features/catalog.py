@@ -201,6 +201,11 @@ ACTIVE_FEATURE_MANIFESTS = (
         integrated_command_packages=("组队",),
     ),
     FeatureManifest(
+        "player_activity",
+        "player_activity",
+        "在调用方事务内统一投影主要行动、持续探险与自动休整状态",
+    ),
+    FeatureManifest(
         "player",
         "player",
         "提供账号到角色入口、角色总览、个人设置、提醒和活动读模型",

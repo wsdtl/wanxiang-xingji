@@ -6,11 +6,11 @@ import asyncio
 
 from game.app import CurrentCharacterResult, current_game_services
 from game.content import DIMENSION_SHIFT_ITEM_ID
-from game.rules.character import WorldShiftResult
+from game.features.dimension_shift import DimensionShiftResult
 from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time
-from ..presentation import current_action_action
+from ..presentation import activity_block_feedback
 from ..reply import send_command_failure, send_game_reply
 
 
@@ -73,17 +73,18 @@ def _worlds_message(current_world_id: str, *, invalid: bool = False) -> Document
     return builder.build()
 
 
-def _result_message(result: WorldShiftResult) -> DocumentMessage:
+def _result_message(result: DimensionShiftResult) -> DocumentMessage:
     services = current_game_services()
     if result.current is None:
         return _unavailable()
     current = services.world_view(result.current)
-    if result.status == "main_action_occupied":
+    if result.activity_block is not None:
+        feedback = activity_block_feedback(result.activity_block, "跃迁")
         return (
             M.document()
             .section("界标未稳", icon="notice")
-            .line("当前正在进行主要行动，结束后才能跃迁")
-            .action(current_action_action())
+            .line(feedback.text)
+            .action(feedback.recovery)
             .build()
         )
     if result.status == "already_there":

@@ -61,6 +61,13 @@ export function rawBlock(value) {
 export function renderGauge(gauge, reverse = false) {
   const values = node("span", "bar-value", gauge.display);
   const title = node("span", "bar-label", gauge.label);
+  if (gauge.presentation === "value") {
+    return node(
+      "div",
+      `bar-row metric-row tone-${safeToken(gauge.tone)}${reverse ? " reverse" : ""}`,
+      reverse ? [values, title] : [title, values],
+    );
+  }
   const bar = node("div", `vital-bar tone-${safeToken(gauge.tone)}`);
   const fill = node("span", "vital-fill");
   fill.style.setProperty("--fill", `${percentage(gauge.current, gauge.maximum)}%`);

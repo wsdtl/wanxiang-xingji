@@ -23,6 +23,10 @@ from game.core.persistence import CHARACTER_AGGREGATE  # noqa: E402
 from game.rules.item import asset_reference  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
+from launch.message_events import (  # noqa: E402
+    subscribe_message_events,
+    unsubscribe_message_events,
+)
 
 
 def main() -> None:
@@ -46,6 +50,9 @@ async def _main() -> None:
         )
         services.database.initialize()
         previous = install_game_services(services)
+        events = []
+        listener = events.append
+        subscribe_message_events(listener)
         try:
             await LocalEventHandler.run()
             await _dispatch("exchange-user", "创建角色 归航测试", "exchange-create")
@@ -72,6 +79,17 @@ async def _main() -> None:
             assert f"总计: _{len(services.content.catalog.equipment.sets.ids())}_" in page.replies[0].message.content
             assert not page.replies[0].message.actions
             set_id = services.content.catalog.equipment.sets.ids()[0]
+            overview = services.load_character_overview(character).overview
+            assert overview is not None
+            view = services.world_view(overview.character_world)
+            set_name = view.projector.name(set_id)
+            page_links = {
+                (value.label, value.data)
+                for value in _outgoing(events, "exchange-page").interactions
+                if value.kind == "command_link"
+            }
+            assert (set_name, f"归航兑换 {set_id}") in page_links
+            assert ("套装效果", f"特效 {set_name}") in page_links
             completed = await _dispatch(
                 "exchange-user",
                 f"归航兑换 {set_id}",
@@ -95,6 +113,12 @@ async def _main() -> None:
             )
             assert "套装图纸" in used.replies[0].message.content
             assert "部位、底座、品阶、词条" in used.replies[0].message.content
+            used_links = {
+                (value.label, value.data)
+                for value in _outgoing(events, "exchange-use-blueprint").interactions
+                if value.kind == "command_link"
+            }
+            assert (set_name, f"特效 {set_name}") in used_links
             inventory = _inventory(services, character.id)
             equipment = next(
                 instance
@@ -147,7 +171,14 @@ async def _main() -> None:
             )
             assert "归航兑换记录" in history.replies[0].message.content
             assert "定相尘" in history.replies[0].message.content
+            history_links = {
+                (value.label, value.data)
+                for value in _outgoing(events, "exchange-history").interactions
+                if value.kind == "command_link"
+            }
+            assert (set_name, f"特效 {set_name}") in history_links
         finally:
+            unsubscribe_message_events(listener)
             restore_game_services(previous)
 
 
@@ -169,6 +200,14 @@ def _character(services):
     character = services.characters.load_character(str(row[0]))
     assert character is not None
     return character
+
+
+def _outgoing(events, request_id: str):
+    return next(
+        value
+        for value in reversed(events)
+        if value.direction == "outgoing" and value.request_id == request_id
+    )
 
 
 if __name__ == "__main__":

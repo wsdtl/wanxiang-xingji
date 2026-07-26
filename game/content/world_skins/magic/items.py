@@ -52,7 +52,7 @@ MAGIC_ITEM_ENTRIES = {
         icon="⌛",
     ),
     COMPANION_SANCTUARY_ITEM_ID: SkinEntry(
-        name="万灵引",
+        name="幻兽庭钥印",
         description="在当前位面开启一次幻兽庭入口；名额不足时不会消耗。",
         icon="🧿",
     ),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class PublicBattleReportRow:
     header: BattleReportHeaderRow
     detail_available: bool
     segment_payloads: tuple[bytes, ...] = ()
+    segment_count: int = 0
 
 
 class BattleReportStore:
@@ -137,10 +139,22 @@ class BattleReportStore:
             """
             UPDATE battle_report
             SET summary_payload = ?,
-                started_at = MIN(started_at, ?),
-                finished_at = MAX(finished_at, ?),
-                detail_expires_at = MAX(detail_expires_at, ?),
-                summary_expires_at = MAX(summary_expires_at, ?),
+                started_at = CASE
+                    WHEN julianday(started_at) <= julianday(?) THEN started_at
+                    ELSE ?
+                END,
+                finished_at = CASE
+                    WHEN julianday(finished_at) >= julianday(?) THEN finished_at
+                    ELSE ?
+                END,
+                detail_expires_at = CASE
+                    WHEN julianday(detail_expires_at) >= julianday(?) THEN detail_expires_at
+                    ELSE ?
+                END,
+                summary_expires_at = CASE
+                    WHEN julianday(summary_expires_at) >= julianday(?) THEN summary_expires_at
+                    ELSE ?
+                END,
                 uncompressed_bytes = uncompressed_bytes + ?,
                 compressed_bytes = compressed_bytes + ?
             WHERE report_id = ?
@@ -148,8 +162,12 @@ class BattleReportStore:
             (
                 summary_payload,
                 started_at,
+                started_at,
+                finished_at,
                 finished_at,
                 detail_expires_at,
+                detail_expires_at,
+                summary_expires_at,
                 summary_expires_at,
                 uncompressed_bytes,
                 compressed_bytes,
@@ -172,7 +190,13 @@ class BattleReportStore:
         logical_time: str,
         detail_finished_after: str,
         summary_finished_after: str,
+        segment_offset: int | None = None,
+        segment_limit: int | None = None,
     ) -> PublicBattleReportRow | None:
+        if segment_offset is not None and segment_offset < 0:
+            raise ValueError("segment_offset 不能小于 0")
+        if segment_limit is not None and segment_limit < 1:
+            raise ValueError("segment_limit 必须大于 0")
         with self.database.unit_of_work(write=False) as uow:
             row = uow.connection.execute(
                 """
@@ -181,8 +205,8 @@ class BattleReportStore:
                        detail_expires_at, summary_expires_at
                 FROM battle_report
                 WHERE share_id = ?
-                  AND summary_expires_at > ?
-                  AND finished_at > ?
+                  AND datetime(summary_expires_at) > datetime(?)
+                  AND datetime(finished_at) > datetime(?)
                 """,
                 (share_id, logical_time, summary_finished_after),
             ).fetchone()
@@ -190,20 +214,65 @@ class BattleReportStore:
                 return None
             header = _header(row)
             detail_available = (
-                header.detail_expires_at > logical_time
-                and header.finished_at > detail_finished_after
+                _instant_after(header.detail_expires_at, logical_time)
+                and _instant_after(header.finished_at, detail_finished_after)
             )
             payloads = ()
+            segment_count = 0
             if detail_available:
-                segment_rows = uow.connection.execute(
-                    """
+                segment_count = int(
+                    uow.connection.execute(
+                        """
+                        SELECT COUNT(*) FROM battle_report_segment
+                        WHERE report_id = ?
+                        """,
+                        (header.report_id,),
+                    ).fetchone()[0]
+                )
+                sql = """
                     SELECT detail_payload FROM battle_report_segment
                     WHERE report_id = ? ORDER BY sequence
-                    """,
-                    (header.report_id,),
-                ).fetchall()
+                """
+                parameters: tuple[object, ...] = (header.report_id,)
+                if segment_limit is not None:
+                    sql += " LIMIT ? OFFSET ?"
+                    parameters = (
+                        header.report_id,
+                        segment_limit,
+                        segment_offset or 0,
+                    )
+                elif segment_offset is not None:
+                    sql += " LIMIT -1 OFFSET ?"
+                    parameters = (header.report_id, segment_offset)
+                segment_rows = uow.connection.execute(sql, parameters).fetchall()
                 payloads = tuple(bytes(item[0]) for item in segment_rows)
-        return PublicBattleReportRow(header, detail_available, payloads)
+        return PublicBattleReportRow(
+            header,
+            detail_available,
+            payloads,
+            segment_count,
+        )
+
+    def public_exists(
+        self,
+        share_id: str,
+        *,
+        logical_time: str,
+        summary_finished_after: str,
+    ) -> bool:
+        """只检查公开摘要是否仍有效，不读取或解压战报片段。"""
+
+        with self.database.unit_of_work(write=False) as uow:
+            row = uow.connection.execute(
+                """
+                SELECT 1 FROM battle_report
+                WHERE share_id = ?
+                  AND datetime(summary_expires_at) > datetime(?)
+                  AND datetime(finished_at) > datetime(?)
+                """,
+                (share_id, logical_time, summary_finished_after),
+            ).fetchone()
+        return row is not None
 
     def cleanup(
         self,
@@ -218,7 +287,8 @@ class BattleReportStore:
                 DELETE FROM battle_report_segment
                 WHERE report_id IN (
                     SELECT report_id FROM battle_report
-                    WHERE detail_expires_at <= ? OR finished_at <= ?
+                    WHERE datetime(detail_expires_at) <= datetime(?)
+                       OR datetime(finished_at) <= datetime(?)
                 )
                 """,
                 (logical_time, detail_finished_cutoff),
@@ -226,7 +296,8 @@ class BattleReportStore:
             summaries = uow.connection.execute(
                 """
                 DELETE FROM battle_report
-                WHERE summary_expires_at <= ? OR finished_at <= ?
+                WHERE datetime(summary_expires_at) <= datetime(?)
+                   OR datetime(finished_at) <= datetime(?)
                 """,
                 (logical_time, summary_finished_cutoff),
             ).rowcount
@@ -255,6 +326,10 @@ def _header(row) -> BattleReportHeaderRow:
         str(row["detail_expires_at"]),
         str(row["summary_expires_at"]),
     )
+
+
+def _instant_after(left: str, right: str) -> bool:
+    return datetime.fromisoformat(left) > datetime.fromisoformat(right)
 
 
 __all__ = [

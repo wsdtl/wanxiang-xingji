@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import re
 import sqlite3
 import sys
 from tempfile import TemporaryDirectory
@@ -30,8 +31,10 @@ from game.content import (  # noqa: E402
     RARE_QUALITY_ID,
     STELLAR_RING_WORLD_ID,
     TAIXUAN_WORLD_ID,
+    build_official_content,
 )
 from game.content.catalog.combat.stats import SHIELD_CURRENT  # noqa: E402
+from game.content.catalog.weapon.blueprints import WEAPON_BLUEPRINTS  # noqa: E402
 from game.core.gameplay import (  # noqa: E402
     COMBAT_ATTACK,
     COMBAT_DEFENSE,
@@ -49,6 +52,7 @@ from game.features.battle_report import (  # noqa: E402
     PUBLIC_BATTLE_REPORT_SCHEMA,
     PUBLIC_BATTLE_REPORT_VERSION,
     present_battle_event,
+    validate_public_battle_report,
 )
 from game.rules.battle_report import (  # noqa: E402
     KNOWN_BATTLE_EVENT_KINDS,
@@ -64,12 +68,14 @@ from game.rules.battle_report import (  # noqa: E402
     BattleReportTransitionDraft,
     StoredBattleCombatant,
     StoredBattleEvent,
+    content_scoped_report_id,
 )
 from game.rules.companion import (  # noqa: E402
     COMPANION_APTITUDE_IDS,
     CompanionTrace,
 )
-from generate_battle_report_preview import build_preview_document  # noqa: E402
+from generate_battle_report_preview import build_preview_artifacts  # noqa: E402
+from launch import FastAPIAllowed  # noqa: E402
 
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
@@ -135,7 +141,7 @@ def main() -> None:
         assert segment.combatants[0].gear[0].name == "铭刻·断潮"
         assert len(segment.transitions) == 2
         assert segment.transitions[0].before is None
-        assert segment.transitions[0].after.status == "running"
+        assert segment.transitions[0].after.status == "active"
         turn = segment.transitions[1]
         assert turn.actor_key == "p0"
         assert turn.ability_id == "ability.test"
@@ -146,27 +152,36 @@ def main() -> None:
         assert turn.before is not None and turn.before.revision == 1
         assert turn.after.status == "finished"
         assert turn.after.inactive_keys == ("p2",)
+        selection = service.load_public_selection(
+            reference.share_id,
+            logical_time=NOW + timedelta(hours=1),
+            segment_index=1,
+        )
+        assert selection is not None
+        assert selection.segment_count == 2
+        assert selection.segment_index == 1
+        assert [value.segment_id for value in selection.report.segments] == ["segment-2"]
+        assert service.load_public_selection(
+            reference.share_id,
+            logical_time=NOW + timedelta(hours=1),
+            segment_index=2,
+        ) is None
+        assert service.public_exists(
+            reference.share_id,
+            logical_time=NOW + timedelta(hours=1),
+        )
 
         _assert_companion_origin_projection(services)
         _assert_enemy_term_projection(services)
         previous = install_game_services(services)
         try:
-            real_load_public = services.battle_reports.load_public
-
-            def load_public_at_test_time(share_id, *, logical_time):
-                return real_load_public(
-                    share_id,
-                    logical_time=NOW + timedelta(hours=1),
-                )
-
-            services.battle_reports.load_public = load_public_at_test_time
             app = FastAPI()
             app.include_router(game_router)
             app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+            FastAPIAllowed(app)
             with TestClient(app) as client:
-                _assert_web_assets(client, reference.share_id)
+                _assert_web_assets(client, reference.share_id, services.battle_reports)
         finally:
-            services.battle_reports.load_public = real_load_public
             restore_game_services(previous)
 
         connection = sqlite3.connect(database.path)
@@ -262,11 +277,29 @@ def _assert_enemy_term_projection(services) -> None:
     )
 
 
-def _assert_web_assets(client: TestClient, share_id: str) -> None:
-    response = client.get(f"/battle/{share_id}")
+def _assert_web_assets(client: TestClient, share_id: str, service) -> None:
+    exists_calls = []
+    real_exists = service.public_exists
+    real_selection = service.load_public_selection
+
+    def tracked_exists(value, *, logical_time):
+        exists_calls.append(value)
+        return real_exists(value, logical_time=logical_time)
+
+    def selection_must_not_run(*args, **kwargs):
+        raise AssertionError("HTML 入口不应读取或解压战报片段")
+
+    service.public_exists = tracked_exists
+    service.load_public_selection = selection_must_not_run
+    try:
+        response = client.get(f"/battle/{share_id}")
+    finally:
+        service.public_exists = real_exists
+        service.load_public_selection = real_selection
     assert response.status_code == 200
-    assert "/static/battle-report/style.css?v=18" in response.text
-    assert "/static/battle-report/app.js?v=18" in response.text
+    assert exists_calls == [share_id]
+    assert "/static/battle-report/style.css?v=19" in response.text
+    assert "/static/battle-report/app.js?v=19" in response.text
     assert 'script type="module"' in response.text
 
     script = client.get("/static/battle-report/app.js").text
@@ -275,103 +308,187 @@ def _assert_web_assets(client: TestClient, share_id: str) -> None:
     combined_script = script + timeline_script + ui_script
     assert "state.report.ui.modes.map" in script
     assert "state.report.ui.snapshots.map" in script
-    assert "ui.filters.map" in timeline_script
+    assert "detail.filters.map" in timeline_script
     assert 'action === "mode"' in script
     assert 'action === "segment"' in script
     assert 'action === "snapshot"' in script
     assert 'action === "participant-disclosure"' in script
     assert 'action === "filter"' in script
+    assert "ensureEvents(state.segmentIndex)" in script
+    assert "/segments/${index}/events" in script
+    assert "/segments/${index}/participants/" in script
+    assert "/segments/${index}/transitions/${values.sequence}" in script
+    assert "/segments/${index}/raw" in script
+    assert 'export function renderRawDataAccess' in timeline_script
+    assert 'details.addEventListener("toggle"' in timeline_script
+    assert "status.replaceWith(rawBlock(value))" in timeline_script
+    assert 'export function node' in ui_script
+    assert "function selectSegment(index)" in script
+    assert 'select.dataset.action = "segment-select"' in script
     assert "event.text" in timeline_script
     assert "event.category" in timeline_script
-    assert "buildActorVisualMap(segment.combatants)" in timeline_script
-    assert 'event.category === "system"' in timeline_script
-    assert "event.source?.key" in timeline_script
-    assert "actorVisuals.get(sourceKey)?.color" in timeline_script
-    assert "combatant.team_id" not in timeline_script
-    assert "buildActorVisualMap(segment.combatants)" in script
-    assert "actorVisuals.get(participant.key)" in script
-    assert "participant-index actor-${actorColor}" in script
+    assert "buildActorVisualMap" not in combined_script
+    assert "ACTOR_PALETTE" not in combined_script
+    assert "visual?.color ||" not in timeline_script
+    assert 'setProperty("--actor-color", visual.color)' in timeline_script
+    assert "applyVisual(article, entry.visual)" in timeline_script
+    assert not re.search(r"#[0-9a-fA-F]{6}", combined_script)
     assert "event.kind" not in combined_script
     assert "const MODE_OPTIONS" not in combined_script
     assert ".at(" not in combined_script
+    assert "slice(0, 50)" not in combined_script
+    assert "page_size" not in combined_script
+    assert "pageSize" not in combined_script
+    assert "cursor" not in combined_script
     for forbidden in ("血气", "灵力", "生命", "魔力", "同步", "护盾", "伤害", "攻击", "防御"):
         assert forbidden not in combined_script
-    assert 'export function renderRawDataAccess' in timeline_script
-    assert 'details.addEventListener("toggle"' in timeline_script
-    assert 'export function node' in ui_script
-    assert "function updateSegmentView()" in script
-    assert "function updateSnapshotView()" in script
-    assert "function updateParticipantDisclosure()" in script
-    assert "function updateFilterView()" in script
-    assert "function selectSegment(index)" in script
-    assert "const many = segments.length > 6" in script
-    assert 'select.dataset.action = "segment-select"' in script
-    assert "document.startViewTransition" not in combined_script
-    assert script.count("renderReport();") == 1
 
     style = client.get("/static/battle-report/style.css").text
     assert "prefers-reduced-motion" in style
-    assert "scrollbar-width: none" in style
     assert ".participant-stack {" in style
     assert ".timeline-panel {" in style
     assert "--actor-color" in style
     assert "--event-type-color" not in style
-    assert ".actor-system" in style
-    assert ".actor-0" in style
-    assert ".actor-15" in style
+    assert ".actor-system" not in style
+    assert ".actor-0" not in style
+    assert ".actor-15" not in style
     assert ".event-marker.actor-party-" not in style
     assert ".event-marker.actor-enemy-" not in style
     assert ".event-marker.tone-" not in style
-    assert "border: 2px solid var(--event-type-color)" not in style
     assert "view-transition" not in style
+    assert "min-height: 44px" in style
 
-    data_response = client.get(f"/battle/{share_id}/data")
+    data_response = client.get(
+        f"/battle/{share_id}/data",
+        headers={"Accept-Encoding": "gzip"},
+    )
     assert data_response.status_code == 200
+    assert data_response.headers.get("content-encoding") == "gzip"
+    assert len(data_response.content) < 100_000
     payload = data_response.json()
+    _assert_public_payload(payload)
     assert payload["schema"] == PUBLIC_BATTLE_REPORT_SCHEMA
     assert payload["version"] == PUBLIC_BATTLE_REPORT_VERSION
     assert payload["summary"]["title"] == "探险战报"
+    assert payload["detail"]["segment_count"] == 2
+    assert len(payload["detail"]["segments"]) == 1
     segment = payload["detail"]["segments"][0]
+    assert segment["index"] == 0
     assert segment["title"] == "第一战"
-    participants = {
-        value["label"]: value for value in segment["initial_participants"]
+    assert segment["counts"]["events"] > 50
+    assert len(segment["timeline"]) == segment["counts"]["actions"]
+    assert all("events" not in entry and "facts" not in entry for entry in segment["timeline"])
+    assert all("detail_groups" not in value for value in segment["initial_participants"])
+
+    visuals = [value["visual"] for value in segment["combatants"]]
+    assert [value["number"] for value in visuals] == [1, 2, 3]
+    assert len({value["color"] for value in visuals}) == len(visuals)
+    assert all(re.fullmatch(r"#[0-9a-f]{6}", value["color"]) for value in visuals)
+    assert segment["system_visual"] == {
+        "key": "system",
+        "number": 0,
+        "color": "#6b7280",
+        "foreground": "#ffffff",
     }
-    assert participants["问道客"]["gauges"][0]["label"] == "气血"
-    assert participants["问道客"]["gauges"][1]["label"] == "灵力"
-    assert participants["星辉狮鹫"]["gauges"][0]["label"] == "生命"
-    assert participants["星辉狮鹫"]["gauges"][1]["label"] == "魔力"
-    assert participants["边界守卫"]["gauges"][0]["label"] == "生命"
-    assert participants["边界守卫"]["gauges"][1]["label"] == "同步"
-    companion = next(
-        value
-        for value in segment["combatants"]
-        if value["unit_kind"] == "companion"
+    visual_by_key = {value["key"]: value["visual"] for value in segment["combatants"]}
+    assert all(
+        value["visual"] == visual_by_key[value["key"]]
+        for value in segment["initial_participants"]
     )
-    assert companion["projection"] == {
-        "kind": "companion_origin_world",
-        "id": MAGIC_WORLD_ID,
-        "version": companion["projection"]["version"],
-    }
+
+    participants = {value["label"]: value for value in segment["initial_participants"]}
+    assert [value["label"] for value in participants["问道客"]["gauges"]] == ["气血", "灵力"]
+    assert [value["label"] for value in participants["星辉狮鹫"]["gauges"]] == ["生命", "魔力"]
+    assert [value["label"] for value in participants["边界守卫"]["gauges"]] == ["生命", "同步"]
+    companion = next(value for value in segment["combatants"] if value["unit_kind"] == "companion")
+    assert "projection" not in companion
     turn = segment["timeline"][1]
+    assert segment["timeline"][0]["visual"] == segment["system_visual"]
+    assert turn["visual"] == visual_by_key["p0"]
+    assert turn["round_label"] == "第 1 回合"
+    assert len(turn["summary_events"]) > 50
+    assert any(value["kind"] == "resource.transferred" for value in turn["summary_events"])
+
+    events_response = client.get(f"/battle/{share_id}/segments/0/events")
+    assert events_response.status_code == 200
+    event_payload = events_response.json()
+    _assert_public_payload(event_payload)
+    assert len(event_payload["timeline"]) == segment["counts"]["actions"]
+    assert event_payload["timeline"][0]["visual"] == segment["system_visual"]
+    assert event_payload["timeline"][1]["visual"] == visual_by_key["p0"]
+    event_count = sum(len(value["events"]) for value in event_payload["timeline"])
+    assert event_count == segment["counts"]["events"]
+    assert event_count > 50
+    assert event_payload["filters"][0]["count"] == event_count
     transfer = next(
-        value for value in turn["events"] if value["kind"] == "resource.transferred"
+        value
+        for entry in event_payload["timeline"]
+        for value in entry["events"]
+        if value["kind"] == "resource.transferred"
     )
     assert "同步" in transfer["text"] and "灵力" in transfer["text"]
     health_change = next(
-        value for value in turn["events"] if value["kind"] == "resource.changed"
+        value
+        for entry in event_payload["timeline"]
+        for value in entry["events"]
+        if value["kind"] == "resource.changed"
     )
-    assert "消耗 100 点生命" in health_change["text"]
-    assert turn["comparison"]["before"]["title"] == "动作前完整状态"
-    assert turn["comparison"]["after"]["title"] == "动作后完整状态"
-    assert any(
-        fact["label"] == "实际目标" and fact["value"] == ["边界守卫"]
-        for fact in turn["facts"]
-    )
-    assert "character-private-id" not in data_response.text
-    assert "companion-private-id" not in data_response.text
-    assert "enemy-private-id" not in data_response.text
+    assert "边界守卫 的生命减少 100 点" in health_change["text"]
+
+    participant_response = client.get(f"/battle/{share_id}/segments/0/participants/before")
+    assert participant_response.status_code == 200
+    participant_payload = participant_response.json()
+    _assert_public_payload(participant_payload)
+    detailed = {value["label"]: value for value in participant_payload["participants"]}
+    character = detailed["问道客"]
+    group_items = [
+        item
+        for group in character["detail_groups"]
+        for item in group["items"]
+    ]
+    assert not {str(HEALTH_MAXIMUM), str(SPIRIT_MAXIMUM), str(HEALTH_CURRENT), str(SPIRIT_CURRENT)} & {
+        item.get("id") for item in group_items
+    }
+    permanent = next(value for value in character["detail_groups"] if value["id"] == "permanent_effects")
+    assert all("永久" not in value["display"] for value in permanent["items"])
+
+    transition_response = client.get(f"/battle/{share_id}/segments/0/transitions/1")
+    assert transition_response.status_code == 200
+    transition_payload = transition_response.json()
+    _assert_public_payload(transition_payload)
+    comparison = transition_payload["comparison"]
+    assert comparison["before"]["title"] == "动作前状态"
+    assert comparison["after"]["title"] == "动作后状态"
+    assert comparison["before"]["round_turn_label"].startswith("第 1 回合")
+    assert comparison["after"]["round_turn_label"].startswith("第 2 回合")
+
+    raw_response = client.get(f"/battle/{share_id}/segments/0/raw")
+    assert raw_response.status_code == 200
+    raw_payload = raw_response.json()
+    _assert_public_payload(raw_payload)
+    assert len(raw_payload["transitions"]) == segment["counts"]["actions"]
+    assert sum(len(value["events"]) for value in raw_payload["transitions"]) == event_count
+
+    second_response = client.get(f"/battle/{share_id}/segments/1")
+    assert second_response.status_code == 200
+    second = second_response.json()
+    _assert_public_payload(second)
+    assert second["segment"]["index"] == 1
+    assert second["segment"]["title"] == "第二战"
+    assert len(second["segment"]["timeline"]) == second["segment"]["counts"]["actions"]
+
+    assert client.get(f"/battle/{share_id}/segments/2").status_code == 404
+    assert client.get(f"/battle/{share_id}/segments/0/participants/middle").status_code == 404
+    assert client.get(f"/battle/{share_id}/segments/0/transitions/999").status_code == 404
     assert client.get("/battle/not-found").status_code == 404
     assert client.get("/battle/not-found/data").status_code == 404
+
+    try:
+        validate_public_battle_report({"message": "DIRECT_MESSAGE:private-request"})
+    except RuntimeError as exc:
+        assert "平台请求身份" in str(exc)
+    else:
+        raise AssertionError("公共战报校验必须阻断 DIRECT_MESSAGE 请求身份")
 
 
 def _assert_production_preview() -> None:
@@ -380,21 +497,28 @@ def _assert_production_preview() -> None:
     assert not (PREVIEW_ROOT / "battle-report-humanized.html").exists()
     preview = preview_path.read_text(encoding="utf-8")
     assert "<style" not in preview
-    assert "maximum-scale=1, user-scalable=no" in preview
-    assert "../../static/battle-report/style.css?v=18" in preview
-    assert "../../static/battle-report/app.js?v=18" in preview
+    assert "maximum-scale" not in preview
+    assert "user-scalable" not in preview
+    assert "../../static/battle-report/style.css?v=19" in preview
+    assert "../../static/battle-report/app.js?v=19" in preview
     assert 'script type="module"' in preview
+    assert 'meta name="battle-report-preview-data"' in preview
     opening = '<script id="battleReportPreviewData" type="application/json">'
     payload = preview.split(opening, 1)[1].split("</script>", 1)[0]
     embedded = json.loads(payload)
-    generated = build_preview_document()
-    generated["share_id"] = embedded["share_id"]
+    generated, generated_bundle = build_preview_artifacts()
     assert embedded == generated
+    bundle_path = PREVIEW_ROOT / "battle-report-production.data.json"
+    assert bundle_path.is_file()
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    assert bundle == generated_bundle
+    _assert_public_payload(embedded)
+    _assert_public_payload(bundle)
     assert embedded["schema"] == PUBLIC_BATTLE_REPORT_SCHEMA
     assert embedded["version"] == PUBLIC_BATTLE_REPORT_VERSION
-    assert embedded["mode_id"] == "battle.mode.party_battle"
     assert embedded["detail"]["available"] is True
     assert embedded["detail"]["segments"]
+    assert len(payload.encode("utf-8")) < 100_000
     assert all(
         segment["timeline"] for segment in embedded["detail"]["segments"]
     )
@@ -406,28 +530,33 @@ def _assert_production_preview() -> None:
             ]
         }
     )
-    initial_participants = embedded["detail"]["segments"][0][
-        "initial_participants"
-    ]
+    segment = embedded["detail"]["segments"][0]
+    assert len(segment["timeline"]) == segment["counts"]["actions"]
+    assert all("events" not in transition for transition in segment["timeline"])
+    detail = bundle["events"]["0"]
+    detailed_event_count = sum(len(value["events"]) for value in detail["timeline"])
+    assert detailed_event_count == segment["counts"]["events"]
+    initial_participants = bundle["participants"]["0:before"]["participants"]
     for participant in initial_participants:
         if participant["unit_kind"] != "character":
             continue
-        permanent_group = next(
+        permanent_group = next((
             value
             for value in participant["detail_groups"]
             if value["id"] == "permanent_effects"
-        )
+        ), None)
+        if permanent_group is None:
+            continue
         assert all(
-            effect["source"] == participant["label"]
+            "永久" not in effect["display"]
             for effect in permanent_group["items"]
-            if effect["id"].startswith("feature.")
         )
+    serialized = json.dumps(bundle, ensure_ascii=False)
     assert "ability.test" not in payload
-    assert "combat.damage.dealt" in payload
+    assert "combat.damage.dealt" in serialized
     events = [
         event
-        for segment in embedded["detail"]["segments"]
-        for transition in segment["timeline"]
+        for transition in detail["timeline"]
         for event in transition["events"]
     ]
     phase_events = [
@@ -437,11 +566,90 @@ def _assert_production_preview() -> None:
     assert all(
         "进入新的战斗阶段" in event["text"]
         and "获得" in event["text"]
-        and event["raw"]["values"]["behavior_ids"]
+        and any(fact["key"] == "behavior_ids" and fact["value"] for fact in event["facts"])
         and event["subject"]["id"].startswith("enemy.phase.")
         and event["subject"]["label"].endswith("阶段能力")
         for event in phase_events
     )
+    visual_by_key = {value["key"]: value["visual"] for value in segment["combatants"]}
+    system_visual = segment["system_visual"]
+    assert all(
+        event["visual"] == visual_by_key.get(event["source"]["key"], system_visual)
+        for event in events
+    )
+    for transition in segment["timeline"]:
+        identities = [
+            (event["text"], event["source"]["key"], event["target"]["key"])
+            for event in transition["summary_events"]
+        ]
+        assert len(identities) == len(set(identities))
+    summary_events = [
+        event
+        for transition in segment["timeline"]
+        for event in transition["summary_events"]
+    ]
+    summary_text = "\n".join(event["text"] for event in summary_events)
+    assert all(
+        not re.search(r"（[^）]*(?:生命|气血|护盾) 0(?:，|）)", event["text"])
+        for event in summary_events
+    )
+    assert "获得 敌技·不死守护·辅效" not in summary_text
+    assert "敌技·不死守护·辅效 结束" not in summary_text
+
+    stellar = build_official_content("skin.stellar_ring")
+    weapon_names = {
+        stellar.projector.name(f"weapon.{blueprint.key}")
+        for blueprint in WEAPON_BLUEPRINTS
+    }
+    enemy_keys = {
+        value["key"]
+        for value in segment["combatants"]
+        if value["unit_kind"] == "enemy"
+    }
+    for event in events:
+        if event["source"]["key"] not in enemy_keys:
+            continue
+        event_text = json.dumps(event, ensure_ascii=False)
+        assert not any(name in event_text for name in weapon_names)
+        assert "effect.weapon." not in event_text
+        assert "trigger.weapon." not in event_text
+        assert "ability.weapon." not in event_text
+
+
+def _assert_public_payload(value) -> None:
+    forbidden_keys = {
+        "content_fingerprint",
+        "mode_id",
+        "projection",
+        "segment_id",
+        "share_id",
+        "page",
+        "page_size",
+        "cursor",
+    }
+    forbidden_markers = (
+        "GROUP_MESSAGE_CREATE",
+        "DIRECT_MESSAGE",
+        "C2C_MESSAGE_CREATE",
+        "platform.qq",
+        ":qq:",
+        "character-private-id",
+        "companion-private-id",
+        "enemy-private-id",
+    )
+
+    def visit(item):
+        if isinstance(item, dict):
+            assert not forbidden_keys.intersection(item)
+            for nested in item.values():
+                visit(nested)
+        elif isinstance(item, (tuple, list)):
+            for nested in item:
+                visit(nested)
+        elif isinstance(item, str):
+            assert not any(marker.casefold() in item.casefold() for marker in forbidden_markers)
+
+    visit(value)
 
 
 def _assert_all_current_events_are_rendered() -> None:
@@ -710,13 +918,16 @@ def _draft(segment_id: str, title: str, logical_time: datetime) -> BattleReportD
                 logical_time,
                 {"delta": -100 - index, "current": 900 - index},
             )
-            for index in range(40)
+            for index in range(60)
         ),
     )
-    before = _frame(logical_time, 0, 1, "running", initial)
-    after = _frame(logical_time, 1, 2, "finished", final)
+    before = _frame(logical_time, 0, 1, "active", initial, round_number=1)
+    after = _frame(logical_time, 1, 2, "finished", final, round_number=2)
     return BattleReportDraft(
-        report_id="battle-report:exploration:session-private-id",
+        report_id=content_scoped_report_id(
+            "battle-report:exploration:session-private-id",
+            "content-fingerprint",
+        ),
         mode_id="battle.mode.exploration",
         content_fingerprint="content-fingerprint",
         summary=BattleReportSummary(
@@ -737,7 +948,7 @@ def _draft(segment_id: str, title: str, logical_time: datetime) -> BattleReportD
                     kind="start",
                     subject_id="battle.transition.start",
                     before=None,
-                    after=_frame(logical_time, 0, 0, "running", initial),
+                    after=_frame(logical_time, 0, 0, "active", initial),
                     events=start_events,
                 ),
                 BattleReportTransitionDraft(
@@ -770,10 +981,10 @@ def _draft(segment_id: str, title: str, logical_time: datetime) -> BattleReportD
     )
 
 
-def _frame(logical_time, turn, revision, status, participants):
+def _frame(logical_time, turn, revision, status, participants, *, round_number=1):
     return BattleReportFrameDraft(
         logical_time=logical_time,
-        round_number=1,
+        round_number=round_number,
         turn_number=turn,
         status=status,
         revision=revision,

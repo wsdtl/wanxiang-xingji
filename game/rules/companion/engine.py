@@ -41,6 +41,7 @@ class CompanionEngine:
         session_id: str,
         world_id: StableId,
         character_level: int,
+        content_version: str,
         logical_time,
         random: RandomSource,
     ) -> CompanionSanctuaryState:
@@ -67,6 +68,7 @@ class CompanionEngine:
             logical_time,
             logical_time + timedelta(seconds=sanctuary.duration_seconds),
             traces,
+            content_version,
             revision=revision,
         )
 

@@ -24,6 +24,8 @@ from ...catalog.enemy.encounters import (
     PERSONAL_ELITE_ENCOUNTER_ID,
     PERSONAL_NORMAL_ENCOUNTER_ID,
 )
+from ...catalog.enemy.behaviors import ENEMY_BEHAVIOR_CONTENT
+from ..combat_mechanisms import build_enemy_behavior_mechanism_entries
 
 
 _REGULAR_NAMES = (
@@ -120,7 +122,7 @@ _BEHAVIOR_DISPLAY = {
     "shield": ("护体", "主动获得护盾吸收伤害。", ("金身", "灵罩", "护法", "罡壁")),
     "evasion": ("幻身", "依靠身法规避攻击。", ("流影", "幻身", "无踪", "踏虚")),
     "block": ("格挡", "通过格挡降低受到的伤害。", ("铁壁", "玄守", "拒岳", "横盾")),
-    "counter": ("反击", "受击后寻找机会还击。", ("返煞", "回锋", "逆震", "反戈")),
+    "counter": ("反锋", "主动挥击并以锋势压制目标。", ("返煞", "回锋", "逆震", "反戈")),
     "lifesteal": ("吸血", "将造成的伤害转为气血。", ("饮血", "血煞", "噬生", "摄命")),
     "regeneration": ("回生", "持续恢复自身气血。", ("回春", "长生", "复元", "青木")),
     "death_guard": ("不屈", "濒危时保留最后生机。", ("逆命", "不灭", "守魂", "续命")),
@@ -183,6 +185,12 @@ def _build_entries() -> tuple[dict[str, SkinEntry], dict[str, tuple[str, ...]], 
         entries[f"ability.enemy.{key}"] = SkinEntry(name=f"敌术·{name}", description=description, icon="✦")
         prefixes[behavior_id] = values
         behavior_names[behavior_id] = name
+    entries.update(
+        build_enemy_behavior_mechanism_entries(
+            ENEMY_BEHAVIOR_CONTENT.display_owners,
+            entries,
+        )
+    )
     return entries, prefixes, behavior_names
 
 

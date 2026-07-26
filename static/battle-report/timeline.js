@@ -4,13 +4,10 @@ import {
   renderFacts,
   renderSnapshotParticipant,
   safeToken,
-} from "./ui.js?v=18";
+} from "./ui.js?v=19";
 
-const ACTOR_PALETTE_SIZE = 16;
-
-export function renderCompactTimeline(segment, ui) {
+export function renderCompactTimeline(segment, ui, loadComparison) {
   const mode = ui.modes[0];
-  const actorVisuals = buildActorVisualMap(segment.combatants);
   const section = node("section", "mode-panel compact-panel");
   section.dataset.mode = mode.id;
   section.append(renderTimelineHeading(mode.label));
@@ -24,15 +21,14 @@ export function renderCompactTimeline(segment, ui) {
       timeline.append(node("div", "round-heading", entry.round_label));
       previousRound = entry.round_label;
     }
-    timeline.append(renderCompactEntry(entry, ui, actorVisuals));
+    timeline.append(renderCompactEntry(entry, ui, loadComparison));
   });
   section.append(timeline);
   return section;
 }
 
-export function renderDetailedTimeline(segment, filter, ui) {
+export function renderDetailedTimeline(detail, filter, ui, loadComparison) {
   const mode = ui.modes[1] || ui.modes[0];
-  const events = flattenEvents(segment.timeline);
   const section = node("section", "mode-panel detail-panel");
   section.dataset.mode = mode.id;
   section.append(renderTimelineHeading(mode.label));
@@ -40,78 +36,74 @@ export function renderDetailedTimeline(segment, filter, ui) {
     node(
       "div",
       "event-filters",
-      ui.filters.map((option, index) => {
-        const count = events.filter((event) => matchesFilter(event, option.id, ui)).length;
-        const button = node("button", "control-button", `${option.label} ${count}`);
+      detail.filters.map((option) => {
+        const button = node("button", "control-button", `${option.label} ${option.count}`);
         button.type = "button";
         button.dataset.action = "filter";
         button.dataset.value = option.id;
         button.setAttribute("aria-pressed", String(filter === option.id));
-        button.dataset.filterIndex = String(index);
         return button;
       }),
     ),
   );
-  section.append(renderDetailedTimelineEntries(segment, filter, ui));
+  section.append(renderDetailedTimelineEntries(detail, filter, ui, loadComparison));
   return section;
 }
 
-export function renderDetailedTimelineEntries(segment, filter, ui) {
-  const actorVisuals = buildActorVisualMap(segment.combatants);
+export function renderDetailedTimelineEntries(detail, filter, ui, loadComparison) {
   const timeline = node("div", "timeline detailed-timeline region-update");
-  const entries = segment.timeline.filter(
+  const entries = detail.timeline.filter(
     (entry) => entry.events.some((event) => matchesFilter(event, filter, ui)),
   );
   if (!entries.length) {
     timeline.append(node("p", "empty-state", ui.text.empty_filter));
   }
-  entries.forEach((entry) => timeline.append(renderDetailedEntry(entry, filter, ui, actorVisuals)));
+  entries.forEach((entry) => {
+    timeline.append(renderDetailedEntry(entry, filter, ui, loadComparison));
+  });
   return timeline;
 }
 
-export function buildActorVisualMap(combatants = []) {
-  const actors = new Map();
-  combatants.forEach((combatant, index) => {
-    actors.set(combatant.key, {
-      color: String(index % ACTOR_PALETTE_SIZE),
-      number: index + 1,
-    });
-  });
-  return actors;
-}
-
-export function renderRawDataAccess(segment, ui) {
+export function renderRawDataAccess(ui, loadRaw) {
   const details = node("details", "raw-report-details");
   details.append(node("summary", "", ui.text.raw_data_label));
-  details.addEventListener("toggle", () => {
+  details.addEventListener("toggle", async () => {
     if (!details.open || details.dataset.loaded === "true") {
       return;
     }
-    details.dataset.loaded = "true";
-    details.append(rawBlock(segment));
+    details.dataset.loaded = "loading";
+    const status = loadingStatus("原始数据读取中");
+    details.append(status);
+    try {
+      const value = await loadRaw();
+      status.replaceWith(rawBlock(value));
+      details.dataset.loaded = "true";
+    } catch (error) {
+      status.replaceWith(loadError(error));
+      details.dataset.loaded = "error";
+    }
   });
   return details;
 }
 
-function renderCompactEntry(entry, ui, actorVisuals) {
-  const primaryEvents = entry.events.filter((event) => event.compact_visible);
-  const secondaryEvents = entry.events.filter((event) => !event.compact_visible);
+function renderCompactEntry(entry, ui, loadComparison) {
   const article = node("article", `action-card tone-${safeToken(entry.tone)}`);
+  applyVisual(article, entry.visual);
   article.append(node("div", "action-head", [node("div", "action-title", entry.title)]));
-  if (primaryEvents.length) {
+  if (entry.summary_events.length) {
     const events = node("ol", "event-list compact-event-list");
-    primaryEvents.forEach((event) => events.append(renderEvent(event, false, ui, actorVisuals)));
+    entry.summary_events.forEach((event) => events.append(renderEvent(event, false)));
     article.append(events);
   }
-  if (secondaryEvents.length) {
-    article.append(renderEventGroup(ui.text.process_group_label, secondaryEvents, ui, actorVisuals));
+  if (entry.comparison_available) {
+    article.append(renderComparisonAccess(entry.sequence, ui, loadComparison));
   }
-  article.append(renderComparison(entry.comparison, ui));
   return article;
 }
 
-function renderDetailedEntry(entry, filter, ui, actorVisuals) {
+function renderDetailedEntry(entry, filter, ui, loadComparison) {
   const article = node("article", `action-card detailed-action tone-${safeToken(entry.tone)}`);
+  applyVisual(article, entry.visual);
   article.append(
     node("div", "action-head", [
       node("div", "action-title", entry.title),
@@ -124,24 +116,26 @@ function renderDetailedEntry(entry, filter, ui, actorVisuals) {
   const eventList = node("ol", "event-list");
   entry.events
     .filter((event) => matchesFilter(event, filter, ui))
-    .forEach((event) => eventList.append(renderEvent(event, true, ui, actorVisuals)));
+    .forEach((event) => eventList.append(renderEvent(event, true)));
   article.append(eventList);
-  article.append(renderComparison(entry.comparison, ui));
+  if (entry.comparison?.available) {
+    article.append(renderComparisonAccess(entry.sequence, ui, loadComparison));
+  }
   return article;
 }
 
-function renderEvent(event, includeFacts, ui, actorVisuals) {
+function renderEvent(event, includeFacts) {
   const item = node("li", "event");
   item.dataset.tone = event.tone || "neutral";
   item.dataset.category = event.category || "";
   item.append(
     node("div", "event-heading", [
-      renderEventMarker(event, actorVisuals),
+      renderEventMarker(event),
       includeFacts ? node("span", "event-label", event.label) : null,
       node("span", "event-text", event.text),
     ]),
   );
-  if (includeFacts && event.facts.length) {
+  if (includeFacts && event.facts?.length) {
     item.append(
       node(
         "div",
@@ -150,48 +144,47 @@ function renderEvent(event, includeFacts, ui, actorVisuals) {
       ),
     );
   }
-  if (includeFacts) {
-    const raw = node("details", "raw-details");
-    raw.append(node("summary", "", ui.text.event_facts_label));
-    raw.append(rawBlock(event.raw));
-    item.append(raw);
-  }
   return item;
 }
 
-function renderEventMarker(event, actorVisuals) {
-  const sourceKey = event.source?.key || "";
-  const actorColor = event.category === "system"
-    ? "system"
-    : actorVisuals.get(sourceKey)?.color || "system";
-  const marker = node(
-    "span",
-    `event-marker actor-${actorColor}`,
-    "",
-  );
-  marker.dataset.actorKey = actorColor === "system" ? "system" : sourceKey;
-  marker.dataset.actorColor = actorColor;
+function renderEventMarker(event) {
+  const marker = node("span", "event-marker", "");
+  applyVisual(marker, event.visual);
+  marker.dataset.actorKey = event.visual?.key || "system";
   marker.dataset.eventCategory = event.category || "";
-  marker.title = actorColor === "system"
+  marker.title = event.visual?.key === "system"
     ? event.label
-    : `${event.source?.label || sourceKey} · ${event.label}`;
+    : `${event.source?.label || "参战者"} · ${event.label}`;
   marker.setAttribute("aria-hidden", "true");
   return marker;
 }
 
-function renderEventGroup(title, events, ui, actorVisuals) {
-  const details = node("details", "event-group");
-  details.append(node("summary", "", `${title} · ${events.length}`));
-  const list = node("ol", "event-list");
-  events.forEach((event) => list.append(renderEvent(event, false, ui, actorVisuals)));
-  details.append(list);
+function renderComparisonAccess(sequence, ui, loadComparison) {
+  const details = node("details", "frame-comparison");
+  details.dataset.sequence = String(sequence);
+  details.append(node("summary", "", ui.text.comparison_title));
+  details.addEventListener("toggle", async () => {
+    if (!details.open || details.dataset.loaded === "true") {
+      return;
+    }
+    details.dataset.loaded = "loading";
+    const status = loadingStatus("状态对比读取中");
+    details.append(status);
+    try {
+      const value = await loadComparison(sequence);
+      status.replaceWith(renderComparison(value.comparison));
+      details.dataset.loaded = "true";
+    } catch (error) {
+      status.replaceWith(loadError(error));
+      details.dataset.loaded = "error";
+    }
+  });
   return details;
 }
 
-function renderComparison(comparison, ui) {
-  const details = node("details", "frame-comparison");
-  details.append(node("summary", "", comparison.title));
-  details.append(renderChanges(comparison));
+function renderComparison(comparison) {
+  const body = node("div", "comparison-body");
+  body.append(renderChanges(comparison));
   const grid = node("div", "frame-grid");
   if (comparison.before) {
     grid.append(renderFrame(comparison.before));
@@ -199,8 +192,8 @@ function renderComparison(comparison, ui) {
   if (comparison.after) {
     grid.append(renderFrame(comparison.after));
   }
-  details.append(grid);
-  return details;
+  body.append(grid);
+  return body;
 }
 
 function renderChanges(comparison) {
@@ -210,10 +203,9 @@ function renderChanges(comparison) {
   return node(
     "ul",
     "state-diff",
-    comparison.changes.map((change) => {
-      const item = node("li", `tone-${safeToken(change.tone)}`, change.text);
-      return item;
-    }),
+    comparison.changes.map((change) =>
+      node("li", `tone-${safeToken(change.tone)}`, change.text),
+    ),
   );
 }
 
@@ -244,6 +236,25 @@ function matchesFilter(event, filter, ui) {
   return filter === ui.filters[0].id || event.category === filter;
 }
 
-function flattenEvents(timeline) {
-  return timeline.flatMap((entry) => entry.events || []);
+function loadingStatus(message) {
+  const status = node("p", "inline-status", message);
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  return status;
+}
+
+function loadError(error) {
+  return node(
+    "p",
+    "inline-error",
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+export function applyVisual(element, visual) {
+  if (!visual || typeof visual.color !== "string" || typeof visual.foreground !== "string") {
+    throw new Error("战报缺少后端角色颜色。");
+  }
+  element.style.setProperty("--actor-color", visual.color);
+  element.style.setProperty("--actor-ink", visual.foreground);
 }

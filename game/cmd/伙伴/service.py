@@ -5,7 +5,11 @@ from __future__ import annotations
 import asyncio
 
 from game.app import CharacterOverview, CharacterOverviewResult, current_game_services
-from game.content import CHARACTER_LEVEL_PROGRESSION_ID, LOADOUT_PRESET_IDS
+from game.content import (
+    CHARACTER_LEVEL_PROGRESSION_ID,
+    COMPANION_SANCTUARY_ITEM_ID,
+    LOADOUT_PRESET_IDS,
+)
 from game.core.gameplay import (
     COMBAT_ATTACK,
     COMBAT_DEFENSE,
@@ -24,6 +28,7 @@ from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
 from ..reply import send_command_failure, send_game_reply
+from ..presentation import activity_block_feedback, health_depleted_feedback
 
 
 _APTITUDE_NAMES = {
@@ -621,8 +626,8 @@ def _companion_detail(roster, reference: str, overview: CharacterOverview) -> Do
         (projector.name(COMBAT_SPEED), _number(attributes.value(COMBAT_SPEED))),
     )
     builder.section("战斗机制", icon="combat")
-    builder.field("主动行动", projector.name(definition.core_behavior_id))
-    builder.field("特色效果", projector.name(companion.trait_behavior_id))
+    builder.field("主动行动", _behavior_link(origin_view, definition.core_behavior_id))
+    builder.field("特色效果", _behavior_link(origin_view, companion.trait_behavior_id))
     actions = []
     if preset == overview.loadout.active_preset_id:
         actions.append(Action("companion.unbind", "休战", "伙伴休战", behavior="callback"))
@@ -633,14 +638,18 @@ def _companion_detail(roster, reference: str, overview: CharacterOverview) -> Do
 
 
 def _sanctuary_message(sanctuary, overview: CharacterOverview) -> DocumentMessage:
-    title = _projector(overview).name("term.companion_sanctuary")
+    projector = _projector(overview)
+    title = projector.name("term.companion_sanctuary")
     if sanctuary is None:
         return (
             M.document()
             .section(title, icon="explore")
             .field("世界", _world_name(overview))
             .line("当前没有已开启的宠物秘境")
-            .note("使用万灵引可在当前世界开启一次秘境。")
+            .note(
+                f"使用{projector.name(COMPANION_SANCTUARY_ITEM_ID)}"
+                "可在当前世界开启一次秘境。"
+            )
             .build()
         )
     status_names = {
@@ -696,6 +705,21 @@ def _hunt_result(outcome) -> DocumentMessage:
         if outcome.battle_report is not None:
             builder.field("战报", M.link("查看完整战报", public_url("battle", outcome.battle_report.share_id)))
         return builder.build()
+    if outcome.activity_block is not None:
+        feedback = activity_block_feedback(outcome.activity_block, "追踪伙伴")
+        return _failure(
+            feedback.text,
+            feedback.recovery,
+        )
+    if outcome.status == "health_depleted":
+        feedback = health_depleted_feedback("追踪伙伴")
+        return (
+            M.document()
+            .section("伙伴", icon="notice")
+            .line(feedback.text)
+            .actions(feedback.recoveries)
+            .build()
+        )
     return _failure(outcome.failure_message or "伙伴追踪没有完成")
 
 
@@ -740,6 +764,11 @@ def _companion_projector(companion):
     return current_game_services().world_views.require(
         companion.origin_world_id
     ).projector
+
+
+def _behavior_link(view, behavior_id: str):
+    name = view.projector.name(behavior_id)
+    return M.command(name, f"特效 @{view.skin.name} {name}")
 
 
 def _world_name(overview: CharacterOverview) -> str:

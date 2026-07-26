@@ -11,8 +11,6 @@ from game.content.catalog.item import (
     CompanionSanctuaryItemComponent,
 )
 from game.core.gameplay import (
-    ActionSlotKind,
-    ActionState,
     CharacterState,
     ConsumeStack,
     HEALTH_CURRENT,
@@ -43,8 +41,6 @@ from game.rules.companion import (
     CompanionRuleError,
     CompanionSanctuaryState,
 )
-from game.rules.exploration import ExplorationState
-
 from .battle import CompanionSanctuaryBattleSimulator
 from .models import (
     CompanionExperienceItemReceipt,
@@ -69,6 +65,7 @@ class CompanionFeature:
         battle_reports,
         engine: CompanionEngine,
         battle: CompanionSanctuaryBattleSimulator,
+        player_activity,
         storage: CompanionStorageKinds,
         growth: CompanionGrowthEngine,
     ) -> None:
@@ -80,6 +77,7 @@ class CompanionFeature:
         self.battle_reports = battle_reports
         self.engine = engine
         self.battle = battle
+        self.player_activity = player_activity
         self.storage = storage
         self.growth = growth
 
@@ -540,14 +538,14 @@ class CompanionFeature:
                     "item_unknown",
                     roster,
                     previous,
-                    failure_message="找不到要使用的万灵引",
+                    failure_message="找不到要使用的秘境凭证",
                 )
             if inventory.owner_of(item_asset.id) != character.id:
                 return CompanionOperationResult(
                     "item_forbidden",
                     roster,
                     previous,
-                    failure_message="万灵引不属于当前角色",
+                    failure_message="秘境凭证不属于当前角色",
                 )
             definition = self.content.catalog.items.require(item_asset.definition_id)
             component = definition.components.get(COMPANION_SANCTUARY_ITEM_COMPONENT_ID)
@@ -563,7 +561,7 @@ class CompanionFeature:
                     "item_unavailable",
                     roster,
                     previous,
-                    failure_message="万灵引当前被其他流程占用",
+                    failure_message="秘境凭证当前被其他流程占用",
                 )
             try:
                 sanctuary = self.engine.open_sanctuary(
@@ -572,6 +570,7 @@ class CompanionFeature:
                     session_id=f"companion-sanctuary:{operation_id}",
                     world_id=dimension.world_id,
                     character_level=_character_level(character),
+                    content_version=self.content.catalog.report.content_fingerprint,
                     logical_time=logical_time,
                     random=context.random,
                 )
@@ -600,7 +599,7 @@ class CompanionFeature:
                     failure_message=(
                         inventory_outcome.failure.message
                         if inventory_outcome.failure
-                        else "万灵引扣除失败"
+                        else "秘境凭证扣除失败"
                     ),
                 )
             self.snapshots.update(
@@ -673,6 +672,16 @@ class CompanionFeature:
                     roster,
                     failure_message="当前没有已经开启的宠物秘境",
                 )
+            if (
+                sanctuary.content_version
+                != self.content.catalog.report.content_fingerprint
+            ):
+                return CompanionOperationResult(
+                    "content_changed",
+                    roster,
+                    sanctuary,
+                    failure_message="内容已经更新，本次伙伴秘境不能继续，请联系维护者处理",
+                )
             dimension = self.snapshots.require(
                 uow,
                 self.storage.character_world,
@@ -686,13 +695,13 @@ class CompanionFeature:
                     sanctuary,
                     failure_message="必须返回开启秘境的世界才能继续追踪",
                 )
-            occupied = self._main_action_occupied(uow, character_id)
-            if occupied:
+            activity_block = self.player_activity.block_in_uow(uow, character_id)
+            if activity_block is not None:
                 return CompanionOperationResult(
-                    "main_action_occupied",
+                    activity_block.status,
                     roster,
                     sanctuary,
-                    failure_message="请先结束当前主要行动",
+                    activity_block=activity_block,
                 )
             character = self.snapshots.require(
                 uow,
@@ -702,7 +711,7 @@ class CompanionFeature:
             )
             if character.resources[HEALTH_CURRENT] <= 0:
                 return CompanionOperationResult(
-                    "health_empty",
+                    "health_depleted",
                     roster,
                     sanctuary,
                     failure_message="当前血气已经归零，恢复后才能追踪伙伴",
@@ -1151,27 +1160,6 @@ class CompanionFeature:
                 started_at=logical_time,
                 finished_at=logical_time,
             ),
-        )
-
-    def _main_action_occupied(self, uow, character_id: str) -> bool:
-        action = self.snapshots.load(
-            uow,
-            self.storage.action,
-            character_id,
-            ActionState,
-        )
-        exploration = self.snapshots.load(
-            uow,
-            self.storage.exploration,
-            character_id,
-            ExplorationState,
-        )
-        return bool(
-            (action is not None and action.running(ActionSlotKind.MAIN))
-            or (
-                exploration is not None
-                and exploration.active
-            )
         )
 
     def _replay(self, uow, transaction_id, fingerprint, actor_id):

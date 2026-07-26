@@ -11,7 +11,9 @@ from game.rules.exploration import (
     EXPLORATION_AGGREGATE,
     ExplorationState,
     ExplorationStatus,
+    ExplorationStopReason,
     resume_exploration,
+    stop_exploration,
 )
 
 
@@ -79,7 +81,21 @@ class ExplorationRestCoordinator:
                 state.session_id,
             )
             if action is None:
-                raise RuntimeError("休整中的探险缺少正式休息行动")
+                stopped = stop_exploration(
+                    state,
+                    ExplorationStopReason.RECOVERY_INVALID,
+                    logical_time=logical_time,
+                )
+                self.snapshots.update(
+                    uow,
+                    EXPLORATION_AGGREGATE,
+                    character_id,
+                    state,
+                    stopped,
+                    logical_time,
+                )
+                uow.commit()
+                return stopped
             if action.completes_at > logical_time:
                 return state
             result = self.rest.stop_exploration_in_uow(
@@ -112,16 +128,14 @@ class ExplorationRestCoordinator:
         state: ExplorationState,
         *,
         logical_time: datetime,
-    ) -> None:
-        if state.status is not ExplorationStatus.RESTING:
-            return
+    ) -> bool:
         action = self.rest.exploration_action_in_uow(
             uow,
             state.character_id,
             state.session_id,
         )
         if action is None:
-            raise RuntimeError("休整中的探险缺少正式休息行动")
+            return False
         result = self.rest.stop_exploration_in_uow(
             uow,
             self._operation_id("stop", state),
@@ -131,6 +145,7 @@ class ExplorationRestCoordinator:
         )
         if result.status not in {"stopped", "completed"}:
             raise RuntimeError(result.failure_message or "探险休整没有停止")
+        return True
 
     @staticmethod
     def _operation_id(kind: str, state: ExplorationState) -> str:

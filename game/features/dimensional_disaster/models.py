@@ -5,17 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from game.core.gameplay import ActivityInstance
+from game.features.player_activity import (
+    PlayerActivityBlock,
+    validate_activity_block_contract,
+)
 from game.rules.disaster import DimensionalDisasterState, DisasterChallengeReceipt
 from game.rules.battle_report import BattleReportReference
 
 
 @dataclass(frozen=True)
 class DimensionalDisasterStorageKinds:
-    action: str
     activity: str
     character: str
     character_world: str
-    exploration: str
     inventory: str
     loadout: str
     companion_roster: str
@@ -38,6 +40,10 @@ class DimensionalDisasterChallengeResult:
     activity: ActivityInstance | None = None
     receipt: DisasterChallengeReceipt | None = None
     battle_report: BattleReportReference | None = None
+    activity_block: PlayerActivityBlock | None = None
+
+    def __post_init__(self) -> None:
+        validate_activity_block_contract(self.status, self.activity_block)
 
 
 @dataclass(frozen=True)

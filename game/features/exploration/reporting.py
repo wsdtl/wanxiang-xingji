@@ -68,10 +68,14 @@ def build_exploration_battle_report(
         if battle.draw
         else "探险战败"
     )
+    content_fingerprint = content.catalog.report.content_fingerprint
     return BattleReportDraft(
-        report_id=exploration_battle_report_id(state.session_id),
+        report_id=exploration_battle_report_id(
+            state.session_id,
+            content_fingerprint,
+        ),
         mode_id="battle.mode.exploration",
-        content_fingerprint=content.catalog.report.content_fingerprint,
+        content_fingerprint=content_fingerprint,
         summary=build_exploration_battle_report_summary(next_state, view),
         segment=builder.segment(
             segment_id=segment_id,

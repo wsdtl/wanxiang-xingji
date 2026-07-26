@@ -18,16 +18,44 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from game.content import assemble_official_catalog
-from game.core.persistence import ContentActivationMismatch, ContentActivationStore, SqliteDatabase
-from game.cmd.数据库备份.service import backup_wanxiang_xingji_database
+from game.core.persistence import (
+    ContentActivationMismatch,
+    ContentActivationStore,
+    SnapshotRepository,
+    SqliteDatabase,
+    gameplay_snapshot_codec,
+)
+from game.cmd.数据库备份.service import (
+    DATABASE_FILENAME,
+    backup_wanxiang_xingji_database,
+)
+from game.features.catalog import feature_snapshot_codec_registrations
+from game.rules.companion import (
+    COMPANION_SANCTUARY_AGGREGATE,
+    CompanionSanctuaryState,
+)
+from game.rules.disaster import (
+    DIMENSIONAL_DISASTER_AGGREGATE,
+    DimensionalDisasterState,
+    DimensionalDisasterStatus,
+)
 from launch.config import config
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python .ops/__main__.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("content-status", help="显示数据库与当前内容的激活状态")
+    status = subparsers.add_parser("content-status", help="显示数据库与当前内容的激活状态")
+    status.add_argument(
+        "--database",
+        help="目标数据库路径；省略时使用项目 .env 的 DATABASE_PATH",
+    )
     activate = subparsers.add_parser("content-activate", help="显式激活当前内容指纹")
+    activate.add_argument(
+        "--database",
+        required=True,
+        help=f"必须显式指定的目标数据库路径，文件名必须是 {DATABASE_FILENAME}",
+    )
     activate.add_argument("--fingerprint", required=True, help="当前内容的完整 SHA-256 指纹")
     activate.add_argument(
         "--backup-directory",
@@ -59,8 +87,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if report["valid"] else 2
 
+    database_path = _resolve_database_path(args.database)
+    if args.command == "content-activate" and database_path.name != DATABASE_FILENAME:
+        parser.error(f"content-activate 的 --database 必须指向 {DATABASE_FILENAME}")
+    print(f"目标数据库：{database_path}", file=sys.stderr)
     database = SqliteDatabase(
-        config.database.path,
+        database_path,
         busy_timeout_ms=config.database.busy_timeout_ms,
     )
     database.initialize()
@@ -68,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     store = ContentActivationStore(database)
 
     if args.command == "content-status":
-        return _status(store, report)
+        return _status(database, store, report)
     return _activate(
         database,
         store,
@@ -76,6 +108,13 @@ def main(argv: list[str] | None = None) -> int:
         args.fingerprint,
         backup_directory=args.backup_directory,
     )
+
+
+def _resolve_database_path(value: str | Path | None) -> Path:
+    path = config.database.path if value is None else Path(value).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return path.resolve()
 
 
 _MODULE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -246,7 +285,13 @@ def audit_all_extensions(*, root: Path = ROOT) -> dict[str, object]:
     }
 
 
-def _status(store: ContentActivationStore, report) -> int:
+def _status(
+    database: SqliteDatabase,
+    store: ContentActivationStore,
+    report,
+    *,
+    logical_time: datetime | None = None,
+) -> int:
     try:
         activation = store.require()
     except ContentActivationMismatch:
@@ -257,7 +302,21 @@ def _status(store: ContentActivationStore, report) -> int:
         report,
         current_packages=current_packages,
     )
+    blockers: tuple[dict[str, str], ...] = ()
+    audit_error = None
+    if activation is not None and not matches:
+        try:
+            blockers = _content_transition_blockers(
+                database,
+                logical_time=(
+                    logical_time
+                    or datetime.now(ZoneInfo(config.project.timezone))
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - 状态命令必须报告预检失败原因。
+            audit_error = f"{type(exc).__name__}: {exc}"
     payload = {
+        "database_path": str(database.path),
         "database_fingerprint": activation.fingerprint if activation else None,
         "current_fingerprint": report.content_fingerprint,
         "revision": activation.revision if activation else None,
@@ -269,6 +328,8 @@ def _status(store: ContentActivationStore, report) -> int:
         "package_versions_changed": (
             activation is None or activation.packages != current_packages
         ),
+        "transition_blockers": blockers,
+        "transition_audit_error": audit_error,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -313,6 +374,22 @@ def _activate(
             file=sys.stderr,
         )
         return 2
+    try:
+        blockers = _content_transition_blockers(
+            database,
+            logical_time=activation_time,
+        )
+    except Exception as exc:  # noqa: BLE001 - 无法证明安全时必须拒绝内容切换。
+        print(
+            f"拒绝激活：内容切换预检失败：{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    if blockers:
+        print("拒绝激活：仍有依赖当前内容的活动会话", file=sys.stderr)
+        for blocker in blockers:
+            print(json.dumps(blocker, ensure_ascii=False), file=sys.stderr)
+        return 2
     backup_path = _backup_before_activation(
         database,
         backup_directory=backup_directory,
@@ -343,6 +420,58 @@ def _activation_matches(
         activation.fingerprint == report.content_fingerprint
         and activation.profile_id == report.active_combat_profile_id
         and activation.packages == current_packages
+    )
+
+
+def _content_transition_blockers(
+    database: SqliteDatabase,
+    *,
+    logical_time: datetime,
+) -> tuple[dict[str, str], ...]:
+    if logical_time.tzinfo is None or logical_time.utcoffset() is None:
+        raise ValueError("内容切换预检时间必须包含时区")
+    snapshots = SnapshotRepository(
+        gameplay_snapshot_codec(feature_snapshot_codec_registrations())
+    )
+    blockers: list[dict[str, str]] = []
+    with database.unit_of_work(write=False) as uow:
+        sanctuaries = tuple(
+            snapshots.iter_all(
+                uow,
+                COMPANION_SANCTUARY_AGGREGATE,
+                CompanionSanctuaryState,
+            )
+        )
+        disasters = tuple(
+            snapshots.iter_all(
+                uow,
+                DIMENSIONAL_DISASTER_AGGREGATE,
+                DimensionalDisasterState,
+            )
+        )
+    for sanctuary in sanctuaries:
+        if sanctuary.active and sanctuary.expires_at > logical_time:
+            blockers.append(
+                {
+                    "kind": "companion_sanctuary",
+                    "id": sanctuary.character_id,
+                    "detail": sanctuary.session_id,
+                }
+            )
+    for disaster in disasters:
+        if disaster.status is not DimensionalDisasterStatus.CLOSED:
+            blockers.append(
+                {
+                    "kind": "dimensional_disaster",
+                    "id": disaster.event_id,
+                    "detail": disaster.status.value,
+                }
+            )
+    return tuple(
+        sorted(
+            blockers,
+            key=lambda value: (value["kind"], value["id"], value["detail"]),
+        )
     )
 
 

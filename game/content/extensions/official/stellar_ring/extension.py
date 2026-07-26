@@ -1,5 +1,7 @@
 """星环界完整扩展描述。"""
 
+from game.core.gameplay import ContentVersion
+
 from .._factory import build_world_extension
 from .companions import PEOPLE, SANCTUARY, SPECIES
 from .disasters import DISASTERS
@@ -10,6 +12,7 @@ from .world import BUNDLE, SPACE
 
 
 WORLD_EXTENSION = build_world_extension(
+    version=ContentVersion(1, 1, 0),
     order=30,
     bundle=BUNDLE,
     space=SPACE,

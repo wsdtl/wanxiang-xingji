@@ -82,7 +82,7 @@ async def hunt_companion(message: str = "", overview=Depends(current_character_o
         category="世界",
         summary="永久结束当前宠物秘境",
         usage=("放弃秘境",),
-        side_effect="当前全部踪迹会直接消失，万灵引不会返还",
+        side_effect="当前全部踪迹会直接消失，开启秘境消耗的凭证不会返还",
         order=100,
     ),
 )

@@ -11,6 +11,7 @@ from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..reply import send_game_reply
+from ..presentation import activity_block_feedback, health_depleted_feedback
 from . import shared
 
 
@@ -37,18 +38,32 @@ async def set_ready(current: CurrentCharacterResult, ready: bool) -> None:
             ready,
             logical_time=shared.command_time(),
         )
-        reply = (
-            _challenge_message(
+        if result.activity_block is not None:
+            feedback = activity_block_feedback(
+                result.activity_block,
+                "准备组队挑战",
+            )
+            reply = shared.failure(feedback.text, feedback.recovery)
+        elif result.status == "health_depleted":
+            feedback = health_depleted_feedback("准备组队挑战")
+            reply = (
+                M.document()
+                .section("组队", icon="notice")
+                .line(feedback.text)
+                .actions(feedback.recoveries)
+                .build()
+            )
+        elif result.status in {"ready", "unready", "replayed"}:
+            reply = _challenge_message(
                 party_view.party,
                 result.challenge,
                 character.id,
             )
-            if result.status in {"ready", "unready", "replayed"}
-            else shared.failure(
+        else:
+            reply = shared.failure(
                 result.failure_message or "准备状态没有更新",
                 Action("party-battle.back", "返回挑战", "组队挑战", style="secondary"),
             )
-        )
         await send_game_reply(reply)
     except Exception as exc:
         await shared.failed("更新准备状态失败", character.id, exc)
@@ -73,6 +88,27 @@ async def view(current: CurrentCharacterResult) -> None:
             services.party_battles.view,
             party_view.party.id,
         )
+        if challenge.status == "content_changed":
+            action = (
+                Action(
+                    "party-battle.select",
+                    "重新选择首领",
+                    "选择组队挑战 ",
+                    behavior="fill",
+                )
+                if party_view.party.leader_id == character.id
+                else Action(
+                    "party-battle.party",
+                    "返回队伍",
+                    "队伍",
+                    behavior="callback",
+                    style="secondary",
+                )
+            )
+            await send_game_reply(
+                shared.failure(challenge.failure_message, action)
+            )
+            return
         await send_game_reply(
             _challenge_message(
                 party_view.party,
@@ -197,7 +233,62 @@ async def start(current: CurrentCharacterResult) -> None:
             )
             reply = builder.build()
         else:
-            reply = shared.failure(result.failure_message or "组队挑战没有开始")
+            if result.activity_block is not None:
+                is_current = result.activity_block.character_id == character.id
+                feedback = activity_block_feedback(
+                    result.activity_block,
+                    "开始组队挑战",
+                    subject_name=(
+                        ""
+                        if is_current
+                        else shared.character_name(result.activity_block.character_id)
+                    ),
+                    allow_recovery=is_current,
+                )
+                reply = shared.failure(feedback.text, feedback.recovery)
+            elif result.status == "health_depleted" and result.blocked_character_id:
+                is_current = result.blocked_character_id == character.id
+                feedback = health_depleted_feedback(
+                    "开始组队挑战",
+                    subject_name=(
+                        ""
+                        if is_current
+                        else shared.character_name(result.blocked_character_id)
+                    ),
+                    allow_recovery=is_current,
+                )
+                reply = (
+                    M.document()
+                    .section("组队", icon="notice")
+                    .line(feedback.text)
+                    .actions(feedback.recoveries)
+                    .build()
+                )
+            elif result.status == "loadout_changed" and result.blocked_character_id:
+                is_current = result.blocked_character_id == character.id
+                name = (
+                    "当前"
+                    if is_current
+                    else shared.character_name(result.blocked_character_id)
+                )
+                builder = (
+                    M.document()
+                    .section("组队", icon="notice")
+                    .line(f"{name}准备后的状态或配装已经变化，需要重新准备")
+                )
+                if is_current:
+                    builder.action(
+                        Action(
+                            "party-battle.ready-again",
+                            "重新准备",
+                            "准备",
+                        )
+                    )
+                reply = builder.build()
+            else:
+                reply = shared.failure(
+                    result.failure_message or "组队挑战没有开始"
+                )
         await send_game_reply(reply)
     except Exception as exc:
         await shared.failed("组队挑战执行失败", character.id, exc)

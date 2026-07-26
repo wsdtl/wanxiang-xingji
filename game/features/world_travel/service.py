@@ -1,8 +1,6 @@
 """真实世界地点移动与绑定上下文校验的唯一业务入口。"""
 
 from game.core.gameplay import (
-    ActionSlotKind,
-    ActionState,
     MovePresence,
     RuleContext,
     Ruleset,
@@ -11,18 +9,24 @@ from game.core.gameplay import (
     WorldTransaction,
 )
 from game.rules.character import CharacterWorldState, MULTIVERSE_WORLD_STATE_ID
-from game.rules.exploration import ExplorationState
-
 from .models import WorldLocationIntent, WorldTravelResult, WorldTravelStorageKinds
 
 
 class WorldTravelFeature:
     """只负责位置移动；地点具体功能继续归各自业务所有。"""
 
-    def __init__(self, database, content, snapshots, storage: WorldTravelStorageKinds) -> None:
+    def __init__(
+        self,
+        database,
+        content,
+        snapshots,
+        player_activity,
+        storage: WorldTravelStorageKinds,
+    ) -> None:
         self.database = database
         self.content = content
         self.snapshots = snapshots
+        self.player_activity = player_activity
         self.storage = storage
 
     def move(
@@ -34,26 +38,12 @@ class WorldTravelFeature:
         intent: WorldLocationIntent | None = None,
     ) -> WorldTravelResult:
         with self.database.unit_of_work() as uow:
-            action = self.snapshots.load(
-                uow,
-                self.storage.action,
-                character_id,
-                ActionState,
-            )
-            exploration = self.snapshots.load(
-                uow,
-                self.storage.exploration,
-                character_id,
-                ExplorationState,
-            )
-            if (
-                action is not None
-                and action.running(ActionSlotKind.MAIN)
-            ) or (
-                exploration is not None
-                and exploration.active
-            ):
-                return WorldTravelResult("main_action_occupied")
+            activity_block = self.player_activity.block_in_uow(uow, character_id)
+            if activity_block is not None:
+                return WorldTravelResult(
+                    activity_block.status,
+                    activity_block=activity_block,
+                )
 
             character_world = self.snapshots.require(
                 uow,

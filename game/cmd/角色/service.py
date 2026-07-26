@@ -31,6 +31,7 @@ from game.content.catalog.combat import (
     COMBAT_RATE_PENETRATION,
     COMBAT_TENACITY,
 )
+from game.content.catalog.character import REST_ACTION_ID
 from game.content.presentation import COVENANT_NAME
 from game.core.account import IdentityEvidence
 from game.core.gameplay import (
@@ -61,16 +62,19 @@ from game.app import (
     message_identity_evidence,
 )
 from game.rules.character import CharacterCreationReceipt, CharacterSettingsState
+from game.rules.player_activity import PlayerActivityKind
 from game.rules.item import asset_reference
 from launch import C, logger
 from launch.adapter import current_message_context
 from message import Action, DocumentMessage, M
+from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
 from ..reply import send_game_reply
 from ..presentation import (
     character_header_color,
     character_realm_name,
+    player_activity_status_text,
 )
 
 
@@ -620,6 +624,10 @@ def _character_overview_message(overview: CharacterOverview) -> DocumentMessage:
             (projector.name(PRIMARY_CURRENCY_ID), wallet.balance if wallet else 0),
         )
         .field("行动", _action_value(overview, view))
+        .row(
+            ("自动用药", _switch_text(overview.settings.auto_use_medicine)),
+            ("自动休整", _switch_text(overview.settings.auto_rest)),
+        )
         .actions(
             (
                 Action(
@@ -742,12 +750,15 @@ def _equipped_name(
     return M.command(display, f"查看 {reference}")
 
 
-def _ability_names(ability_ids, view) -> tuple[str, ...]:
-    return tuple(_projected_name(value, view) for value in sorted(ability_ids))
+def _ability_names(ability_ids, view) -> tuple[object, ...]:
+    return tuple(
+        _mechanic_link(value, view)
+        for value in sorted(ability_ids)
+    )
 
 
-def _mechanic_names(overview: CharacterOverview, entity, view) -> tuple[str, ...]:
-    names: list[str] = []
+def _mechanic_names(overview: CharacterOverview, entity, view) -> tuple[object, ...]:
+    names: list[object] = []
     seen: set[str] = set()
     rolled_property_ids: set[str] = set()
     for asset_id in overview.loadout.slots.values():
@@ -762,27 +773,29 @@ def _mechanic_names(overview: CharacterOverview, entity, view) -> tuple[str, ...
         if state.roll is None:
             continue
         for rolled in state.roll.properties:
-            if rolled.values:
-                continue
-            rolled_property_ids.add(str(rolled.property_id))
-            label = f"{_projected_name(rolled.property_id, view)} T{rolled.tier}"
-            if label not in seen:
-                seen.add(label)
-                names.append(label)
+            property_id = str(rolled.property_id)
+            rolled_property_ids.add(property_id)
+            name = _projected_name(property_id, view)
+            label = (
+                name
+                if property_id.startswith("property.weapon_core.")
+                else f"{name} T{rolled.tier}"
+            )
+            key = f"{property_id}:tier:{rolled.tier}"
+            if key not in seen:
+                seen.add(key)
+                names.append(M.command(label, f"特效 {name}"))
     for trigger_id in sorted(entity.triggers):
         property_id = _trigger_property_id(trigger_id)
         if property_id is None:
             continue
         if property_id in rolled_property_ids:
             continue
-        label = _projected_name(property_id, view)
-        if label not in seen:
-            seen.add(label)
-            names.append(label)
-    if entity.interceptor_bindings:
-        names.append(f"守护机制 x{len(entity.interceptor_bindings)}")
-    if entity.target_constraint_bindings:
-        names.append(f"目标约束 x{len(entity.target_constraint_bindings)}")
+        name = _projected_name(property_id, view)
+        key = f"{property_id}:runtime"
+        if key not in seen:
+            seen.add(key)
+            names.append(M.command(name, f"特效 {name}"))
     return tuple(names)
 
 
@@ -796,7 +809,7 @@ def _trigger_property_id(trigger_id: str) -> str | None:
     return None
 
 
-def _set_bonus_names(overview: CharacterOverview, view) -> tuple[str, ...]:
+def _set_bonus_names(overview: CharacterOverview, view) -> tuple[object, ...]:
     catalog = current_game_services().content.catalog.equipment
     counts: dict[str, int] = {}
     for asset_id in overview.loadout.equipment_asset_ids:
@@ -815,18 +828,28 @@ def _set_bonus_names(overview: CharacterOverview, view) -> tuple[str, ...]:
         )
         if active:
             thresholds = "/".join(str(value) for value in active)
-            names.append(f"{_projected_name(set_id, view)} x{count} | {thresholds}件生效")
+            name = _projected_name(set_id, view)
+            names.append(
+                M.command(
+                    f"{name} x{count} | {thresholds}件生效",
+                    f"特效 {name}",
+                )
+            )
     return tuple(names)
 
 
-def _append_value_group(builder, label: str, values: tuple[str, ...], size: int) -> None:
+def _append_value_group(builder, label: str, values: tuple[object, ...], size: int) -> None:
     if not values:
         builder.line(f"{label}: 无")
         return
     groups = tuple(values[index : index + size] for index in range(0, len(values), size))
-    builder.line(f"{label}: {' | '.join(groups[0])}")
-    for group in groups[1:]:
-        builder.line(" | ".join(group))
+    for group_index, group in enumerate(groups):
+        parts: list[object] = [f"{label}: "] if group_index == 0 else []
+        for index, value in enumerate(group):
+            if index:
+                parts.append(FieldSeparator())
+            parts.append(value)
+        builder.line(*parts)
 
 
 def _percent(value: float) -> str:
@@ -838,32 +861,61 @@ def _percent(value: float) -> str:
 
 
 def _projected_name(definition_id: str, view) -> str:
-    try:
-        return view.projector.name(definition_id)
-    except KeyError:
-        return definition_id
+    return view.projector.name(definition_id)
+
+
+def _mechanic_link(definition_id: str, view):
+    name = _projected_name(definition_id, view)
+    return M.command(name, f"特效 {name}")
 
 
 def _action_text(overview: CharacterOverview, view) -> str:
-    if overview.action is None:
-        return "空闲"
-    running = overview.action.running()
-    if running:
-        record = running[0]
+    activity = overview.activity
+    if activity.exploration_active:
+        exploration_text = player_activity_status_text(activity)
+        if (
+            activity.kind is PlayerActivityKind.EXPLORATION_RESTING
+            and activity.exploration is not None
+            and activity.exploration.rest_completes_at is not None
+        ):
+            remaining_seconds = max(
+                0,
+                int(
+                    (
+                        activity.exploration.rest_completes_at - command_time()
+                    ).total_seconds()
+                ),
+            )
+            remaining_minutes = ceil(remaining_seconds / 60)
+            return f"{exploration_text} | 剩余 {remaining_minutes} 分钟"
+        return exploration_text
+    if activity.kind is PlayerActivityKind.MAIN_ACTION:
+        record = activity.main_action
+        if record is None:
+            raise RuntimeError("主要行动投影缺少行动记录")
         remaining_seconds = max(0, int((record.completes_at - command_time()).total_seconds()))
         remaining_minutes = ceil(remaining_seconds / 60)
         return f"{_projected_name(record.definition_id, view)} | 剩余 {remaining_minutes} 分钟"
-    completed = overview.action.completed()
-    if completed:
-        return f"{len(completed)} 项待领取"
-    return "空闲"
+    if activity.pending_actions:
+        return f"{len(activity.pending_actions)} 项待领取"
+    return player_activity_status_text(activity)
 
 
 def _action_value(overview: CharacterOverview, view):
     text = _action_text(overview, view)
-    if overview.action is None or (not overview.action.running() and not overview.action.completed()):
-        return text
-    return M.command(text, "结束休息")
+    activity = overview.activity
+    if activity.exploration_active:
+        return M.command(text, "停止探险")
+    if (
+        activity.main_action is not None
+        and activity.main_action.definition_id == REST_ACTION_ID
+    ) or activity.pending_actions:
+        return M.command(text, "结束休息")
+    return text
+
+
+def _switch_text(enabled: bool) -> str:
+    return "开启" if enabled else "关闭"
 
 
 def _number(value: float) -> str:

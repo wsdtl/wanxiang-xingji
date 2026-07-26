@@ -110,9 +110,9 @@ def _assert_world_skin_projection(catalog) -> None:
     stellar = select_world_skin(catalog, "skin.stellar_ring")
     definition_id = equipment_definition_id("mystic_sky", "head")
     item_id = equipment_item_id("mystic_sky", "head")
-    assert cultivation.skin.version == 27
-    assert magic.skin.version == 26
-    assert stellar.skin.version == 4
+    assert cultivation.skin.version == 28
+    assert magic.skin.version == 28
+    assert stellar.skin.version == 6
     assert cultivation.projector.name(definition_id) == "昆仑冠"
     assert cultivation.projector.name(item_id) == "昆仑冠器胚"
     assert magic.projector.name(definition_id) == "奥林匹斯头冠"

@@ -14,6 +14,7 @@ from game.rules.battle_report import (
     BattleReportView,
     decode_segment,
     encode_segment,
+    report_id_matches_content_scope,
 )
 
 from .assembly import BattleReportBuilder
@@ -45,6 +46,19 @@ class PreparedBattleReport:
         if not isinstance(summary, BattleReportSummary):
             raise TypeError("summary 必须是 BattleReportSummary")
         return replace(self, draft=replace(self.draft, summary=summary))
+
+
+@dataclass(frozen=True)
+class PublicBattleReportSelection:
+    """公开读取的一份报告头和至多一个按序号选择的片段。"""
+
+    report: BattleReportView
+    segment_index: int
+    segment_count: int
+
+    def __post_init__(self) -> None:
+        if self.segment_index < 0 or self.segment_count < 0:
+            raise ValueError("公开战报片段序号或总数无效")
 
 
 class BattleReportService:
@@ -106,12 +120,18 @@ class BattleReportService:
             self._validate_identity(existing, draft)
             share_id = existing.share_id
 
-        if self.store.segment_exists_in_uow(
+        segment_exists = self.store.segment_exists_in_uow(
             uow,
             draft.report_id,
             draft.segment.segment_id,
-        ):
+        )
+        if segment_exists:
             return BattleReportReference(draft.report_id, share_id)
+        if existing is not None and not report_id_matches_content_scope(
+            draft.report_id,
+            draft.content_fingerprint,
+        ):
+            raise ValueError("可追加战报身份必须包含当前内容指纹")
 
         self.store.append_segment_in_uow(
             uow,
@@ -144,25 +164,67 @@ class BattleReportService:
         logical_time: datetime,
     ) -> BattleReportView | None:
         _aware(logical_time)
-        stored = self.store.load_public(
+        stored = self._load_public_row(
             str(share_id or "").strip(),
-            logical_time=logical_time.isoformat(),
-            detail_finished_after=(logical_time - DETAIL_RETENTION).isoformat(),
-            summary_finished_after=(logical_time - SUMMARY_RETENTION).isoformat(),
+            logical_time=logical_time,
         )
         if stored is None:
             return None
-        row = stored.header
-        segments = tuple(decode_segment(value) for value in stored.segment_payloads)
-        return BattleReportView(
-            share_id=row.share_id,
-            mode_id=row.mode_id,
-            content_fingerprint=row.content_fingerprint,
-            summary=_decode_summary(row.summary_payload),
-            started_at=datetime.fromisoformat(row.started_at),
-            finished_at=datetime.fromisoformat(row.finished_at),
-            detail_available=stored.detail_available,
-            segments=segments,
+        return _view(stored)
+
+    def load_public_selection(
+        self,
+        share_id: str,
+        *,
+        logical_time: datetime,
+        segment_index: int = 0,
+    ) -> PublicBattleReportSelection | None:
+        """只解码指定片段；首屏和切换片段都走这一读取边界。"""
+
+        _aware(logical_time)
+        if segment_index < 0:
+            raise ValueError("segment_index 不能小于 0")
+        stored = self._load_public_row(
+            str(share_id or "").strip(),
+            logical_time=logical_time,
+            segment_offset=segment_index,
+            segment_limit=1,
+        )
+        if stored is None:
+            return None
+        if stored.detail_available and segment_index >= stored.segment_count:
+            return None
+        return PublicBattleReportSelection(
+            _view(stored),
+            segment_index,
+            stored.segment_count,
+        )
+
+    def public_exists(self, share_id: str, *, logical_time: datetime) -> bool:
+        """供 HTML 分享入口做轻量存在性检查。"""
+
+        _aware(logical_time)
+        return self.store.public_exists(
+            str(share_id or "").strip(),
+            logical_time=logical_time.isoformat(),
+            summary_finished_after=(logical_time - SUMMARY_RETENTION).isoformat(),
+        )
+
+    def _load_public_row(
+        self,
+        share_id: str,
+        *,
+        logical_time: datetime,
+        segment_offset: int | None = None,
+        segment_limit: int | None = None,
+    ):
+        return self.store.load_public(
+            share_id,
+            logical_time=logical_time.isoformat(),
+            detail_finished_after=(logical_time - DETAIL_RETENTION).isoformat(),
+            summary_finished_after=(logical_time - SUMMARY_RETENTION).isoformat(),
+            segment_offset=segment_offset,
+            segment_limit=segment_limit,
         )
 
     def cleanup(self, *, logical_time: datetime) -> tuple[int, int]:
@@ -218,6 +280,20 @@ def _decode_summary(payload: str) -> BattleReportSummary:
     )
 
 
+def _view(stored) -> BattleReportView:
+    row = stored.header
+    return BattleReportView(
+        share_id=row.share_id,
+        mode_id=row.mode_id,
+        content_fingerprint=row.content_fingerprint,
+        summary=_decode_summary(row.summary_payload),
+        started_at=datetime.fromisoformat(row.started_at),
+        finished_at=datetime.fromisoformat(row.finished_at),
+        detail_available=stored.detail_available,
+        segments=tuple(decode_segment(value) for value in stored.segment_payloads),
+    )
+
+
 def _aware(value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("战报逻辑时间必须包含时区")
@@ -227,5 +303,6 @@ __all__ = [
     "BattleReportService",
     "DETAIL_RETENTION",
     "PreparedBattleReport",
+    "PublicBattleReportSelection",
     "SUMMARY_RETENTION",
 ]

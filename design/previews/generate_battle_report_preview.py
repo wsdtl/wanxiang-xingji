@@ -18,15 +18,25 @@ if str(ROOT) not in sys.path:
 from game.app import build_game_services  # noqa: E402
 from game.content.presentation import GAME_NAME  # noqa: E402
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
-from game.features.battle_report import build_public_battle_report  # noqa: E402
+from game.features.battle_report import (  # noqa: E402
+    PUBLIC_BATTLE_REPORT_SCHEMA,
+    PUBLIC_BATTLE_REPORT_VERSION,
+    PublicBattleReportProjector,
+    build_public_battle_events,
+    build_public_battle_participants,
+    build_public_battle_raw,
+    build_public_battle_report,
+    build_public_battle_transition,
+)
 
 
 OUTPUT_PATH = Path(__file__).with_name("battle-report-production.html")
+DATA_PATH = Path(__file__).with_name("battle-report-production.data.json")
 PREVIEW_TIME = datetime(2026, 7, 24, 8, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
-def build_preview_document() -> dict[str, object]:
-    """Run a real party challenge and return its public battle report DTO."""
+def _build_preview_report():
+    """Run a real party challenge and return its frozen report view."""
 
     with TemporaryDirectory() as directory:
         services = build_game_services(
@@ -102,9 +112,63 @@ def build_preview_document() -> dict[str, object]:
         )
         if report is None or not report.detail_available or not report.segments:
             raise RuntimeError("official party battle produced no battle report")
-        document = build_public_battle_report(report)
-        document["game_name"] = GAME_NAME
-        return document
+        return report
+
+
+def build_preview_document() -> dict[str, object]:
+    report = _build_preview_report()
+    document = build_public_battle_report(report)
+    document["game_name"] = GAME_NAME
+    return document
+
+
+def build_preview_artifacts() -> tuple[dict[str, object], dict[str, object]]:
+    report = _build_preview_report()
+    document = build_public_battle_report(report)
+    document["game_name"] = GAME_NAME
+    count = len(report.segments)
+    bundle = {
+        "segments": {},
+        "events": {},
+        "participants": {},
+        "transitions": {},
+        "raw": {},
+    }
+    for index, segment in enumerate(report.segments):
+        projector = PublicBattleReportProjector(segment)
+        bundle["segments"][str(index)] = {
+            "schema": PUBLIC_BATTLE_REPORT_SCHEMA,
+            "version": PUBLIC_BATTLE_REPORT_VERSION,
+            "segment": projector.compact_segment(
+                segment_index=index,
+                segment_count=count,
+            ),
+        }
+        bundle["events"][str(index)] = build_public_battle_events(
+            segment,
+            segment_index=index,
+        )
+        for snapshot in ("before", "after"):
+            bundle["participants"][f"{index}:{snapshot}"] = (
+                build_public_battle_participants(
+                    segment,
+                    segment_index=index,
+                    snapshot=snapshot,
+                )
+            )
+        for transition in segment.transitions:
+            bundle["transitions"][f"{index}:{transition.sequence}"] = (
+                build_public_battle_transition(
+                    segment,
+                    segment_index=index,
+                    sequence=transition.sequence,
+                )
+            )
+        bundle["raw"][str(index)] = build_public_battle_raw(
+            segment,
+            segment_index=index,
+        )
+    return document, bundle
 
 
 def _create_character(services, index: int, name: str):
@@ -140,36 +204,42 @@ def render_preview(document: dict[str, object]) -> str:
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="battle-report-preview-data" content="./battle-report-production.data.json">
   <meta name="color-scheme" content="light">
   <title>万象行纪 · 正式战报预览</title>
-  <link rel="stylesheet" href="../../static/battle-report/style.css?v=18">
+  <link rel="stylesheet" href="../../static/battle-report/style.css?v=19">
 </head>
 <body data-mode="compact">
-  <main class="report-shell" id="reportRoot" aria-live="polite">
-    <section class="loading-state" aria-busy="true">
+  <main class="report-shell" id="reportRoot">
+    <section class="loading-state" aria-busy="true" role="status" aria-live="polite">
       <div class="loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
       <div><h1>战报读取中</h1><p>正在还原战斗事实。</p></div>
     </section>
   </main>
   <script id="battleReportPreviewData" type="application/json">{payload}</script>
-  <script type="module" src="../../static/battle-report/app.js?v=18"></script>
+  <script type="module" src="../../static/battle-report/app.js?v=19"></script>
 </body>
 </html>
 """
 
 
 def main() -> None:
-    document = build_preview_document()
+    document, bundle = build_preview_artifacts()
     OUTPUT_PATH.write_text(render_preview(document), encoding="utf-8", newline="\n")
+    DATA_PATH.write_text(
+        json.dumps(bundle, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+        newline="\n",
+    )
     segments = document["detail"]["segments"]
     events = sum(
-        len(transition["events"])
+        segment["counts"]["events"]
         for segment in segments
-        for transition in segment["timeline"]
     )
     print(
-        f"generated {OUTPUT_PATH.name}: segments={len(segments)} events={events}",
+        f"generated {OUTPUT_PATH.name} and {DATA_PATH.name}: "
+        f"segments={len(segments)} events={events}",
         flush=True,
     )
 

@@ -29,7 +29,11 @@ from message import Action, DocumentMessage, M
 
 from ..command_helpers import command_time, current_character_value
 from ..reply import send_command_failure, send_game_reply
-from ..presentation import current_action_action
+from ..presentation import (
+    active_exploration_status_text,
+    activity_block_feedback,
+    health_depleted_feedback,
+)
 
 
 async def view_exploration(current: CurrentCharacterResult) -> None:
@@ -87,7 +91,13 @@ async def move(message: str, current: CurrentCharacterResult) -> None:
 
 
 async def start(current: CurrentCharacterResult) -> None:
-    await _operate(current, "start", _start_message, "开始探险失败")
+    await _operate(
+        current,
+        "start",
+        _start_message,
+        "开始探险失败",
+        include_settings=True,
+    )
 
 
 async def stop(current: CurrentCharacterResult) -> None:
@@ -117,7 +127,10 @@ async def summary(current: CurrentCharacterResult) -> None:
         view = services.world_view(overview_result.overview.character_world)
         report = (
             services.battle_reports.reference(
-                exploration_battle_report_id(result.state.session_id)
+                exploration_battle_report_id(
+                    result.state.session_id,
+                    services.content.catalog.report.content_fingerprint,
+                )
             )
             if result.state is not None
             else None
@@ -129,20 +142,39 @@ async def summary(current: CurrentCharacterResult) -> None:
         await _failed("探险总结查询失败", character.id, exc)
 
 
-async def _operate(current, method_name, presenter, log_message) -> None:
+async def _operate(
+    current,
+    method_name,
+    presenter,
+    log_message,
+    *,
+    include_settings: bool = False,
+) -> None:
     character = current_character_value(current)
     if character is None:
         await send_game_reply(_unavailable())
         return
     try:
-        method = getattr(current_game_services().exploration, method_name)
+        services = current_game_services()
+        settings = (
+            await asyncio.to_thread(
+                services.load_character_settings,
+                character.id,
+            )
+            if include_settings
+            else None
+        )
+        method = getattr(services.exploration, method_name)
         result = await asyncio.to_thread(
             method,
             character.id,
             logical_time=command_time(),
         )
-        view = current_game_services().world_view(current.character_world)
-        await send_game_reply(presenter(result, view))
+        view = services.world_view(current.character_world)
+        if include_settings:
+            await send_game_reply(presenter(result, view, settings))
+        else:
+            await send_game_reply(presenter(result, view))
     except Exception as exc:
         await _failed(log_message, character.id, exc)
 
@@ -183,6 +215,11 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
         ("位置", projector.name(location_id) if location_id else "未知"),
         ("状态", _status_text(result)),
     )
+    if overview is not None:
+        builder.row(
+            ("自动用药", _switch_text(overview.settings.auto_use_medicine)),
+            ("自动休整", _switch_text(overview.settings.auto_rest)),
+        )
     if result.state is not None and result.state.status is ExplorationStatus.RUNNING:
         builder.field("下次结算", _time(result.state.next_batch_at))
     elif result.state is not None and result.state.status is ExplorationStatus.RESTING:
@@ -275,6 +312,9 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
 
 def _movement_message(result: WorldTravelResult, view) -> DocumentMessage:
     builder = M.document().section(f"前往·{view.skin.name}", icon="world")
+    if result.activity_block is not None:
+        feedback = activity_block_feedback(result.activity_block, "移动")
+        return builder.line(feedback.text).action(feedback.recovery).build()
     if result.status == "moved":
         return (
             builder.field("抵达", _anchor_name(result.anchor_id, view))
@@ -288,12 +328,6 @@ def _movement_message(result: WorldTravelResult, view) -> DocumentMessage:
             .action(Action("exploration.start", "开始探险", "开始探险"))
             .build()
         )
-    if result.status == "main_action_occupied":
-        return (
-            builder.line("当前主要行动进行中，结束后才能移动")
-            .action(current_action_action())
-            .build()
-        )
     if result.status in {"stale_world", "stale_binding"}:
         return (
             builder.line("这条地点入口已经失效，请重新打开当前区域")
@@ -305,13 +339,30 @@ def _movement_message(result: WorldTravelResult, view) -> DocumentMessage:
     return builder.line("本次移动没有完成").build()
 
 
-def _start_message(result: ExplorationOperationResult, view) -> DocumentMessage:
+def _start_message(
+    result: ExplorationOperationResult,
+    view,
+    settings=None,
+) -> DocumentMessage:
     builder = M.document().section("开始探险", icon="combat")
+    if result.activity_block is not None:
+        feedback = activity_block_feedback(result.activity_block, "开始探险")
+        return builder.line(feedback.text).action(feedback.recovery).build()
     if result.status == "started" and result.state is not None:
+        builder.field("区域", _name(result.state.location_id, view)).field(
+            "首次结算",
+            _time(result.state.next_batch_at),
+        )
+        if settings is not None:
+            builder.row(
+                ("自动用药", _switch_text(settings.auto_use_medicine)),
+                ("自动休整", _switch_text(settings.auto_rest)),
+            )
         return (
-            builder.field("区域", _name(result.state.location_id, view))
-            .field("首次结算", _time(result.state.next_batch_at))
-            .line(f"之后每 10 分钟自动结算，最多 {MAX_EXPLORATION_BATCHES} 批；自动休整开启时，战败或资源过低会在完全恢复后续行。")
+            builder.line(
+                f"之后每 10 分钟自动结算，最多 {MAX_EXPLORATION_BATCHES} 批；"
+                "自动休整开启时，战败或资源过低会在完全恢复后续行。"
+            )
             .actions(
                 (
                     Action("exploration.stop", "停止", "停止探险", behavior="callback"),
@@ -327,6 +378,11 @@ def _start_message(result: ExplorationOperationResult, view) -> DocumentMessage:
             .build()
         )
     if result.status == "already_running":
+        if settings is not None:
+            builder.row(
+                ("自动用药", _switch_text(settings.auto_use_medicine)),
+                ("自动休整", _switch_text(settings.auto_rest)),
+            )
         return (
             builder.line("当前已经在探险")
             .actions(
@@ -343,22 +399,8 @@ def _start_message(result: ExplorationOperationResult, view) -> DocumentMessage:
             .build()
         )
     if result.status == "health_depleted":
-        return (
-            builder.line("血气已经归零，恢复后才能开始探险")
-            .actions(
-                (
-                    Action("exploration.inventory", "查看纳戒", "纳戒", style="secondary"),
-                    Action("exploration.rest", "休息", "休息"),
-                )
-            )
-            .build()
-        )
-    if result.status == "main_action_occupied":
-        return (
-            builder.line("当前正在进行其他主要行动")
-            .action(current_action_action())
-            .build()
-        )
+        feedback = health_depleted_feedback("开始探险")
+        return builder.line(feedback.text).actions(feedback.recoveries).build()
     if result.status == "not_in_region":
         return (
             builder.line("当前位置不是探险区域")
@@ -374,13 +416,33 @@ def _stop_message(result: ExplorationOperationResult, view) -> DocumentMessage:
         return (
             builder.field("已结算", f"{result.state.completed_batches} 批")
             .line("已经停止")
-            .action(Action("exploration.summary", "探险总结", "探险总结"))
+            .actions(
+                (
+                    Action("exploration.summary", "探险总结", "探险总结"),
+                    Action(
+                        "exploration.dimension_shift",
+                        "界门",
+                        "跃迁",
+                        style="secondary",
+                    ),
+                )
+            )
             .build()
         )
     if result.status == "already_stopped":
         return (
             builder.line("当前探险已经停止")
-            .action(Action("exploration.summary", "探险总结", "探险总结"))
+            .actions(
+                (
+                    Action("exploration.summary", "探险总结", "探险总结"),
+                    Action(
+                        "exploration.dimension_shift",
+                        "界门",
+                        "跃迁",
+                        style="secondary",
+                    ),
+                )
+            )
             .build()
         )
     if result.status == "not_started":
@@ -412,14 +474,30 @@ def _summary_message(
         .section("探险总结", icon="combat")
         .field("世界", view.skin.name)
         .row(("区域", _name(state.location_id, view)), ("状态", _status_text(result)))
-        .row(("批次", state.completed_batches), ("胜负", f"{state.victories}胜 {state.defeats}负"))
-        .row(("经验", f"+{state.character_experience}"), ("武器经验", f"+{state.weapon_experience}"))
-        .field("伙伴经验", f"+{state.companion_experience}")
-        .row(("武器", state.weapon_drops), ("装备", state.equipment_drops))
-        .row(("战利品", state.trophy_drops), ("药物掉落", state.medicine_drops))
-        .row(("休整次数", state.rest_count), ("累计休整", _duration(_rest_seconds(state))))
-        .field("抽奖签", state.draw_ticket_drops)
-        .field("战利品估价", f"{state.trophy_value} {_name(PRIMARY_CURRENCY_ID, view)}")
+    )
+    if overview is not None:
+        builder.row(
+            ("自动用药", _switch_text(overview.settings.auto_use_medicine)),
+            ("自动休整", _switch_text(overview.settings.auto_rest)),
+        )
+    builder.row(
+        ("批次", state.completed_batches),
+        ("胜负", f"{state.victories}胜 {state.defeats}负"),
+    ).row(
+        ("经验", f"+{state.character_experience}"),
+        ("武器经验", f"+{state.weapon_experience}"),
+    ).field(
+        "伙伴经验", f"+{state.companion_experience}"
+    ).row(
+        ("武器", state.weapon_drops), ("装备", state.equipment_drops)
+    ).row(
+        ("战利品", state.trophy_drops), ("药物掉落", state.medicine_drops)
+    ).row(
+        ("休整次数", state.rest_count), ("累计休整", _duration(_rest_seconds(state)))
+    ).field(
+        "抽奖签", state.draw_ticket_drops
+    ).field(
+        "战利品估价", f"{state.trophy_value} {_name(PRIMARY_CURRENCY_ID, view)}"
     )
     if state.status is ExplorationStatus.RESTING:
         builder.field("休整原因", _rest_reason_text(state.rest_reason))
@@ -492,16 +570,16 @@ def _status_text(result: ExplorationOperationResult) -> str:
     state = result.state
     if state is None:
         return "未开始"
-    if state.status is ExplorationStatus.RUNNING:
-        return "进行中"
-    if state.status is ExplorationStatus.RESTING:
-        return "休整中"
+    active_text = active_exploration_status_text(state)
+    if active_text is not None:
+        return active_text
     return {
         ExplorationStopReason.MANUAL: "已停止",
         ExplorationStopReason.DEFEATED: "战败停止",
         ExplorationStopReason.CAPACITY_FULL: "容量已满",
         ExplorationStopReason.BATCH_LIMIT: f"达到 {MAX_EXPLORATION_BATCHES} 批上限",
         ExplorationStopReason.INVALID_LOCATION: "位置失效",
+        ExplorationStopReason.RECOVERY_INVALID: "休整异常",
     }.get(state.stop_reason, "已停止")
 
 
@@ -533,6 +611,10 @@ def _duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}分钟"
     return f"{remainder}秒"
+
+
+def _switch_text(enabled: bool) -> str:
+    return "开启" if enabled else "关闭"
 
 
 def _resolve_location(value: str, view) -> tuple[str | None, WorldLocationIntent | None]:
