@@ -3,6 +3,8 @@
 from .definitions import (
     REDEMPTION_CODE_OFFERS,
     VIP666_REDEMPTION_OFFER,
+    VIP888_ITEM_IDS,
+    VIP888_REDEMPTION_OFFER,
     RedemptionCodeOfferDefinition,
 )
 
@@ -10,5 +12,7 @@ from .definitions import (
 __all__ = [
     "REDEMPTION_CODE_OFFERS",
     "VIP666_REDEMPTION_OFFER",
+    "VIP888_ITEM_IDS",
+    "VIP888_REDEMPTION_OFFER",
     "RedemptionCodeOfferDefinition",
 ]

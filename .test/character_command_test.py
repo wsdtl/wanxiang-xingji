@@ -8,6 +8,8 @@ import inspect
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 
@@ -47,7 +49,7 @@ from game.cmd.reply_intents import (  # noqa: E402
     ReplyIntentRegistry,
     reply_intents,
 )
-from game.cmd.角色.service import _number  # noqa: E402
+from game.cmd.角色.service import _append_value_group, _mechanic_names, _number  # noqa: E402
 from launch.adapter import Depends  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
@@ -76,8 +78,75 @@ async def protected_command() -> None:
 
 
 def main() -> None:
+    _assert_runtime_triggers_do_not_repeat_rolled_mechanics()
+    _assert_wrapped_mechanics_use_one_text_style()
     asyncio.run(_main())
     print("character command tests passed")
+
+
+def _assert_runtime_triggers_do_not_repeat_rolled_mechanics() -> None:
+    property_id = "property.equipment.critical_return"
+    first = SimpleNamespace(
+        roll=SimpleNamespace(
+            properties=(
+                SimpleNamespace(property_id=property_id, tier=1, values={}),
+            )
+        )
+    )
+    second = SimpleNamespace(
+        roll=SimpleNamespace(
+            properties=(
+                SimpleNamespace(property_id=property_id, tier=2, values={}),
+            )
+        )
+    )
+    overview = SimpleNamespace(
+        loadout=SimpleNamespace(
+            slots={"slot.head": "asset-1", "slot.body": "asset-2"},
+            weapon_asset_id=None,
+        ),
+        inventory=SimpleNamespace(
+            instances={"asset-1": object(), "asset-2": object()},
+        ),
+    )
+    entity = SimpleNamespace(
+        triggers={
+            "trigger.equipment.critical_return.tier_1": object(),
+            "trigger.equipment.critical_return.tier_2": object(),
+            "trigger.equipment.execution_echo.tier_1": object(),
+        },
+        interceptor_bindings=(),
+        target_constraint_bindings=(),
+    )
+    names = {
+        property_id: "暴击回流",
+        "property.equipment.execution_echo": "处决回响",
+    }
+    view = SimpleNamespace(projector=SimpleNamespace(name=names.__getitem__))
+    with patch(
+        "game.cmd.角色.service.equipment_state_from_instance",
+        side_effect=(first, second),
+    ):
+        assert _mechanic_names(overview, entity, view) == (
+            "暴击回流 T1",
+            "暴击回流 T2",
+            "处决回响",
+        )
+
+
+def _assert_wrapped_mechanics_use_one_text_style() -> None:
+    builder = M.document().section("战斗机制", icon="item")
+    _append_value_group(
+        builder,
+        "特效",
+        tuple(f"机制 {index}" for index in range(1, 10)),
+        4,
+    )
+    content = render_markdown(builder.build().document)
+    assert "> > 特效: 机制 1 | 机制 2 | 机制 3 | 机制 4" in content
+    assert "> > 机制 5 | 机制 6 | 机制 7 | 机制 8" in content
+    assert "> > 机制 9" in content
+    assert "_机制" not in content
 
 
 async def _main() -> None:

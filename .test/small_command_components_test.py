@@ -414,10 +414,13 @@ async def _main() -> None:
             )
             assert "当前配装: _1_" in switched.replies[0].message.content
 
-            equipment_ref, candidate_ref, feather_ref, slot_name = _grant_test_assets(
-                services,
-                character.id,
-            )
+            (
+                equipment_ref,
+                candidate_ref,
+                inferior_ref,
+                feather_ref,
+                slot_name,
+            ) = _grant_test_assets(services, character.id)
 
             nacre_after_grant = await dispatch(
                 client_id="small-command-player",
@@ -441,6 +444,8 @@ async def _main() -> None:
                 event_id="small-command-equip",
             )
             assert f"E{equipment_ref}" in equipped.replies[0].message.content
+            assert f"E{candidate_ref}" in equipped.replies[0].message.content
+            assert f"E{inferior_ref}" not in equipped.replies[0].message.content
 
             comparison = await dispatch(
                 client_id="small-command-player",
@@ -493,7 +498,8 @@ async def _main() -> None:
 
             overview = services.load_character_overview(character).overview
             assert overview is not None
-            assert overview.inventory.asset_id_for_reference(equipment_ref) == "equipment-command-1"
+            equipment_asset_id = overview.inventory.asset_id_for_reference(equipment_ref)
+            assert equipment_asset_id in overview.inventory.instances
             assert all(
                 value.definition_id != INSCRIPTION_FEATHER_ITEM_ID
                 for value in overview.inventory.instances.values()
@@ -568,45 +574,45 @@ async def _main() -> None:
             restore_game_services(previous)
 
 
-def _grant_test_assets(services, character_id: str) -> tuple[int, int, int, str]:
+def _grant_test_assets(services, character_id: str) -> tuple[int, int, int, int, str]:
     logical_time = datetime(2026, 7, 21, 9, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
     snapshots = services.character_creation.snapshots
     equipment_definition = next(iter(services.content.catalog.equipment.definitions))
     set_ids = tuple(services.content.catalog.equipment.sets.ids())
     set_id = set_ids[0]
     candidate_set_id = set_ids[1]
-    generated = EquipmentInstanceGenerator(
+    generator = EquipmentInstanceGenerator(
         services.content.catalog.equipment,
         services.content.catalog.itemization_engine,
         set_mark_chance=0,
-    ).generate(
-        EquipmentGenerationRequest(
-            "small-command-equipment-generation",
-            "equipment-command-1",
-            equipment_definition.id,
-            services.content.catalog.report.content_fingerprint,
-        ),
-        context=game_operation_context(
-            "small-command-equipment-generation",
-            logical_time=logical_time,
-        ),
     )
-    candidate = EquipmentInstanceGenerator(
-        services.content.catalog.equipment,
-        services.content.catalog.itemization_engine,
-        set_mark_chance=0,
-    ).generate(
-        EquipmentGenerationRequest(
-            "small-command-equipment-candidate-generation",
-            "equipment-command-2",
-            equipment_definition.id,
-            services.content.catalog.report.content_fingerprint,
-        ),
-        context=game_operation_context(
-            "small-command-equipment-candidate-generation",
-            logical_time=logical_time,
-        ),
-    )
+    generated_values = []
+    for index in range(24):
+        operation_id = f"small-command-equipment-generation-{index}"
+        generated_values.append(
+            generator.generate(
+                EquipmentGenerationRequest(
+                    operation_id,
+                    f"equipment-command-{index + 1}",
+                    equipment_definition.id,
+                    services.content.catalog.report.content_fingerprint,
+                ),
+                context=game_operation_context(
+                    operation_id,
+                    logical_time=logical_time,
+                ),
+            )
+        )
+    by_score = {
+        value.state.roll.intrinsic_value.total: value
+        for value in generated_values
+        if value.state.roll is not None
+    }
+    scores = sorted(by_score)
+    assert len(scores) >= 3
+    inferior = by_score[scores[0]]
+    generated = by_score[scores[len(scores) // 2]]
+    candidate = by_score[scores[-1]]
     generated = replace(generated, state=replace(generated.state, set_id=set_id))
     candidate = replace(candidate, state=replace(candidate.state, set_id=candidate_set_id))
     receipt = SourceReceipt(
@@ -639,18 +645,25 @@ def _grant_test_assets(services, character_id: str) -> tuple[int, int, int, str]
                 "inventory.test_setup",
                 (
                     GrantInstance(
-                        "equipment-command-1",
+                        generated.state.asset_id,
                         equipment_definition.item_definition_id,
                         armory,
                         receipt,
                         equipment_state_data(generated.state),
                     ),
                     GrantInstance(
-                        "equipment-command-2",
+                        candidate.state.asset_id,
                         equipment_definition.item_definition_id,
                         armory,
                         receipt,
                         equipment_state_data(candidate.state),
+                    ),
+                    GrantInstance(
+                        inferior.state.asset_id,
+                        equipment_definition.item_definition_id,
+                        armory,
+                        receipt,
+                        equipment_state_data(inferior.state),
                     ),
                     GrantInstance(
                         "feather-command-1",
@@ -681,8 +694,9 @@ def _grant_test_assets(services, character_id: str) -> tuple[int, int, int, str]
             logical_time,
         )
         uow.commit()
-    equipment_ref = outcome.state.reference_number("equipment-command-1")
-    candidate_ref = outcome.state.reference_number("equipment-command-2")
+    equipment_ref = outcome.state.reference_number(generated.state.asset_id)
+    candidate_ref = outcome.state.reference_number(candidate.state.asset_id)
+    inferior_ref = outcome.state.reference_number(inferior.state.asset_id)
     feather_ref = outcome.state.reference_number("feather-command-1")
     character = services.characters.load_character(character_id)
     assert character is not None
@@ -691,7 +705,7 @@ def _grant_test_assets(services, character_id: str) -> tuple[int, int, int, str]
     slot_name = services.world_view(overview.character_world).projector.name(
         equipment_definition.slot_id
     )
-    return equipment_ref, candidate_ref, feather_ref, slot_name
+    return equipment_ref, candidate_ref, inferior_ref, feather_ref, slot_name
 
 
 def _injure_character(services, character_id: str) -> None:

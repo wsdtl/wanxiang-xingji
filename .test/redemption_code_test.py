@@ -1,4 +1,4 @@
-"""VIP666 兑换码从公开命令到原子资产落库的回归测试。"""
+"""VIP666 与 VIP888 从公开命令到原子资产落库的回归测试。"""
 
 from __future__ import annotations
 
@@ -18,10 +18,12 @@ from game.app import build_game_services, install_game_services, restore_game_se
 from game.cmd import 兑换码 as redemption_component  # noqa: E402,F401
 from game.cmd import 角色 as character_component  # noqa: E402,F401
 from game.content import COMMON_QUALITY_ID  # noqa: E402
+from game.content.catalog.redemption_code import VIP888_ITEM_IDS  # noqa: E402
 from game.core.gameplay import (  # noqa: E402
     CharacterState,
     EQUIPMENT_SLOT_IDS,
     InventoryState,
+    ItemAssetKind,
     LedgerAccountKind,
     LedgerState,
     RewardClaimState,
@@ -72,6 +74,17 @@ async def _main() -> None:
         services.database.initialize()
         services.redemption_codes.initialize(logical_time=TIME)
         services.redemption_codes.initialize(logical_time=TIME)
+        expected_vip888_ids = {
+            str(definition.id)
+            for definition in services.content.catalog.items.definitions
+            if definition.asset_kind is ItemAssetKind.STACK
+            and (
+                definition.tags.has("item.medicine")
+                or definition.tags.has("item.special")
+            )
+        }
+        assert len(VIP888_ITEM_IDS) == 13
+        assert set(VIP888_ITEM_IDS) == expected_vip888_ids
         previous = install_game_services(services)
         original_now = redemption_command_service.command_time
         redemption_command_service.command_time = lambda: TIME
@@ -142,6 +155,7 @@ async def _main() -> None:
             assert getattr(claim, "revision", 0) == 1
             persisted = "\n".join(str(value) for row in rows for value in row)
             assert "VIP666" not in persisted
+            assert "VIP888" not in persisted
 
             stable_ids = set(_inventory(services, character.id).instances)
             stable_balance = _balance(services, character.id)
@@ -154,6 +168,43 @@ async def _main() -> None:
             assert "兑换码无效" in _content(invalid)
             assert set(_inventory(services, character.id).instances) == stable_ids
             assert _balance(services, character.id) == stable_balance
+
+            before_vip888 = _inventory(services, character.id)
+            before_stack_ids = set(before_vip888.stacks)
+            before_vip888_balance = _balance(services, character.id)
+            vip888 = await _dispatch("兑换码 vip-888", "redemption-vip888")
+            vip888_content = _content(vip888)
+            assert "兑换码·领取成功" in vip888_content
+            assert "纳戒物品" in vip888_content
+            assert "纳戒" in vip888_content
+            assert "开荒装备" not in vip888_content
+            overview = services.load_character_overview(character).overview
+            assert overview is not None
+            current_view = services.world_view(overview.character_world)
+            for definition_id in VIP888_ITEM_IDS:
+                assert current_view.projector.name(definition_id) in vip888_content
+
+            after_vip888 = _inventory(services, character.id)
+            new_stack_ids = set(after_vip888.stacks) - before_stack_ids
+            assert len(new_stack_ids) == 13
+            vip888_stacks = tuple(after_vip888.stacks[value] for value in new_stack_ids)
+            assert {str(value.definition_id) for value in vip888_stacks} == set(
+                VIP888_ITEM_IDS
+            )
+            assert all(value.quantity == 1 for value in vip888_stacks)
+            assert all(
+                after_vip888.containers[value.container_id].kind == "container.special"
+                for value in vip888_stacks
+            )
+            assert _balance(services, character.id) == before_vip888_balance
+
+            vip888_stable_stack_ids = set(after_vip888.stacks)
+            repeated_vip888 = await _dispatch(
+                "兑换码 VIP888",
+                "redemption-vip888-repeat",
+            )
+            assert "已经领取过" in _content(repeated_vip888)
+            assert set(_inventory(services, character.id).stacks) == vip888_stable_stack_ids
         finally:
             redemption_command_service.command_time = original_now
             restore_game_services(previous)

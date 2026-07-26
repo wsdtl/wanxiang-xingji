@@ -749,6 +749,7 @@ def _ability_names(ability_ids, view) -> tuple[str, ...]:
 def _mechanic_names(overview: CharacterOverview, entity, view) -> tuple[str, ...]:
     names: list[str] = []
     seen: set[str] = set()
+    rolled_property_ids: set[str] = set()
     for asset_id in overview.loadout.slots.values():
         instance = overview.inventory.instances.get(asset_id)
         if instance is None:
@@ -763,6 +764,7 @@ def _mechanic_names(overview: CharacterOverview, entity, view) -> tuple[str, ...
         for rolled in state.roll.properties:
             if rolled.values:
                 continue
+            rolled_property_ids.add(str(rolled.property_id))
             label = f"{_projected_name(rolled.property_id, view)} T{rolled.tier}"
             if label not in seen:
                 seen.add(label)
@@ -770,6 +772,8 @@ def _mechanic_names(overview: CharacterOverview, entity, view) -> tuple[str, ...
     for trigger_id in sorted(entity.triggers):
         property_id = _trigger_property_id(trigger_id)
         if property_id is None:
+            continue
+        if property_id in rolled_property_ids:
             continue
         label = _projected_name(property_id, view)
         if label not in seen:
@@ -817,10 +821,10 @@ def _set_bonus_names(overview: CharacterOverview, view) -> tuple[str, ...]:
 
 def _append_value_group(builder, label: str, values: tuple[str, ...], size: int) -> None:
     if not values:
-        builder.field(label, "无")
+        builder.line(f"{label}: 无")
         return
     groups = tuple(values[index : index + size] for index in range(0, len(values), size))
-    builder.field(label, " | ".join(groups[0]))
+    builder.line(f"{label}: {' | '.join(groups[0])}")
     for group in groups[1:]:
         builder.line(" | ".join(group))
 

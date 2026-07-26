@@ -12,6 +12,7 @@ from game.content.catalog.weapon.mechanics import WEAPON_MAXIMUM_LEVEL_TABLE
 from game.core.gameplay import (
     EquipmentState,
     InventoryState,
+    ItemAssetKind,
     LedgerAccountKind,
     LedgerState,
     RuleContext,
@@ -32,12 +33,13 @@ from game.core.gameplay.rewards import (
     GeneratedWeaponReward,
     RewardClaimState,
     RewardExpectations,
+    StackItemReward,
 )
 from game.rules.character import PRIMARY_ISSUER_ACCOUNT_ID, PRIMARY_LEDGER_ID
 from game.rules.equipment import EquipmentGenerationRequest, EquipmentInstanceGenerator
 from game.rules.weapon import WeaponGenerationRequest, WeaponInstanceGenerator
 
-from .models import RedemptionCodeItem, RedemptionCodeResult
+from .models import RedemptionCodeItem, RedemptionCodeResult, RedemptionCodeStackItem
 
 
 REDEMPTION_CODE_RULE_VERSION = "rules.redemption_code.v1"
@@ -91,6 +93,16 @@ class RedemptionCodeFeature:
             catalog.itemization_engine,
             WEAPON_MAXIMUM_LEVEL_TABLE,
         )
+        self._validate_stack_item_rewards()
+
+    def _validate_stack_item_rewards(self) -> None:
+        for offer in self.offers:
+            for definition_id, _ in offer.stack_item_rewards:
+                definition = self.content.catalog.items.require(definition_id)
+                if definition.asset_kind is not ItemAssetKind.STACK:
+                    raise ValueError(f"兑换码物品必须是可堆叠资产：{definition_id}")
+                if not definition.tags.has("storage.special"):
+                    raise ValueError(f"兑换码物品必须属于纳戒：{definition_id}")
 
     def initialize(self, *, logical_time: datetime) -> None:
         _require_aware(logical_time)
@@ -153,8 +165,7 @@ class RedemptionCodeFeature:
 
         inventory, ledger, claims = self._reward_state(character.id, character.account_id)
         armory_id = _container_id(inventory, "container.armory", character.id)
-        wallet = _wallet(ledger, character.id)
-        issuer = ledger.accounts[PRIMARY_ISSUER_ACCOUNT_ID]
+        special_id = _container_id(inventory, "container.special", character.id)
         generation_context = _generation_context(offer, character.account_id)
         generated = self._generate_items(
             offer,
@@ -163,18 +174,32 @@ class RedemptionCodeFeature:
             context=generation_context,
         )
         rewards: list[object] = []
+        ledger_account_revisions: dict[str, int] = {}
         if offer.currency_amount:
+            wallet = _wallet(ledger, character.id)
+            issuer = ledger.accounts[PRIMARY_ISSUER_ACCOUNT_ID]
             rewards.append(CurrencyReward(issuer.id, wallet.id, offer.currency_amount))
+            ledger_account_revisions = {
+                issuer.id: issuer.revision,
+                wallet.id: wallet.revision,
+            }
         rewards.extend(value[0] for value in generated)
+        rewards.extend(
+            StackItemReward(
+                _asset_id(offer.campaign_id, character.account_id, f"stack:{definition_id}"),
+                definition_id,
+                special_id,
+                quantity,
+                {"redemption.offer_definition_id": str(offer.id)},
+            )
+            for definition_id, quantity in offer.stack_item_rewards
+        )
         bundle = GrantRewardBundle(
             tuple(rewards),
             RewardExpectations(
                 claim_revision=claims.revision,
                 inventory_revision=inventory.revision,
-                ledger_account_revisions={
-                    issuer.id: issuer.revision,
-                    wallet.id: wallet.revision,
-                },
+                ledger_account_revisions=ledger_account_revisions,
             ),
             {
                 "redemption.offer_definition_id": str(offer.id),
@@ -213,11 +238,16 @@ class RedemptionCodeFeature:
             )
             for _, kind, state, item_definition_id, slot_id in generated
         )
+        stack_items = tuple(
+            RedemptionCodeStackItem(definition_id, quantity)
+            for definition_id, quantity in offer.stack_item_rewards
+        )
         return RedemptionCodeResult(
-            "redeemed",
-            normalized_code,
-            offer.currency_amount,
-            items,
+            status="redeemed",
+            code=normalized_code,
+            currency_amount=offer.currency_amount,
+            items=items,
+            stack_items=stack_items,
             replayed=outcome.value.replayed,
         )
 

@@ -8,6 +8,23 @@ from game.core.gameplay import EquipmentState, StableId, WeaponState, stable_id
 
 
 @dataclass(frozen=True)
+class RedemptionCodeStackItem:
+    definition_id: StableId
+    quantity: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "definition_id",
+            stable_id(self.definition_id, field="item definition id"),
+        )
+        if isinstance(self.quantity, bool) or not isinstance(self.quantity, int):
+            raise TypeError("兑换码堆叠物品数量必须是整数")
+        if self.quantity < 1:
+            raise ValueError("兑换码堆叠物品数量必须大于零")
+
+
+@dataclass(frozen=True)
 class RedemptionCodeItem:
     kind: str
     state: EquipmentState | WeaponState
@@ -34,6 +51,7 @@ class RedemptionCodeResult:
     code: str = ""
     currency_amount: int = 0
     items: tuple[RedemptionCodeItem, ...] = ()
+    stack_items: tuple[RedemptionCodeStackItem, ...] = ()
     replayed: bool = False
     failure_code: str = ""
     failure_message: str = ""
@@ -50,6 +68,7 @@ class RedemptionCodeResult:
         if self.currency_amount < 0:
             raise ValueError("兑换码结果货币数量不能小于零")
         object.__setattr__(self, "items", tuple(self.items))
+        object.__setattr__(self, "stack_items", tuple(self.stack_items))
 
 
-__all__ = ["RedemptionCodeItem", "RedemptionCodeResult"]
+__all__ = ["RedemptionCodeItem", "RedemptionCodeResult", "RedemptionCodeStackItem"]

@@ -104,7 +104,7 @@ def main() -> None:
     assert tuple(value.id for value in catalog.report.packages) == tuple(
         value.manifest.id for value in resolve_package_order(OFFICIAL_PACKAGES)
     )
-    assert str(CATALOG_PACKAGE.manifest.version) == "3.29.0"
+    assert str(CATALOG_PACKAGE.manifest.version) == "3.30.0"
     assert str(WORLD_SKIN_PACKAGE.manifest.version) == "3.21.0"
     assert str(WORLD_PACKAGE.manifest.version) == "2.0.0"
     assert len(catalog.report.content_fingerprint) == 64

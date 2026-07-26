@@ -27,6 +27,7 @@ async def redeem_code(message: str, current: CurrentCharacterResult) -> None:
             .section("兑换码", icon="notice")
             .line("请输入要领取的兑换码")
             .line(M.command("兑换码 VIP666", "兑换码 VIP666"))
+            .line(M.command("兑换码 VIP888", "兑换码 VIP888"))
             .build()
         )
         return
@@ -59,7 +60,11 @@ def _result_message(result: RedemptionCodeResult, view) -> DocumentMessage:
             M.document()
             .section("兑换码", icon="notice")
             .line(result.failure_message or "当前账号已经领取过该兑换码")
-            .line(M.command("查看武库", "武库"))
+            .line(
+                M.command("纳戒", "纳戒"),
+                FieldSeparator(),
+                M.command("武库", "武库"),
+            )
             .build()
         )
     if result.status == "invalid":
@@ -69,13 +74,20 @@ def _result_message(result: RedemptionCodeResult, view) -> DocumentMessage:
     if result.status != "redeemed":
         return _failure(result.failure_message or "兑换没有完成，请稍后重试")
 
-    currency_name = view.projector.name(PRIMARY_CURRENCY_ID)
-    builder = (
-        M.document()
-        .section("兑换码·领取成功", icon="reward")
-        .field("获得", f"{result.currency_amount} {currency_name}")
-        .section("开荒装备", icon="equipment")
-    )
+    builder = M.document().section("兑换码·领取成功", icon="reward")
+    if result.currency_amount:
+        currency_name = view.projector.name(PRIMARY_CURRENCY_ID)
+        builder.field("获得", f"{result.currency_amount} {currency_name}")
+    if result.stack_items:
+        builder.section("纳戒物品", icon="inventory")
+        for item in result.stack_items:
+            builder.line(
+                view.projector.name(item.definition_id),
+                FieldSeparator(),
+                f"×{item.quantity}",
+            )
+    if result.items:
+        builder.section("开荒装备", icon="equipment")
     for item in result.items:
         reference = _item_reference(item)
         builder.line(
@@ -85,11 +97,14 @@ def _result_message(result: RedemptionCodeResult, view) -> DocumentMessage:
             FieldSeparator(),
             view.projector.name(item.slot_id),
         )
-    builder.line(
-        M.command("装配", "装配"),
-        FieldSeparator(),
-        M.command("武库", "武库"),
-    )
+    if result.stack_items:
+        builder.line(M.command("纳戒", "纳戒"))
+    if result.items:
+        builder.line(
+            M.command("装配", "装配"),
+            FieldSeparator(),
+            M.command("武库", "武库"),
+        )
     return builder.build()
 
 

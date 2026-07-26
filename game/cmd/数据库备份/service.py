@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from game.app import current_game_services
@@ -17,15 +18,23 @@ BACKUP_FILE_GLOB = f"{DATABASE_ID}_*.db"
 BACKUP_RETENTION_COUNT = 3
 
 
+class DatabaseBackupSource(Protocol):
+    path: Path
+
+    def backup_to(self, destination: Path | str) -> Path: ...
+
+
 def backup_wanxiang_xingji_database(
     *,
     backup_directory: Path | str | None = None,
     logical_time: datetime,
+    database: DatabaseBackupSource | None = None,
 ) -> Path:
     """生成一份可独立恢复的 SQLite 备份，并只保留最新三份。"""
 
-    services = current_game_services()
-    source = Path(services.database.path)
+    services = current_game_services() if database is None else None
+    source_database = database if database is not None else services.database
+    source = Path(source_database.path)
     if source.name != DATABASE_FILENAME:
         raise ValueError(
             f"备份组件只允许处理 {DATABASE_FILENAME}，当前路径是：{source}"
@@ -43,7 +52,7 @@ def backup_wanxiang_xingji_database(
     temporary_path = destination / f".{filename}.{uuid4().hex}.tmp"
 
     try:
-        services.backup_database(temporary_path)
+        source_database.backup_to(temporary_path)
         temporary_path.replace(backup_path)
         _prune_old_backups(destination)
     finally:

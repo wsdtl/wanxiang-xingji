@@ -38,6 +38,7 @@ class RedemptionCodeOfferDefinition:
     starts_at: datetime
     ends_at: datetime | None
     currency_amount: int
+    stack_item_rewards: tuple[tuple[StableId, int], ...]
     equipment_quality_id: StableId
     equipment_slot_ids: tuple[StableId, ...]
     weapon_count: int
@@ -67,9 +68,21 @@ class RedemptionCodeOfferDefinition:
             raise ValueError("兑换码活动结束时间必须晚于开始时间")
         if self.currency_amount < 0 or self.weapon_count < 0:
             raise ValueError("兑换码货币和武器数量不能小于零")
+        stack_item_rewards: list[tuple[StableId, int]] = []
+        for definition_id, quantity in self.stack_item_rewards:
+            if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
+                raise ValueError("兑换码堆叠物品数量必须是正整数")
+            stack_item_rewards.append(
+                (stable_id(definition_id, field="stack item definition id"), quantity)
+            )
+        if len({definition_id for definition_id, _ in stack_item_rewards}) != len(
+            stack_item_rewards
+        ):
+            raise ValueError("兑换码堆叠物品不能重复")
+        object.__setattr__(self, "stack_item_rewards", tuple(stack_item_rewards))
         slots = tuple(stable_id(value, field="equipment slot id") for value in self.equipment_slot_ids)
-        if not slots or len(slots) != len(set(slots)):
-            raise ValueError("兑换码装备槽必须非空且不能重复")
+        if len(slots) != len(set(slots)):
+            raise ValueError("兑换码装备槽不能重复")
         if not set(slots).issubset(EQUIPMENT_SLOT_IDS):
             raise ValueError("兑换码装备槽不能包含武器或未知槽位")
         object.__setattr__(self, "equipment_slot_ids", slots)
@@ -85,8 +98,30 @@ class RedemptionCodeOfferDefinition:
         )
         if self.generation_attempt_limit < 1:
             raise ValueError("兑换码装备生成尝试次数必须大于零")
-        if self.currency_amount == 0 and not slots and self.weapon_count == 0:
+        if (
+            self.currency_amount == 0
+            and not stack_item_rewards
+            and not slots
+            and self.weapon_count == 0
+        ):
             raise ValueError("兑换码奖励不能为空")
+
+
+VIP888_ITEM_IDS = (
+    "item.consumable.small_health_medicine",
+    "item.consumable.medium_health_medicine",
+    "item.consumable.large_health_medicine",
+    "item.consumable.small_spirit_medicine",
+    "item.consumable.medium_spirit_medicine",
+    "item.consumable.large_spirit_medicine",
+    "item.special.weapon_maximum_level",
+    "item.special.character_experience",
+    "item.special.weapon_experience",
+    "item.special.companion_experience",
+    "item.special.backpack_capacity",
+    "item.special.dimension_shift",
+    "item.special.companion_sanctuary",
+)
 
 
 VIP666_REDEMPTION_OFFER = RedemptionCodeOfferDefinition(
@@ -103,6 +138,7 @@ VIP666_REDEMPTION_OFFER = RedemptionCodeOfferDefinition(
     starts_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
     ends_at=None,
     currency_amount=5_000,
+    stack_item_rewards=(),
     equipment_quality_id=COMMON_QUALITY_ID,
     equipment_slot_ids=(
         HEAD_SLOT_ID,
@@ -118,11 +154,36 @@ VIP666_REDEMPTION_OFFER = RedemptionCodeOfferDefinition(
 )
 
 
-REDEMPTION_CODE_OFFERS = (VIP666_REDEMPTION_OFFER,)
+VIP888_REDEMPTION_OFFER = RedemptionCodeOfferDefinition(
+    id="redemption_offer.vip888.v1",
+    code="VIP888",
+    campaign_id="campaign.vip888.nacre.v1",
+    credential_id="credential.vip888.nacre.v1",
+    source_kind="source.grant_code",
+    offer_id="offer.vip888.nacre",
+    offer_version=1,
+    policy=GrantRedemptionPolicy.PER_ACCOUNT,
+    per_account_limit=1,
+    total_limit=None,
+    starts_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    ends_at=None,
+    currency_amount=0,
+    stack_item_rewards=tuple((definition_id, 1) for definition_id in VIP888_ITEM_IDS),
+    equipment_quality_id=COMMON_QUALITY_ID,
+    equipment_slot_ids=(),
+    weapon_count=0,
+    weapon_quality_id=COMMON_QUALITY_ID,
+    generation_attempt_limit=64,
+)
+
+
+REDEMPTION_CODE_OFFERS = (VIP666_REDEMPTION_OFFER, VIP888_REDEMPTION_OFFER)
 
 
 __all__ = [
     "REDEMPTION_CODE_OFFERS",
     "VIP666_REDEMPTION_OFFER",
+    "VIP888_ITEM_IDS",
+    "VIP888_REDEMPTION_OFFER",
     "RedemptionCodeOfferDefinition",
 ]

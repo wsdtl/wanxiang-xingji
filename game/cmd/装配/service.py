@@ -258,6 +258,7 @@ def _preset_message(loadout: LoadoutState, view) -> DocumentMessage:
 
 
 def _candidates(loadout: LoadoutState, inventory: InventoryState) -> list[ItemInstance]:
+    catalog = current_game_services().content.catalog.items
     active = loadout.active_preset_id
     bound_elsewhere = {
         asset_id
@@ -267,16 +268,51 @@ def _candidates(loadout: LoadoutState, inventory: InventoryState) -> list[ItemIn
     }
     values = []
     for instance in inventory.instances.values():
-        definition = current_game_services().content.catalog.items.require(
-            instance.definition_id
-        )
+        definition = catalog.require(instance.definition_id)
+        component = definition.components.get(LOADOUT_ITEM_COMPONENT_ID)
         if (
-            LOADOUT_ITEM_COMPONENT_ID in definition.components
-            and instance.id not in bound_elsewhere
-            and inventory.containers[instance.container_id].kind == "container.armory"
+            not isinstance(component, LoadoutItemComponent)
+            or len(component.allowed_slot_ids) != 1
+            or instance.id in bound_elsewhere
+            or inventory.containers[instance.container_id].kind != "container.armory"
         ):
-            values.append(instance)
-    return sorted(values, key=lambda value: inventory.reference_number(value.id))
+            continue
+        slot_id = next(iter(component.allowed_slot_ids))
+        current_id = loadout.slots.get(slot_id)
+        current = inventory.instances.get(current_id) if current_id is not None else None
+        if current_id is not None and current is not None:
+            candidate_score = _gear_score(instance, definition)
+            current_definition = catalog.require(current.definition_id)
+            current_score = _gear_score(current, current_definition)
+            if candidate_score is None or (
+                current_score is not None and candidate_score <= current_score
+            ):
+                continue
+        values.append(instance)
+    return sorted(
+        values,
+        key=lambda value: _candidate_sort_key(value, inventory, catalog),
+    )
+
+
+def _gear_score(instance: ItemInstance, definition) -> float | None:
+    if definition.tags.has("item.weapon"):
+        roll = weapon_state_from_instance(instance).roll
+    elif definition.tags.has("item.equipment"):
+        roll = equipment_state_from_instance(instance).roll
+    else:
+        return None
+    return None if roll is None else roll.intrinsic_value.total
+
+
+def _candidate_sort_key(instance: ItemInstance, inventory: InventoryState, catalog):
+    definition = catalog.require(instance.definition_id)
+    score = _gear_score(instance, definition)
+    return (
+        score is None,
+        -(score if score is not None else 0.0),
+        inventory.reference_number(instance.id),
+    )
 
 
 def _instance(inventory: InventoryState, token: str) -> ItemInstance:

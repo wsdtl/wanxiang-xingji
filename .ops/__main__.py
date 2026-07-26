@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from game.content import assemble_official_catalog
 from game.core.persistence import ContentActivationMismatch, ContentActivationStore, SqliteDatabase
+from game.cmd.数据库备份.service import backup_wanxiang_xingji_database
 from launch.config import config
 
 
@@ -28,6 +29,10 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("content-status", help="显示数据库与当前内容的激活状态")
     activate = subparsers.add_parser("content-activate", help="显式激活当前内容指纹")
     activate.add_argument("--fingerprint", required=True, help="当前内容的完整 SHA-256 指纹")
+    activate.add_argument(
+        "--backup-directory",
+        help="激活前备份目录；默认使用主数据库同级 backups 目录",
+    )
     scaffold = subparsers.add_parser(
         "scaffold-extension",
         help="创建不会被正式发现器加载的扩展草稿",
@@ -64,7 +69,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "content-status":
         return _status(store, report)
-    return _activate(store, report, args.fingerprint)
+    return _activate(
+        database,
+        store,
+        report,
+        args.fingerprint,
+        backup_directory=args.backup_directory,
+    )
 
 
 _MODULE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -240,39 +251,112 @@ def _status(store: ContentActivationStore, report) -> int:
         activation = store.require()
     except ContentActivationMismatch:
         activation = None
+    current_packages = _package_pairs(report)
+    matches = activation is not None and _activation_matches(
+        activation,
+        report,
+        current_packages=current_packages,
+    )
     payload = {
         "database_fingerprint": activation.fingerprint if activation else None,
         "current_fingerprint": report.content_fingerprint,
         "revision": activation.revision if activation else None,
-        "matches": activation is not None and activation.fingerprint == report.content_fingerprint,
-        "packages": activation.packages if activation else (),
+        "matches": matches,
+        "database_profile": activation.profile_id if activation else None,
+        "current_profile": report.active_combat_profile_id,
+        "database_packages": activation.packages if activation else (),
+        "current_packages": current_packages,
+        "package_versions_changed": (
+            activation is None or activation.packages != current_packages
+        ),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
-def _activate(store: ContentActivationStore, report, fingerprint: str) -> int:
+def _activate(
+    database: SqliteDatabase,
+    store: ContentActivationStore,
+    report,
+    fingerprint: str,
+    *,
+    backup_directory: Path | str | None = None,
+    logical_time: datetime | None = None,
+) -> int:
     if fingerprint.strip() != report.content_fingerprint:
         print("拒绝激活：传入指纹不是当前运行内容指纹", file=sys.stderr)
         return 2
-    logical_time = datetime.now(ZoneInfo(config.project.timezone))
+    activation_time = logical_time or datetime.now(ZoneInfo(config.project.timezone))
     try:
         activation = store.require()
     except ContentActivationMismatch:
-        activation = store.verify_or_initialize(report, logical_time=logical_time)
+        backup_path = _backup_before_activation(
+            database,
+            backup_directory=backup_directory,
+            logical_time=activation_time,
+        )
+        activation = store.verify_or_initialize(report, logical_time=activation_time)
+        print(f"激活前备份：{backup_path}")
         print(f"已初始化内容激活：revision={activation.revision}")
         return 0
-    if activation.fingerprint == report.content_fingerprint:
+    current_packages = _package_pairs(report)
+    if _activation_matches(
+        activation,
+        report,
+        current_packages=current_packages,
+    ):
         print(f"内容已经激活：revision={activation.revision}")
         return 0
+    if activation.packages == current_packages:
+        print(
+            "拒绝激活：内容或战斗配置已经变化，但内容包版本没有提升",
+            file=sys.stderr,
+        )
+        return 2
+    backup_path = _backup_before_activation(
+        database,
+        backup_directory=backup_directory,
+        logical_time=activation_time,
+    )
     updated = store.replace(
         report,
         expected_revision=activation.revision,
         expected_fingerprint=activation.fingerprint,
-        logical_time=logical_time,
+        logical_time=activation_time,
     )
+    print(f"激活前备份：{backup_path}")
     print(f"已激活内容：revision={updated.revision}")
     return 0
+
+
+def _package_pairs(report) -> tuple[tuple[str, str], ...]:
+    return tuple((package.id, str(package.version)) for package in report.packages)
+
+
+def _activation_matches(
+    activation,
+    report,
+    *,
+    current_packages: tuple[tuple[str, str], ...],
+) -> bool:
+    return (
+        activation.fingerprint == report.content_fingerprint
+        and activation.profile_id == report.active_combat_profile_id
+        and activation.packages == current_packages
+    )
+
+
+def _backup_before_activation(
+    database: SqliteDatabase,
+    *,
+    backup_directory: Path | str | None,
+    logical_time: datetime,
+) -> Path:
+    return backup_wanxiang_xingji_database(
+        backup_directory=backup_directory,
+        logical_time=logical_time,
+        database=database,
+    )
 
 
 if __name__ == "__main__":
