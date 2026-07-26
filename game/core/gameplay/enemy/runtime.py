@@ -145,7 +145,7 @@ class EnemyCombatProjector:
         return ActiveEffect(
             instance_id=f"enemy:{enemy_id}:contribution:{index}",
             definition_id=source_id,
-            source_id=source_id,
+            source_id=enemy_id,
             modifiers=modifiers,
             granted_tags=spec.tags,
             granted_abilities=spec.abilities,

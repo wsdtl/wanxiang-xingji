@@ -17,7 +17,6 @@ from game.app import build_game_services  # noqa: E402
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.core.gameplay import PartyState  # noqa: E402
 from game.core.persistence import PARTY_AGGREGATE  # noqa: E402
-from game.features.party.service import PARTY_SCOPE_ID  # noqa: E402
 from game.features.party_battle import PARTY_BATTLE_CHALLENGE_AGGREGATE  # noqa: E402
 from game.features.party_battle.models import PartyBattleChallengeState  # noqa: E402
 
@@ -112,7 +111,7 @@ def main() -> None:
             prepared_party_state = services.party_battles.snapshots.require(
                 uow,
                 PARTY_AGGREGATE,
-                PARTY_SCOPE_ID,
+                party.id,
                 PartyState,
             )
         assert all(
@@ -210,7 +209,7 @@ def main() -> None:
             party_state = services.party_battles.snapshots.require(
                 uow,
                 PARTY_AGGREGATE,
-                PARTY_SCOPE_ID,
+                party.id,
                 PartyState,
             )
         assert challenge.attempt_count == 1

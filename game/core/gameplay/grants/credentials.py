@@ -11,16 +11,16 @@ import unicodedata
 from .models import GrantProof
 
 
-_CODE_PATTERN = re.compile(r"^[A-Z0-9]{8,64}$")
+_CODE_PATTERN = re.compile(r"^[A-Z0-9]{6,64}$")
 
 
 def normalize_grant_code(value: object) -> str:
-    """统一人工输入差异，但不接受低熵短码。"""
+    """统一人工输入差异；公开活动码允许从六位开始。"""
 
     text = unicodedata.normalize("NFKC", str(value or "")).upper()
     text = "".join(character for character in text if not character.isspace() and character != "-")
     if not _CODE_PATTERN.fullmatch(text):
-        raise ValueError("兑换码必须是 8 到 64 位英文大写字母或数字")
+        raise ValueError("兑换码必须是 6 到 64 位英文大写字母或数字")
     return text
 
 

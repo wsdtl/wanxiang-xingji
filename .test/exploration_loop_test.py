@@ -40,6 +40,7 @@ from game.content.catalog.enemy import (  # noqa: E402
     AWARD_WORLD_CURIO_ID,
     ENEMY_LOOT_TABLES,
 )
+from game.content.catalog.character import REST_FULL_RECOVERY_SECONDS  # noqa: E402
 from game.content.catalog.exploration import (  # noqa: E402
     EXPLORATION_BATCH_SECONDS,
     EXPLORATION_REGION_CATALOG,
@@ -55,7 +56,11 @@ from game.content.catalog.world import (  # noqa: E402
 )
 from game.content.catalog.item import TROPHY_ITEMS  # noqa: E402
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
-from game.core.gameplay import SeededRandomSource  # noqa: E402
+from game.core.gameplay import (  # noqa: E402
+    HEALTH_CURRENT,
+    SPIRIT_CURRENT,
+    SeededRandomSource,
+)
 from game.rules.character import (  # noqa: E402
     CHARACTER_SETTINGS_AGGREGATE,
     CharacterSettingsState,
@@ -67,10 +72,12 @@ from game.rules.exploration import (  # noqa: E402
     ExplorationBatchPlanner,
     ExplorationBatchResult,
     ExplorationEncounterKind,
+    ExplorationRestReason,
     ExplorationState,
     ExplorationStatus,
     ExplorationStopReason,
     record_batch,
+    resume_exploration,
     start_exploration,
 )
 
@@ -82,7 +89,9 @@ def main() -> None:
     _assert_content()
     _assert_generation()
     _assert_batch_limit()
+    _assert_rest_state_machine()
     _assert_persisted_loop()
+    _assert_auto_rest_loop()
     print("exploration loop tests passed")
 
 
@@ -116,6 +125,47 @@ def _assert_batch_limit() -> None:
     assert next_state.completed_batches == MAX_EXPLORATION_BATCHES
     assert next_state.status is ExplorationStatus.STOPPED
     assert next_state.stop_reason is ExplorationStopReason.BATCH_LIMIT
+
+
+def _assert_rest_state_machine() -> None:
+    state = start_exploration(
+        "rest-state-character",
+        "rest-state-session",
+        "exploration.region.r1",
+        "location.test",
+        logical_time=TIME,
+    )
+    resolved_at = TIME + timedelta(seconds=EXPLORATION_BATCH_SECONDS)
+    plan = ExplorationBatchPlan(
+        state.session_id,
+        1,
+        state.region_id,
+        state.location_id,
+        ExplorationEncounterKind.NORMAL,
+        1,
+        "rest-state-seed",
+        encounter=object(),
+    )
+    resting = record_batch(
+        state,
+        ExplorationBatchResult(plan, resolved_at, health_after=0, spirit_after=0),
+        rest_reason=ExplorationRestReason.DEFEATED,
+        rest_completes_at=resolved_at + timedelta(seconds=REST_FULL_RECOVERY_SECONDS),
+    )
+    assert resting.completed_batches == 1
+    assert resting.defeats == 1
+    assert resting.status is ExplorationStatus.RESTING
+    assert resting.session_id == state.session_id
+    resumed = resume_exploration(
+        resting,
+        logical_time=resting.rest_completes_at,
+    )
+    assert resumed.status is ExplorationStatus.RUNNING
+    assert resumed.session_id == state.session_id
+    assert resumed.completed_batches == 1
+    assert resumed.rest_count == 1
+    assert resumed.rest_seconds == REST_FULL_RECOVERY_SECONDS
+    assert resumed.next_batch_at == TIME + timedelta(minutes=30)
 
 
 def _assert_content() -> None:
@@ -408,6 +458,254 @@ def _assert_persisted_loop() -> None:
             logical_time=TIME + timedelta(minutes=12),
         )
         assert returned.status in {"moved", "already_there"}
+
+
+def _assert_auto_rest_loop() -> None:
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "exploration-auto-rest.db"
+        services = build_game_services(
+            database_path=path,
+            identity_secret="exploration-auto-rest-secret",
+        )
+        services.database.initialize()
+        evidence = IdentityEvidence(
+            "exploration-auto-rest-evidence",
+            ExternalIdentity(
+                "platform.local",
+                "exploration-auto-rest",
+                "identity.user",
+                "private",
+                "player-auto-rest",
+            ),
+            (),
+            "message.local",
+            TIME,
+        )
+        created = services.create_character(evidence, requested_name="守夜客")
+        assert created.status == "created" and created.receipt is not None
+        character_id = created.receipt.character.id
+        world_id = created.receipt.character_world.world_id
+        region = services.content.exploration_regions.definitions()[0]
+        moved = services.world_travel.move(
+            character_id,
+            services.content.worlds.require_binding_for_display(
+                world_id,
+                region.location_id,
+            ).anchor_id,
+            logical_time=TIME,
+        )
+        assert moved.status == "moved"
+        started = services.exploration.start(character_id, logical_time=TIME)
+        assert started.state is not None
+        session_id = started.state.session_id
+
+        original_simulate = services.exploration.settlement._simulate_batch
+        medicine_called = False
+
+        def low_resources(*args, **kwargs):
+            simulation = original_simulate(*args, **kwargs)
+            return replace(simulation, health_after=0, spirit_after=0)
+
+        def no_medicine_available(uow, character, *args, **kwargs):
+            nonlocal medicine_called
+            medicine_called = True
+            return character, ()
+
+        with patch.object(
+            services.exploration.settlement,
+            "_simulate_batch",
+            side_effect=low_resources,
+        ), patch.object(
+            services.exploration.settlement.medicine,
+            "apply",
+            side_effect=no_medicine_available,
+        ):
+            settled = services.exploration.settle_due(
+                character_id,
+                logical_time=TIME + timedelta(minutes=10),
+            )
+        assert medicine_called
+        assert len(settled.batches) == 1
+        assert settled.state is not None
+        assert settled.state.status is ExplorationStatus.RESTING
+        assert settled.state.session_id == session_id
+        assert settled.state.completed_batches == 1
+        assert settled.state.rest_count == 1
+        assert settled.state.rest_completes_at == TIME + timedelta(minutes=20)
+        assert settled.state.next_batch_at == TIME + timedelta(minutes=30)
+        action_state = services.actions.load(character_id)
+        assert action_state is not None and len(action_state.running()) == 1
+        action = action_state.running()[0]
+        assert action.snapshot.values["exploration_session_id"] == session_id
+        assert action.started_at == TIME + timedelta(minutes=10)
+        assert action.completes_at == TIME + timedelta(minutes=20)
+
+        restarted = build_game_services(
+            database_path=path,
+            identity_secret="exploration-auto-rest-secret",
+        )
+        restarted.database.initialize()
+        waiting = restarted.exploration.load(
+            character_id,
+            logical_time=TIME + timedelta(minutes=19),
+        )
+        assert waiting.state is not None
+        assert waiting.state.status is ExplorationStatus.RESTING
+        completed = restarted.exploration.load(
+            character_id,
+            logical_time=TIME + timedelta(minutes=20),
+        )
+        assert completed.batches == ()
+        assert completed.state is not None
+        assert completed.state.status is ExplorationStatus.RUNNING
+        assert completed.state.session_id == session_id
+        assert completed.state.completed_batches == 1
+        assert completed.state.rest_count == 1
+        assert completed.state.rest_seconds == REST_FULL_RECOVERY_SECONDS
+        assert completed.state.next_batch_at == TIME + timedelta(minutes=30)
+        recovery = restarted.rest.view(
+            character_id,
+            logical_time=TIME + timedelta(minutes=20),
+        )
+        assert recovery.status == "idle" and recovery.character is not None
+        assert recovery.character.resources[HEALTH_CURRENT] == recovery.health_maximum
+        assert recovery.character.resources[SPIRIT_CURRENT] == recovery.spirit_maximum
+
+        original_simulate = restarted.exploration.settlement._simulate_batch
+
+        def low_resources_again(*args, **kwargs):
+            simulation = original_simulate(*args, **kwargs)
+            return replace(simulation, health_after=0, spirit_after=0)
+
+        with patch.object(
+            restarted.exploration.settlement,
+            "_simulate_batch",
+            side_effect=low_resources_again,
+        ), patch.object(
+            restarted.exploration.settlement.medicine,
+            "apply",
+            side_effect=lambda uow, character, *args, **kwargs: (character, ()),
+        ):
+            second_rest = restarted.exploration.settle_due(
+                character_id,
+                logical_time=TIME + timedelta(minutes=30),
+            )
+        assert second_rest.state is not None
+        assert second_rest.state.status is ExplorationStatus.RESTING
+        assert second_rest.state.session_id == session_id
+        assert second_rest.state.completed_batches == 2
+        assert second_rest.state.rest_count == 2
+
+        stopped = restarted.exploration.stop(
+            character_id,
+            logical_time=TIME + timedelta(minutes=35),
+        )
+        assert stopped.status == "stopped" and stopped.state is not None
+        assert stopped.state.status is ExplorationStatus.STOPPED
+        assert stopped.state.session_id == session_id
+        assert stopped.state.completed_batches == 2
+        assert stopped.state.rest_count == 2
+        assert stopped.state.rest_seconds == REST_FULL_RECOVERY_SECONDS + 5 * 60
+        action_state = restarted.actions.load(character_id)
+        assert action_state is not None and action_state.running() == ()
+        returned = restarted.world_travel.move(
+            character_id,
+            restarted.content.worlds.require_binding_for_display(
+                world_id,
+                STARTING_CITY_ID,
+            ).anchor_id,
+            logical_time=TIME + timedelta(minutes=36),
+        )
+        assert returned.status == "moved"
+
+        returned_to_region = restarted.world_travel.move(
+            character_id,
+            restarted.content.worlds.require_binding_for_display(
+                world_id,
+                region.location_id,
+            ).anchor_id,
+            logical_time=TIME + timedelta(minutes=37),
+        )
+        assert returned_to_region.status == "moved"
+        restarted.set_auto_rest(
+            character_id,
+            False,
+            logical_time=TIME + timedelta(minutes=37),
+        )
+        direct_stop = restarted.exploration.start(
+            character_id,
+            logical_time=TIME + timedelta(minutes=37),
+        )
+        assert direct_stop.status == "started"
+        original_simulate = restarted.exploration.settlement._simulate_batch
+
+        def force_defeat(*args, **kwargs):
+            simulation = original_simulate(*args, **kwargs)
+            if simulation.plan.encounter is None:
+                return simulation
+            return replace(
+                simulation,
+                victory=False,
+                draw=False,
+                health_after=0,
+                spirit_after=0,
+            )
+
+        defeated = None
+        with patch.object(
+            restarted.exploration.settlement,
+            "_simulate_batch",
+            side_effect=force_defeat,
+        ):
+            for index in range(1, 21):
+                defeated_at = TIME + timedelta(minutes=37 + index * 10)
+                defeated = restarted.exploration.settle_due(
+                    character_id,
+                    logical_time=defeated_at,
+                )
+                if defeated.state is not None and defeated.state.status is ExplorationStatus.STOPPED:
+                    break
+        assert defeated is not None and defeated.state is not None
+        assert defeated.state.status is ExplorationStatus.STOPPED
+        assert defeated.state.stop_reason is ExplorationStopReason.DEFEATED
+        assert defeated.state.defeats == 1
+
+        manual_rest = restarted.rest.start(
+            "exploration-test-recover-after-direct-stop",
+            character_id,
+            logical_time=defeated_at + timedelta(minutes=1),
+        )
+        assert manual_rest.status == "started"
+        recovered = restarted.rest.stop(
+            "exploration-test-recovered-after-direct-stop",
+            character_id,
+            logical_time=defeated_at + timedelta(minutes=11),
+        )
+        assert recovered.status == "completed"
+        restarted.set_auto_rest(
+            character_id,
+            True,
+            logical_time=defeated_at + timedelta(minutes=11),
+        )
+        invalid_session = restarted.exploration.start(
+            character_id,
+            logical_time=defeated_at + timedelta(minutes=12),
+        )
+        assert invalid_session.status == "started"
+        with patch.object(
+            restarted.exploration.settlement,
+            "_location_valid",
+            return_value=False,
+        ):
+            invalid = restarted.exploration.settle_due(
+                character_id,
+                logical_time=defeated_at + timedelta(minutes=22),
+            )
+        assert invalid.batches == ()
+        assert invalid.state is not None
+        assert invalid.state.status is ExplorationStatus.STOPPED
+        assert invalid.state.stop_reason is ExplorationStopReason.INVALID_LOCATION
+        assert invalid.state.completed_batches == 0
 
 
 def _persistent_state(services):

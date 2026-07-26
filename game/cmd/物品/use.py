@@ -572,7 +572,7 @@ def _opened_sanctuary_message(sanctuary, dimension) -> DocumentMessage:
                 f"companion.trace.{trace.index}",
                 f"追踪 {trace.index}",
                 f"秘境追踪 {trace.index}",
-                behavior="send",
+                behavior="callback",
             )
         )
     return (
@@ -684,7 +684,7 @@ ITEM_USE_ROUTES = (
         action_id="dimension.shift",
         action_label="跃迁",
         action_command="跃迁",
-        action_behavior="send",
+        action_behavior="callback",
     ),
 )
 

@@ -109,8 +109,8 @@ def _assert_atomic_persisted_settlement(directory: Path) -> None:
     database.initialize()
     service = PersistedRewardSettlementService(database, engine)
     service.initialize_snapshot(keys, initial, logical_time=TIME)
-    assert PERSISTENCE_FOUNDATION_VERSION == "persistence.foundation.v9"
-    assert PERSISTENCE_SCHEMA_VERSION == 6
+    assert PERSISTENCE_FOUNDATION_VERSION == "persistence.foundation.v10"
+    assert PERSISTENCE_SCHEMA_VERSION == 8
     assert service.load_snapshot(keys, claim_scope_id="account-a") == initial
 
     settlement = _complete_settlement(initial)
@@ -179,6 +179,90 @@ def _assert_atomic_persisted_settlement(directory: Path) -> None:
         raise AssertionError("同一 Outbox 事件不能重复标记发布")
     except ConcurrencyConflict:
         pass
+
+    _assert_append_only_history_is_externalized(service, keys, persisted)
+
+
+def _assert_append_only_history_is_externalized(service, keys, current) -> None:
+    with service.database.unit_of_work(write=False) as uow:
+        before_ledger_size = uow.connection.execute(
+            """
+            SELECT length(payload) FROM aggregate_snapshot
+            WHERE aggregate_kind = 'snapshot.ledger' AND aggregate_id = ?
+            """,
+            (keys.ledger_id,),
+        ).fetchone()[0]
+        before_claim_size = uow.connection.execute(
+            """
+            SELECT length(payload) FROM aggregate_snapshot
+            WHERE aggregate_kind = 'snapshot.reward_claim' AND aggregate_id = ?
+            """,
+            (current.claims.scope_id,),
+        ).fetchone()[0]
+
+    replay_candidate = None
+    for index in range(60):
+        settlement = RewardSettlement(
+            f"reward-growth-{index:03d}",
+            current.claims.scope_id,
+            current.claims.scope_id,
+            "source.persistence_growth_test",
+            f"growth-{index:03d}",
+            (CurrencyReward("issuer-stone", "wallet-a", 1),),
+            RewardExpectations(
+                current.claims.revision,
+                ledger_account_revisions={
+                    "issuer-stone": current.ledger.accounts["issuer-stone"].revision,
+                    "wallet-a": current.ledger.accounts["wallet-a"].revision,
+                },
+            ),
+        )
+        outcome = service.settle(
+            settlement,
+            keys,
+            context=_context(seed=2_000 + index),
+        ).unwrap()
+        current = outcome.snapshot
+        if index == 10:
+            replay_candidate = settlement
+
+    assert replay_candidate is not None
+    with service.database.unit_of_work(write=False) as uow:
+        after_ledger_size = uow.connection.execute(
+            """
+            SELECT length(payload) FROM aggregate_snapshot
+            WHERE aggregate_kind = 'snapshot.ledger' AND aggregate_id = ?
+            """,
+            (keys.ledger_id,),
+        ).fetchone()[0]
+        after_claim_size = uow.connection.execute(
+            """
+            SELECT length(payload) FROM aggregate_snapshot
+            WHERE aggregate_kind = 'snapshot.reward_claim' AND aggregate_id = ?
+            """,
+            (current.claims.scope_id,),
+        ).fetchone()[0]
+        ledger_transactions = uow.connection.execute(
+            "SELECT COUNT(*) FROM ledger_transaction WHERE ledger_id = ?",
+            (keys.ledger_id,),
+        ).fetchone()[0]
+        reward_claims = uow.connection.execute(
+            "SELECT COUNT(*) FROM reward_claim WHERE scope_id = ?",
+            (current.claims.scope_id,),
+        ).fetchone()[0]
+    assert after_ledger_size <= before_ledger_size + 256
+    assert after_claim_size <= before_claim_size + 64
+    assert ledger_transactions == 61
+    assert reward_claims == 61
+
+    replayed = service.settle(
+        replay_candidate,
+        keys,
+        context=_context(seed=3_000),
+    ).unwrap()
+    assert replayed.replayed
+    assert replayed.receipt.settlement_id == replay_candidate.id
+    assert replayed.snapshot == current
 
 
 def _assert_late_rule_failure_does_not_persist(service, keys, before) -> None:

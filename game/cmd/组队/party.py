@@ -299,7 +299,7 @@ def _view_message(
     actions = []
     if party is None:
         builder.line("当前没有加入队伍")
-        actions.append(Action("party.create", "创建队伍", "创建队伍", behavior="send"))
+        actions.append(Action("party.create", "创建队伍", "创建队伍", behavior="callback"))
     else:
         leader = shared.character_name(party.leader_id)
         capacity = current_game_services().content.catalog.parties.require(
@@ -317,7 +317,7 @@ def _view_message(
                 FieldSeparator(),
                 ready,
             )
-        actions.append(Action("party.challenge", "组队挑战", "组队挑战", behavior="send"))
+        actions.append(Action("party.challenge", "组队挑战", "组队挑战", behavior="callback"))
         if party.leader_id == character_id:
             actions.extend(
                 (
@@ -339,43 +339,32 @@ def _view_message(
                         "party.disband",
                         "解散",
                         "解散队伍",
-                        behavior="send",
+                        behavior="callback",
                         style="secondary",
                     ),
                 )
             )
-        actions.append(
-            Action(
-                "party.leave",
-                "退出",
-                "退出队伍",
-                behavior="send",
-                style="secondary",
+        if party.leader_id != character_id:
+            actions.append(
+                Action(
+                    "party.leave",
+                    "退出",
+                    "退出队伍",
+                    behavior="callback",
+                    style="secondary",
+                )
             )
-        )
     if requests:
         builder.section("队伍邀请", icon="message")
         for request in requests:
-            builder.item(
-                request.id,
+            builder.line(
                 shared.character_name(request.sender_id),
                 " 邀请你加入队伍",
+                FieldSeparator(),
+                M.command("接受", f"接受组队 {request.id}"),
+                FieldSeparator(),
+                M.command("拒绝", f"拒绝组队 {request.id}"),
             )
-            actions.extend((
-                Action(
-                    f"party.accept.{request.id}",
-                    "接受",
-                    f"接受组队 {request.id}",
-                    behavior="send",
-                ),
-                Action(
-                    f"party.reject.{request.id}",
-                    "拒绝",
-                    f"拒绝组队 {request.id}",
-                    behavior="send",
-                    style="secondary",
-                ),
-            ))
     return builder.actions(actions).build()
 
 

@@ -68,6 +68,25 @@ def list_database_backups(directory: Path | str) -> tuple[Path, ...]:
     )
 
 
+def latest_database_backup_time(
+    directory: Path | str,
+    *,
+    timezone,
+) -> datetime | None:
+    backups = list_database_backups(directory)
+    if not backups:
+        return None
+    stem = backups[0].stem
+    prefix = f"{DATABASE_ID}_"
+    if not stem.startswith(prefix):
+        return None
+    try:
+        value = datetime.strptime(stem.removeprefix(prefix), "%Y-%m-%d_%H-%M-%S")
+    except ValueError:
+        return None
+    return value.replace(tzinfo=timezone)
+
+
 def _prune_old_backups(directory: Path) -> None:
     for stale_path in list_database_backups(directory)[BACKUP_RETENTION_COUNT:]:
         stale_path.unlink()
@@ -77,5 +96,6 @@ __all__ = [
     "BACKUP_RETENTION_COUNT",
     "DATABASE_ID",
     "backup_wanxiang_xingji_database",
+    "latest_database_backup_time",
     "list_database_backups",
 ]

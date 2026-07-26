@@ -13,7 +13,6 @@ from game.core.gameplay import (
     CharacterState,
     InscriptionPreference,
     CreateSocialRequest,
-    HEALTH_CURRENT,
     InventoryState,
     LoadoutState,
     PartyState,
@@ -61,8 +60,6 @@ class PartySparringFeature:
         battle_reports,
         simulator: PartySparringBattleSimulator,
         storage: PartySparringStorageKinds,
-        *,
-        party_scope_id: str,
     ) -> None:
         self.database = database
         self.content = content
@@ -72,7 +69,6 @@ class PartySparringFeature:
         self.battle_reports = battle_reports
         self.simulator = simulator
         self.storage = storage
-        self.party_scope_id = party_scope_id
 
     def create_request(
         self,
@@ -84,14 +80,8 @@ class PartySparringFeature:
     ) -> PartySparringRequestResult:
         _aware(logical_time)
         with self.database.unit_of_work() as uow:
-            party_state = self.snapshots.require(
-                uow,
-                self.storage.party,
-                self.party_scope_id,
-                PartyState,
-            )
-            challenger_party = _party_for_member(party_state, challenger_id)
-            defender_party = _party_for_member(party_state, target_id)
+            challenger_party = self._party_for_member(uow, challenger_id)
+            defender_party = self._party_for_member(uow, target_id)
             failure = self._request_failure(
                 challenger_party,
                 defender_party,
@@ -279,16 +269,6 @@ class PartySparringFeature:
                 uow,
                 defender_party,
             )
-            if not _has_living_member(challenger_bundles) or not _has_living_member(
-                defender_bundles
-            ):
-                return PartySparringResult(
-                    "unavailable",
-                    request,
-                    challenger_party=challenger_party,
-                    defender_party=defender_party,
-                    failure_message="双方队伍都至少需要一名血气大于 0 的成员",
-                )
             outcome = self.simulator.simulate(
                 challenger_members,
                 challenger_bundles,
@@ -482,19 +462,31 @@ class PartySparringFeature:
             metadata = PartySparringRequestMetadata.from_request(request)
         except ValueError as exc:
             return str(exc)
-        state = self.snapshots.require(
-            uow,
-            self.storage.party,
-            self.party_scope_id,
-            PartyState,
-        )
-        challenger = _active_party(state, metadata.challenger.party_id)
-        defender = _active_party(state, metadata.defender.party_id)
+        challenger = self._active_party(uow, metadata.challenger.party_id)
+        defender = self._active_party(uow, metadata.defender.party_id)
         if challenger is None or defender is None:
             return "队伍已经解散，组队切磋请求失效"
         if not metadata.challenger.matches(challenger) or not metadata.defender.matches(defender):
             return "队伍成员、站位或队长已经变化，组队切磋请求失效"
         return challenger, defender
+
+    def _party_for_member(self, uow, character_id: str):
+        membership = uow.load_party_membership(character_id)
+        if membership is None:
+            return None
+        party = self._active_party(uow, membership.party_scope_id)
+        if party is None or party.id != membership.party_id or character_id not in party.members:
+            raise RuntimeError("队伍成员索引与队伍快照不一致")
+        return party
+
+    def _active_party(self, uow, party_id: str):
+        state = self.snapshots.load(
+            uow,
+            self.storage.party,
+            party_id,
+            PartyState,
+        )
+        return _active_party(state, party_id) if state is not None else None
 
     def _basic_request_failure(self, request, actor_id, logical_time):
         if request is None or request.kind_id != PARTY_SPARRING_REQUEST_ID:
@@ -582,13 +574,6 @@ def _party_for_member(state: PartyState, character_id: str):
 def _active_party(state: PartyState, party_id: str):
     party = state.parties.get(party_id)
     return party if party is not None and party.status is PartyStatus.ACTIVE else None
-
-
-def _has_living_member(bundles) -> bool:
-    return any(
-        float(character.resources.get(HEALTH_CURRENT, 0)) > 0
-        for character, _inventory, _loadout, _roster in bundles
-    )
 
 
 def _request_id(operation_id: str, challenger_party_id: str, defender_party_id: str) -> str:

@@ -61,13 +61,16 @@ class PersistedAccountService:
         transaction_id = f"account:evidence:{protected.id}"
         with self.database.unit_of_work() as uow:
             previous = uow.connection.execute(
-                "SELECT fingerprint, receipt_payload FROM account_evidence WHERE evidence_id = ?",
+                "SELECT fingerprint, transaction_id FROM account_evidence WHERE evidence_id = ?",
                 (protected.id,),
             ).fetchone()
             if previous is not None:
                 if str(previous["fingerprint"]) != fingerprint:
                     raise TransactionMismatch("同一账号身份凭据对应不同身份集合")
-                receipt = self.codec.loads(str(previous["receipt_payload"]), AccountResolution)
+                committed = uow.load_transaction(str(previous["transaction_id"]))
+                if committed is None or committed.fingerprint != fingerprint:
+                    raise CorruptPersistenceData("账号身份凭据缺少匹配的提交事务")
+                receipt = self.codec.loads(committed.receipt_payload, AccountResolution)
                 return replace(receipt, replayed=True)
 
             state = self._state_for_identities(uow, protected.identities)
@@ -88,8 +91,8 @@ class PersistedAccountService:
                 """
                 INSERT INTO account_evidence(
                     evidence_id, fingerprint, account_id, conflict_id,
-                    transaction_id, receipt_payload, processed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    transaction_id, processed_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     protected.id,
@@ -97,7 +100,6 @@ class PersistedAccountService:
                     resolution.account.id if resolution.account else None,
                     resolution.conflict.id if resolution.conflict else None,
                     transaction_id,
-                    receipt_payload,
                     timestamp,
                 ),
             )

@@ -34,7 +34,7 @@ def resolve_target(external_id: str):
 
 def character_name(character_id: str) -> str:
     value = current_game_services().characters.load_character(character_id)
-    return value.name if value is not None else character_id
+    return value.name if value is not None else "无名行者"
 
 
 def world_name(world_id: str) -> str:

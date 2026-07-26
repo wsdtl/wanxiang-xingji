@@ -61,6 +61,7 @@ PROFILE_COMMAND = "我的角色"
 COMBAT_PANEL_COMMAND = "战斗面板"
 MOOD_COMMAND = "心情"
 AUTO_MEDICINE_COMMAND = "自动用药"
+AUTO_REST_COMMAND = "自动休整"
 PROTECTED_COMMAND = "角色守卫测试"
 NOTIFICATION_COMMAND = "notifications"
 PENDING_COMMAND = "pending_actions"
@@ -104,6 +105,8 @@ async def _main() -> None:
     assert len(QqEventHandler.exact_rules[MOOD_COMMAND]) == 1
     assert len(LocalEventHandler.exact_rules[AUTO_MEDICINE_COMMAND]) == 1
     assert len(QqEventHandler.exact_rules[AUTO_MEDICINE_COMMAND]) == 1
+    assert len(LocalEventHandler.exact_rules[AUTO_REST_COMMAND]) == 1
+    assert len(QqEventHandler.exact_rules[AUTO_REST_COMMAND]) == 1
     assert len(LocalEventHandler.exact_rules[PROTECTED_COMMAND]) == 1
     assert len(QqEventHandler.exact_rules[PROTECTED_COMMAND]) == 1
     assert len(LocalEventHandler.exact_rules[NOTIFICATION_COMMAND]) == 1
@@ -211,6 +214,17 @@ async def _main() -> None:
             assert {action.label for action in auto_medicine.replies[0].message.actions} == {"开启"}
             settings = services.load_character_settings(character_id)
             assert not settings.auto_use_medicine and settings.revision == 2
+
+            auto_rest = await dispatch(
+                client_id="local-user-a",
+                raw_message=f"{AUTO_REST_COMMAND} 关闭",
+                sender_name="平台昵称甲",
+                event_id="local-auto-rest-disable",
+            )
+            assert "当前状态: _关闭_" in _content(auto_rest)
+            assert {action.label for action in auto_rest.replies[0].message.actions} == {"开启"}
+            settings = services.load_character_settings(character_id)
+            assert not settings.auto_rest and settings.revision == 3
 
             existing_with_mood = await dispatch(
                 client_id="local-user-a",
@@ -483,7 +497,7 @@ async def _main() -> None:
                 "**未入道 云舟客 Lv1**"
             )
             settings = services.load_character_settings(character_id)
-            assert not settings.mood_header_enabled and settings.revision == 3
+            assert not settings.mood_header_enabled and settings.revision == 4
 
             replayed = await dispatch(
                 client_id="local-user-a",

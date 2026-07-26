@@ -19,14 +19,17 @@ from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.core.gameplay import (  # noqa: E402
     CharacterState,
     GrantStack,
+    HEALTH_CURRENT,
+    HEALTH_MAXIMUM,
     InventoryState,
     InventoryTransaction,
     LoadoutState,
-    PartyState,
     RuleContext,
     Ruleset,
     SeededRandomSource,
     SourceReceipt,
+    SPIRIT_CURRENT,
+    SPIRIT_MAXIMUM,
     TagSet,
 )
 from game.rules.character import CharacterWorldState  # noqa: E402
@@ -132,6 +135,8 @@ def main() -> None:
                 companion_id = _bind_companion(services, challenger_members[0], now)
                 _activate_empty_preset(services, challenger_members[-1].id, now)
                 _move_to_other_world(services, defender_members[-1].id, now)
+            for character in all_characters:
+                _set_resources(services, character, health=0, spirit=0, now=now)
             before = _lossless_snapshots(services, all_characters)
             party_before = _party_state_payload(services)
             accepted = services.party_sparring.accept_request(
@@ -163,6 +168,16 @@ def main() -> None:
             )
             assert segment.events
             assert segment.transitions
+            assert segment.initial_participants
+            for participant in segment.initial_participants:
+                assert (
+                    participant.resources[HEALTH_CURRENT]
+                    == participant.attributes[HEALTH_MAXIMUM]
+                )
+                assert (
+                    participant.resources[SPIRIT_CURRENT]
+                    == participant.attributes[SPIRIT_MAXIMUM]
+                )
             assert all(value.after.participants for value in segment.transitions)
             character_projections = {
                 value.label: value.projection_id
@@ -456,6 +471,41 @@ def _move_to_other_world(services, character_id: str, now: datetime) -> None:
         uow.commit()
 
 
+def _set_resources(
+    services,
+    character,
+    *,
+    health: float,
+    spirit: float,
+    now: datetime,
+) -> None:
+    storage = services.party_sparring.storage
+    with services.database.unit_of_work() as uow:
+        current = services.party_sparring.snapshots.require(
+            uow,
+            storage.character,
+            character.id,
+            CharacterState,
+        )
+        resources = dict(current.resources)
+        resources[HEALTH_CURRENT] = health
+        resources[SPIRIT_CURRENT] = spirit
+        updated = replace(
+            current,
+            resources=resources,
+            revision=current.revision + 1,
+        )
+        services.party_sparring.snapshots.update(
+            uow,
+            storage.character,
+            character.id,
+            current,
+            updated,
+            now,
+        )
+        uow.commit()
+
+
 def _lossless_snapshots(services, characters):
     storage = services.party_sparring.storage
     kinds = (
@@ -483,13 +533,16 @@ def _lossless_snapshots(services, characters):
 def _party_state_payload(services):
     storage = services.party_sparring.storage
     with services.database.unit_of_work(write=False) as uow:
-        state = services.party_sparring.snapshots.require(
-            uow,
-            storage.party,
-            services.party_sparring.party_scope_id,
-            PartyState,
-        )
-    return services.party_sparring.snapshots.codec.dumps(state)
+        rows = uow.connection.execute(
+            """
+            SELECT aggregate_id, revision, payload, expires_at
+            FROM aggregate_snapshot
+            WHERE aggregate_kind = ?
+            ORDER BY aggregate_id
+            """,
+            (storage.party,),
+        ).fetchall()
+    return tuple(tuple(row) for row in rows)
 
 
 if __name__ == "__main__":

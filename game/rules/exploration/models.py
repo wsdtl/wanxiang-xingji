@@ -12,12 +12,13 @@ from game.content.catalog.character import CHARACTER_MAXIMUM_LEVEL
 from game.core.gameplay import EnemyEncounterInstance, StableId, stable_id
 
 
-EXPLORATION_RULESET_VERSION = "rules.exploration.v3"
+EXPLORATION_RULESET_VERSION = "rules.exploration.v4"
 EXPLORATION_AGGREGATE = "snapshot.exploration"
 
 
 class ExplorationStatus(str, Enum):
     RUNNING = "running"
+    RESTING = "resting"
     STOPPED = "stopped"
 
 
@@ -27,6 +28,11 @@ class ExplorationStopReason(str, Enum):
     CAPACITY_FULL = "capacity_full"
     BATCH_LIMIT = "batch_limit"
     INVALID_LOCATION = "invalid_location"
+
+
+class ExplorationRestReason(str, Enum):
+    DEFEATED = "defeated"
+    LOW_RESOURCES = "low_resources"
 
 
 class ExplorationEncounterKind(str, Enum):
@@ -169,6 +175,11 @@ class ExplorationState:
     medicine_drops: int = 0
     draw_ticket_drops: int = 0
     trophy_value: int = 0
+    rest_count: int = 0
+    rest_seconds: float = 0.0
+    rest_reason: ExplorationRestReason | None = None
+    rest_started_at: datetime | None = None
+    rest_completes_at: datetime | None = None
     stopped_at: datetime | None = None
     stop_reason: ExplorationStopReason | None = None
     last_result: ExplorationBatchResult | None = None
@@ -180,7 +191,17 @@ class ExplorationState:
         object.__setattr__(self, "region_id", stable_id(self.region_id, field="region id"))
         object.__setattr__(self, "location_id", stable_id(self.location_id, field="location id"))
         object.__setattr__(self, "status", ExplorationStatus(self.status))
-        for field_name in ("started_at", "next_batch_at", "stopped_at"):
+        if self.rest_reason is not None:
+            object.__setattr__(self, "rest_reason", ExplorationRestReason(self.rest_reason))
+        if self.stop_reason is not None:
+            object.__setattr__(self, "stop_reason", ExplorationStopReason(self.stop_reason))
+        for field_name in (
+            "started_at",
+            "next_batch_at",
+            "rest_started_at",
+            "rest_completes_at",
+            "stopped_at",
+        ):
             value = getattr(self, field_name)
             if value is not None and (value.tzinfo is None or value.utcoffset() is None):
                 raise ValueError(f"ExplorationState.{field_name} 必须包含时区")
@@ -198,17 +219,38 @@ class ExplorationState:
             self.medicine_drops,
             self.draw_ticket_drops,
             self.trophy_value,
+            self.rest_count,
+            self.rest_seconds,
             self.revision,
         )
         if any(value < 0 for value in counters):
             raise ValueError("探险状态计数不能小于 0")
+        rest_fields = (
+            self.rest_reason,
+            self.rest_started_at,
+            self.rest_completes_at,
+        )
         if self.status is ExplorationStatus.RUNNING:
+            if any(value is not None for value in (*rest_fields, self.stopped_at, self.stop_reason)):
+                raise ValueError("运行中的探险不能已有休整或停止信息")
+        elif self.status is ExplorationStatus.RESTING:
+            if any(value is None for value in rest_fields):
+                raise ValueError("休整中的探险必须记录原因和时间")
             if self.stopped_at is not None or self.stop_reason is not None:
-                raise ValueError("运行中的探险不能已有停止信息")
-        elif self.stopped_at is None or self.stop_reason is None:
-            raise ValueError("已停止探险必须记录时间和原因")
-        if self.stop_reason is not None:
-            object.__setattr__(self, "stop_reason", ExplorationStopReason(self.stop_reason))
+                raise ValueError("休整中的探险不能已有停止信息")
+            assert self.rest_started_at is not None
+            assert self.rest_completes_at is not None
+            if self.rest_completes_at <= self.rest_started_at:
+                raise ValueError("探险休整完成时间必须晚于开始时间")
+        else:
+            if self.stopped_at is None or self.stop_reason is None:
+                raise ValueError("已停止探险必须记录时间和原因")
+            if any(value is not None for value in rest_fields):
+                raise ValueError("已停止探险不能保留当前休整信息")
+
+    @property
+    def active(self) -> bool:
+        return self.status is not ExplorationStatus.STOPPED
 
 
 __all__ = [
@@ -219,6 +261,7 @@ __all__ = [
     "ExplorationEncounterKind",
     "ExplorationRewardKind",
     "ExplorationRewardReference",
+    "ExplorationRestReason",
     "ExplorationState",
     "ExplorationStatus",
     "ExplorationStopReason",

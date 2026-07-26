@@ -81,11 +81,14 @@ QQ 驱动器会把这些字段一次性转换为公共 `MessageIdentity`：群�
 | 公共行为 | QQ action.type | 结果 |
 | --- | --- | --- |
 | `link` | `0` | 打开链接 |
-| `callback` | `1` | 产生 `INTERACTION_CREATE` |
-| `send` | `2` | 自动发送命令 |
+| `callback` | `1` | 产生 `INTERACTION_CREATE`，立即派发 `button_data` 中的命令 |
+| `send` | `2` | `enter=true`；私聊自动发送，群聊只填入输入框 |
 | `fill` | `2` | 填入输入框但不自动发送 |
 
 每个按钮必须携带稳定且唯一的 `id`。真实 QQ 回调的命令位于 `d.data.resolved.button_data`，按钮 ID 位于 `d.data.resolved.button_id`。
+
+正式业务中，完整命令的有边框按钮统一使用 `callback`，需要玩家继续输入参数时
+使用 `fill`。不能用 `send` 表达跨私聊、群聊一致的“点击立即执行”。
 
 回调事件会进入独立 ACK 队列，并调用 `/interactions/{interaction_id}` 完成确认。
 

@@ -42,7 +42,7 @@ from game.rules.battle_report import (
 from game.rules.character import CharacterWorldState, PRIMARY_LEDGER_ID
 from game.rules.companion import CompanionRosterState
 from game.rules.encounter import EnemyEncounterGenerator
-from game.rules.exploration import ExplorationState, ExplorationStatus
+from game.rules.exploration import ExplorationState
 
 from .battle import PartyBattleSimulator
 from .models import (
@@ -118,7 +118,6 @@ class PartyBattleFeature:
         reward_keys_factory,
         companion_growth,
         *,
-        party_scope_id: str,
         timezone: str,
     ) -> None:
         self.database = database
@@ -130,7 +129,6 @@ class PartyBattleFeature:
         self.storage = storage
         self.reward_keys_factory = reward_keys_factory
         self.companion_growth = companion_growth
-        self.party_scope_id = party_scope_id
         self.timezone = ZoneInfo(timezone)
         self.encounters = EnemyEncounterGenerator(
             content.catalog.enemies,
@@ -777,7 +775,7 @@ class PartyBattleFeature:
             return "队员"
         if (
             inputs.exploration is not None
-            and inputs.exploration.status is ExplorationStatus.RUNNING
+            and inputs.exploration.active
         ):
             return "队员"
         return ""
@@ -786,7 +784,7 @@ class PartyBattleFeature:
         state = self.snapshots.require(
             uow,
             self.storage.party,
-            self.party_scope_id,
+            party_id,
             PartyState,
         )
         party = state.parties.get(party_id)
@@ -796,7 +794,7 @@ class PartyBattleFeature:
         state = self.snapshots.require(
             uow,
             self.storage.party,
-            self.party_scope_id,
+            party.id,
             PartyState,
         )
         current = state.parties.get(party.id)
@@ -811,7 +809,7 @@ class PartyBattleFeature:
         self.snapshots.update(
             uow,
             self.storage.party,
-            self.party_scope_id,
+            party.id,
             state,
             PartyState(state.scope_id, parties, state.revision + 1),
             logical_time,
@@ -830,7 +828,7 @@ class PartyBattleFeature:
         state = self.snapshots.require(
             uow,
             self.storage.party,
-            self.party_scope_id,
+            party.id,
             PartyState,
         )
         current = state.parties.get(party.id)
@@ -848,7 +846,7 @@ class PartyBattleFeature:
         self.snapshots.update(
             uow,
             self.storage.party,
-            self.party_scope_id,
+            party.id,
             state,
             PartyState(state.scope_id, parties, state.revision + 1),
             logical_time,

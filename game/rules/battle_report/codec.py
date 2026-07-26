@@ -182,7 +182,10 @@ def _participant_payload(
             {
                 "key": effect_aliases[value.instance_id],
                 "definition": value.definition_id,
-                "source": public_aliases.get(value.source_id, "system"),
+                "source": public_aliases.get(
+                    value.source_id,
+                    aliases[participant.entity_id],
+                ),
                 "stacks": value.stacks,
                 "remaining": value.remaining_turns,
                 "polarity": value.polarity,

@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import sys
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 
@@ -20,7 +21,11 @@ from game.app import (  # noqa: E402
     install_game_services,
     restore_game_services,
 )
-from game.cmd.数据库备份.jobs import BACKUP_INTERVAL_HOURS  # noqa: E402
+from game.cmd.数据库备份.jobs import (  # noqa: E402
+    BACKUP_INTERVAL_HOURS,
+    backup_database_job,
+    schedule_backup_from_last_success,
+)
 from game.cmd.数据库备份.service import (  # noqa: E402
     BACKUP_RETENTION_COUNT,
     backup_wanxiang_xingji_database,
@@ -119,6 +124,12 @@ def _assert_online_backup_and_retention() -> None:
                 raise AssertionError("备份插件不得处理 message_console.db")
             except ValueError as exc:
                 assert "只允许处理 wanxiang_xingji.db" in str(exc)
+                with patch(
+                    "game.cmd.数据库备份.jobs.backup_wanxiang_xingji_database"
+                ) as scheduled_backup:
+                    backup_database_job()
+                    schedule_backup_from_last_success()
+                scheduled_backup.assert_not_called()
             finally:
                 services.database.path = original_database_path
         finally:

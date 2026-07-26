@@ -34,11 +34,11 @@ def test_message_snapshot_keeps_all_interactions() -> None:
         .line(M.command("只预输入", "帮助 角色", submit=False))
         .actions(
             (
-                Action("test.send", "直接发送", "我的角色"),
+                Action("test.callback", "立即执行", "我的角色"),
                 Action(
                     "test.fill",
-                    "无边框预输入",
-                    "地图",
+                    "有边框预输入",
+                    "地图 ",
                     behavior="fill",
                     style="secondary",
                 ),
@@ -50,7 +50,7 @@ def test_message_snapshot_keeps_all_interactions() -> None:
     snapshot = snapshot_from_message(message)
     assert snapshot.message_type == "markdown"
     assert "webcmd://command-link-4" in snapshot.content
-    assert [item.behavior for item in snapshot.interactions] == ["send", "fill", "link", "fill"]
+    assert [item.behavior for item in snapshot.interactions] == ["callback", "fill", "link", "fill"]
     assert snapshot.interactions[1].style == "secondary"
     assert snapshot.interactions[-1].kind == "command_link"
     assert snapshot.interactions[-1].submit is False

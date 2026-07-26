@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import hmac
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -19,6 +20,7 @@ from game.content import (
     assemble_official_catalog,
     build_dimensional_disaster_catalog,
 )
+from game.content.catalog.redemption_code import REDEMPTION_CODE_OFFERS
 from game.core.account import AccountEngine, ExternalIdentity, IdentityEvidence
 from game.core.gameplay import (
     AttributeResolver,
@@ -64,6 +66,7 @@ from game.core.persistence import (
     PersistedInventoryProtectionService,
     PersistedWeaponItemUseService,
     PersistedLoadoutService,
+    PersistedGrantService,
     PersistedRewardSettlementService,
     PersistenceRetentionService,
     PersistedSocialService,
@@ -74,6 +77,7 @@ from game.core.persistence import (
     RewardSettlementStorageKeys,
     SnapshotRepository,
     SqliteDatabase,
+    SOCIAL_AGGREGATE,
     WORLD_AGGREGATE,
     WEAPON_AGGREGATE,
     gameplay_snapshot_codec,
@@ -120,7 +124,12 @@ from game.features.dimensional_disaster import (
     DimensionalDisasterFeature,
     DimensionalDisasterStorageKinds,
 )
-from game.features.data_lifecycle import DataLifecycleFeature, DataLifecycleTask
+from game.features.data_lifecycle import (
+    DataLifecycleFeature,
+    DataLifecycleTask,
+    SnapshotLifecycleService,
+    SnapshotLifecycleStorageKinds,
+)
 from game.features.breakthrough import (
     BreakthroughFeature,
     BreakthroughStorageKinds,
@@ -138,6 +147,10 @@ from game.features.lottery import (
     LOTTERY_AGGREGATE,
     LotteryFeature,
     LotteryStorageKinds,
+)
+from game.features.redemption_code import (
+    RedemptionCodeFeature,
+    RedemptionCodeStorageKinds,
 )
 from game.features.battle_report import BattleReportBuilder, BattleReportService
 from game.features.build_trial import BuildTrialFeature, BuildTrialStorageKinds
@@ -187,7 +200,6 @@ from game.features.party_sparring import (
     PartySparringFeature,
     PartySparringStorageKinds,
 )
-from game.features.party.service import PARTY_SCOPE_ID
 from game.rules.exploration import EXPLORATION_AGGREGATE
 from game.rules.world_progress import WORLD_PROGRESS_AGGREGATE
 from game.rules.economy import MARKET_AGGREGATE
@@ -242,6 +254,7 @@ class GameServices:
     economy: EconomyFeature
     lottery: LotteryFeature
     draw: DrawFeature
+    redemption_codes: RedemptionCodeFeature
     world_views: WorldViewCatalog
     content: OfficialContent
 
@@ -390,6 +403,22 @@ class GameServices:
         return self.player.set_setting(
             character_id,
             "auto_use_medicine",
+            enabled,
+            logical_time=logical_time,
+        )
+
+    def set_auto_rest(
+        self,
+        character_id: str,
+        enabled: bool,
+        *,
+        logical_time: datetime,
+    ) -> CharacterSettingsState:
+        """原子更新探险自动休整开关。"""
+
+        return self.player.set_setting(
+            character_id,
+            "auto_rest",
             enabled,
             logical_time=logical_time,
         )
@@ -560,6 +589,7 @@ class _EconomyFeatureAssembly:
     economy: EconomyFeature
     lottery: LotteryFeature
     draw: DrawFeature
+    redemption_codes: RedemptionCodeFeature
     rest: RestFeature
 
 
@@ -777,6 +807,7 @@ def _assemble_world_features(
     database: SqliteDatabase,
     content_assembly: _ContentAssembly,
     foundation: _FoundationAssembly,
+    rest: RestFeature,
 ) -> _WorldFeatureAssembly:
     content = content_assembly.content
     world_views = content_assembly.world_views
@@ -809,6 +840,15 @@ def _assemble_world_features(
         BattleReportBuilder(content, world_views),
     )
     persistence_retention = PersistenceRetentionService(database)
+    snapshot_lifecycle = SnapshotLifecycleService(
+        database,
+        snapshots,
+        SnapshotLifecycleStorageKinds(
+            ACTION_AGGREGATE,
+            ACTIVITY_AGGREGATE,
+            SOCIAL_AGGREGATE,
+        ),
+    )
     data_lifecycle = DataLifecycleFeature(
         (
             DataLifecycleTask(
@@ -818,6 +858,14 @@ def _assemble_world_features(
             DataLifecycleTask(
                 "data.persistence",
                 lambda logical_time: persistence_retention.cleanup(logical_time=logical_time),
+            ),
+            DataLifecycleTask(
+                "data.snapshots",
+                lambda logical_time: snapshot_lifecycle.cleanup(logical_time=logical_time),
+            ),
+            DataLifecycleTask(
+                "data.storage",
+                lambda _logical_time: database.reclaim_free_pages(),
             ),
         )
     )
@@ -899,6 +947,7 @@ def _assemble_world_features(
         ),
         RewardSettlementStorageKeys,
         foundation.companion_growth_settlement,
+        rest,
         world_progress,
     )
     dimensional_disasters = DimensionalDisasterFeature(
@@ -945,6 +994,7 @@ def _assemble_economy_features(
     database: SqliteDatabase,
     content_assembly: _ContentAssembly,
     foundation: _FoundationAssembly,
+    account_identity_secret: str,
 ) -> _EconomyFeatureAssembly:
     content = content_assembly.content
     snapshots = content_assembly.snapshots
@@ -974,6 +1024,7 @@ def _assemble_economy_features(
         content,
         snapshots,
         foundation.inventory_engine,
+        foundation.ledger_engine,
         foundation.reward_settlement,
         DrawStorageKinds(
             DRAW_HISTORY_AGGREGATE,
@@ -983,6 +1034,24 @@ def _assemble_economy_features(
             REWARD_CLAIM_AGGREGATE,
         ),
         RewardSettlementStorageKeys,
+    )
+    grants = PersistedGrantService(
+        database,
+        foundation.reward_settlement,
+        code_secret=_derive_redemption_digest_key(account_identity_secret),
+    )
+    redemption_codes = RedemptionCodeFeature(
+        database,
+        content,
+        snapshots,
+        grants,
+        RedemptionCodeStorageKinds(
+            INVENTORY_AGGREGATE,
+            LEDGER_AGGREGATE,
+            REWARD_CLAIM_AGGREGATE,
+        ),
+        RewardSettlementStorageKeys,
+        REDEMPTION_CODE_OFFERS,
     )
     rest = RestFeature(
         database,
@@ -999,7 +1068,7 @@ def _assemble_economy_features(
             EXPLORATION_AGGREGATE,
         ),
     )
-    return _EconomyFeatureAssembly(economy, lottery, draw, rest)
+    return _EconomyFeatureAssembly(economy, lottery, draw, redemption_codes, rest)
 
 
 def _assemble_player_features(
@@ -1125,7 +1194,6 @@ def _assemble_social_features(
         ),
         RewardSettlementStorageKeys,
         foundation.companion_growth_settlement,
-        party_scope_id=PARTY_SCOPE_ID,
         timezone=config.project.timezone,
     )
     party_sparring = PartySparringFeature(
@@ -1145,7 +1213,6 @@ def _assemble_social_features(
             character_world=CHARACTER_WORLD_AGGREGATE,
             inscription_preference=INSCRIPTION_PREFERENCE_AGGREGATE,
         ),
-        party_scope_id=PARTY_SCOPE_ID,
     )
     sparring = SparringFeature(
         database,
@@ -1197,15 +1264,17 @@ def build_game_services(
         content_assembly.content,
         content_assembly.snapshots,
     )
-    world_features = _assemble_world_features(
-        database,
-        content_assembly,
-        foundation,
-    )
     economy_features = _assemble_economy_features(
         database,
         content_assembly,
         foundation,
+        secret,
+    )
+    world_features = _assemble_world_features(
+        database,
+        content_assembly,
+        foundation,
+        economy_features.rest,
     )
     player_features = _assemble_player_features(
         database,
@@ -1261,6 +1330,7 @@ def build_game_services(
         economy=economy_features.economy,
         lottery=economy_features.lottery,
         draw=economy_features.draw,
+        redemption_codes=economy_features.redemption_codes,
         world_views=content_assembly.world_views,
         content=content_assembly.content,
     )
@@ -1350,8 +1420,19 @@ def initialize_game_services() -> None:
     services.lottery.initialize(
         logical_time=logical_time,
     )
+    services.redemption_codes.initialize(
+        logical_time=logical_time,
+    )
     services.dimensional_disasters.maintain(
         logical_time=logical_time
+    )
+
+
+def _derive_redemption_digest_key(identity_secret: str) -> bytes:
+    return hmac.digest(
+        identity_secret.encode("utf-8"),
+        b"wanxiang-xingji.grant-code-secret.v1",
+        "sha256",
     )
 
 

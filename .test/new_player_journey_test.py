@@ -106,7 +106,7 @@ async def _main() -> None:
                     logical_time=clock[0],
                 )
                 batches.extend(settled.batches)
-                if settled.state is None or settled.state.status is not ExplorationStatus.RUNNING:
+                if settled.state is None or settled.state.status is ExplorationStatus.STOPPED:
                     break
                 overview = services.load_character_overview(current.character).overview
                 assert overview is not None
@@ -125,7 +125,7 @@ async def _main() -> None:
             assert "探险" in _content(summary)
 
             state = services.exploration.load(character_id, logical_time=clock[0]).state
-            if state is not None and state.status is ExplorationStatus.RUNNING:
+            if state is not None and state.active:
                 assert "停止" in _content(
                     await _dispatch("停止探险", "journey-exploration-stop")
                 )

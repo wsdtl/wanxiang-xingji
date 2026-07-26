@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
@@ -19,7 +20,13 @@ from game.app import build_game_services, install_game_services, restore_game_se
 from game.cmd import 切磋 as sparring_component  # noqa: E402,F401
 from game.cmd import 角色 as character_component  # noqa: E402,F401
 from game.core.persistence import CHARACTER_AGGREGATE  # noqa: E402
-from game.core.gameplay import SocialRequestStatus  # noqa: E402
+from game.core.gameplay import (  # noqa: E402
+    HEALTH_CURRENT,
+    HEALTH_MAXIMUM,
+    SPIRIT_CURRENT,
+    SPIRIT_MAXIMUM,
+    SocialRequestStatus,
+)
 from game.features.sparring import sparring_social_scope_id  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
@@ -50,8 +57,18 @@ async def _main() -> None:
             await _dispatch("player-a", "创建角色 问剑", "sparring-create-a")
             await _dispatch("player-b", "创建角色 守岳", "sparring-create-b")
             characters = _characters(services)
-            challenger = characters["问剑"]
-            defender = characters["守岳"]
+            challenger = _set_resources(
+                services,
+                characters["问剑"],
+                health=0,
+                spirit=0,
+            )
+            defender = _set_resources(
+                services,
+                characters["守岳"],
+                health=0,
+                spirit=0,
+            )
             challenger_before = challenger
             defender_before = defender
 
@@ -124,6 +141,16 @@ async def _main() -> None:
             )
             assert view is not None and view.detail_available
             assert view.mode_id == "battle.mode.sparring"
+            assert view.segments[0].initial_participants
+            for participant in view.segments[0].initial_participants:
+                assert (
+                    participant.resources[HEALTH_CURRENT]
+                    == participant.attributes[HEALTH_MAXIMUM]
+                )
+                assert (
+                    participant.resources[SPIRIT_CURRENT]
+                    == participant.attributes[SPIRIT_MAXIMUM]
+                )
             assert view.segments[0].transitions
             assert all(
                 transition.after.participants
@@ -201,6 +228,28 @@ def _characters(services):
     values = [services.characters.load_character(str(row[0])) for row in rows]
     assert all(value is not None for value in values)
     return {value.name: value for value in values}
+
+
+def _set_resources(services, character, *, health: float, spirit: float):
+    resources = dict(character.resources)
+    resources[HEALTH_CURRENT] = health
+    resources[SPIRIT_CURRENT] = spirit
+    updated = replace(
+        character,
+        resources=resources,
+        revision=character.revision + 1,
+    )
+    with services.database.unit_of_work() as uow:
+        services.sparring.snapshots.update(
+            uow,
+            services.sparring.storage.character,
+            character.id,
+            character,
+            updated,
+            datetime.now(TIMEZONE),
+        )
+        uow.commit()
+    return updated
 
 
 if __name__ == "__main__":

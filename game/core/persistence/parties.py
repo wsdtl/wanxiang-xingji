@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import sha256
 
 from ..gameplay.context import RuleContext
 from ..gameplay.errors import RuleFailure, RuleOutcome
 from ..gameplay.party import (
     AddPartyMember,
+    CreateParty,
     PARTY_INVITATION_PARTY_ID_KEY,
     PartyAdmissionCommand,
     PartyAdmissionExecution,
@@ -17,6 +18,7 @@ from ..gameplay.party import (
     PartyEngine,
     PartyExecution,
     PartyState,
+    PartyStatus,
 )
 from ..gameplay.social import (
     ResolveSocialRequest,
@@ -25,7 +27,7 @@ from ..gameplay.social import (
     SocialRequestStatus,
     SocialState,
 )
-from .errors import TransactionMismatch
+from .errors import ConcurrencyConflict, TransactionMismatch
 from .snapshots import PARTY_AGGREGATE, SOCIAL_AGGREGATE, SnapshotRepository
 from .sqlite import SqliteDatabase
 
@@ -74,6 +76,18 @@ class PersistedPartyService:
         with self.database.unit_of_work(write=False) as uow:
             return self.snapshots.load(uow, PARTY_AGGREGATE, scope_id, PartyState)
 
+    def find_by_member(self, subject_id: str) -> PartyState | None:
+        with self.database.unit_of_work(write=False) as uow:
+            membership = uow.load_party_membership(subject_id)
+            if membership is None:
+                return None
+            return self.snapshots.require(
+                uow,
+                PARTY_AGGREGATE,
+                membership.party_scope_id,
+                PartyState,
+            )
+
     def execute(
         self,
         scope_id: str,
@@ -100,24 +114,47 @@ class PersistedPartyService:
                         PartyExecution,
                     )
                     return RuleOutcome.success(PersistedPartyExecution(execution, True))
-                state = self.snapshots.require(
+                state = self.snapshots.load(
                     uow,
                     PARTY_AGGREGATE,
                     scope_id,
                     PartyState,
                 )
+                created = state is None
+                if state is None:
+                    if not isinstance(command.operation, CreateParty):
+                        return RuleOutcome.failed(
+                            RuleFailure("party.unknown", "找不到指定队伍")
+                        )
+                    state = PartyState(scope_id)
                 outcome = self.engine.execute(command, state=state, context=context)
                 if outcome.failure:
                     return RuleOutcome.failed(outcome.failure)
                 assert outcome.value is not None
-                self.snapshots.update(
-                    uow,
-                    PARTY_AGGREGATE,
-                    scope_id,
-                    state,
-                    outcome.value.state,
-                    context.logical_time,
+                expires_at = (
+                    context.logical_time + timedelta(hours=6)
+                    if outcome.value.party.status is PartyStatus.DISBANDED
+                    else None
                 )
+                if created:
+                    self.snapshots.insert(
+                        uow,
+                        PARTY_AGGREGATE,
+                        scope_id,
+                        outcome.value.state,
+                        context.logical_time,
+                        expires_at=expires_at,
+                    )
+                else:
+                    self.snapshots.update(
+                        uow,
+                        PARTY_AGGREGATE,
+                        scope_id,
+                        state,
+                        outcome.value.state,
+                        context.logical_time,
+                        expires_at=expires_at,
+                    )
                 _record_execution(
                     uow,
                     command.id,
@@ -130,6 +167,16 @@ class PersistedPartyService:
                 )
                 uow.commit()
                 return RuleOutcome.success(PersistedPartyExecution(outcome.value))
+        except ConcurrencyConflict:
+            context.random.restore(checkpoint)
+            if isinstance(command.operation, CreateParty):
+                return RuleOutcome.failed(
+                    RuleFailure(
+                        "party.exclusive_membership",
+                        "主体已经加入其他活跃队伍",
+                    )
+                )
+            raise
         except Exception:
             context.random.restore(checkpoint)
             raise
@@ -193,6 +240,16 @@ class PersistedPartyAdmissionService:
                     command.party_scope_id,
                     PartyState,
                 )
+                membership = uow.load_party_membership(command.actor_id)
+                if membership is not None:
+                    context.random.restore(checkpoint)
+                    return RuleOutcome.failed(
+                        RuleFailure(
+                            "party.exclusive_membership",
+                            "主体已经加入其他活跃队伍",
+                            {"party_id": membership.party_id},
+                        )
+                    )
                 request = social_state.requests.get(command.request_id)
                 failure = self._validate_request(command, request)
                 if failure is not None:

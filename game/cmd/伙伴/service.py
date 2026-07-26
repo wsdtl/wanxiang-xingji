@@ -494,7 +494,7 @@ def _people_message(roster, overview: CharacterOverview) -> DocumentMessage:
             departed is not None
             or (bond is not None and bond.favor >= local.bond_required)
         ):
-            actions.append(Action("person.join", "结交", "结交", behavior="send"))
+            actions.append(Action("person.join", "结交", "结交", behavior="callback"))
     return builder.actions(actions).build()
 
 
@@ -513,7 +513,7 @@ def _gift_result(outcome, overview: CharacterOverview) -> DocumentMessage:
     )
     if outcome.value_after >= person.bond_required:
         builder.note("关系已经满足结交要求。").actions(
-            (Action("person.join", "结交", "结交", behavior="send"),)
+            (Action("person.join", "结交", "结交", behavior="callback"),)
         )
     return builder.build()
 
@@ -531,7 +531,7 @@ def _join_result(outcome, overview: CharacterOverview) -> DocumentMessage:
                 "companion.bind",
                 "出战",
                 f"伙伴出战 {outcome.companion.reference}",
-                behavior="send",
+                behavior="callback",
             ),
         ))
         .build()
@@ -569,8 +569,8 @@ def _companion_list(roster, overview: CharacterOverview) -> DocumentMessage:
             status,
         )
     builder.actions((
-        Action("companion.people", "人物", "人物", behavior="send"),
-        Action("companion.sanctuary", "宠物秘境", "宠物秘境", behavior="send"),
+        Action("companion.people", "人物", "人物", behavior="callback"),
+        Action("companion.sanctuary", "宠物秘境", "宠物秘境", behavior="callback"),
     ))
     return builder.build()
 
@@ -625,10 +625,10 @@ def _companion_detail(roster, reference: str, overview: CharacterOverview) -> Do
     builder.field("特色效果", projector.name(companion.trait_behavior_id))
     actions = []
     if preset == overview.loadout.active_preset_id:
-        actions.append(Action("companion.unbind", "休战", "伙伴休战", behavior="send"))
+        actions.append(Action("companion.unbind", "休战", "伙伴休战", behavior="callback"))
     else:
-        actions.append(Action("companion.bind", projector.name("term.companion_bind"), f"伙伴出战 {companion.reference}", behavior="send"))
-    actions.append(Action("companion.farewell", "告别", f"告别 {companion.reference}", behavior="send", style="secondary"))
+        actions.append(Action("companion.bind", projector.name("term.companion_bind"), f"伙伴出战 {companion.reference}", behavior="callback"))
+    actions.append(Action("companion.farewell", "告别", f"告别 {companion.reference}", behavior="callback", style="secondary"))
     return builder.actions(actions).build()
 
 
@@ -674,7 +674,7 @@ def _sanctuary_message(sanctuary, overview: CharacterOverview) -> DocumentMessag
                 FieldSeparator(),
                 "危险相当",
             )
-        actions.append(Action("companion.abandon", "放弃", "放弃秘境", behavior="send", style="secondary"))
+        actions.append(Action("companion.abandon", "放弃", "放弃秘境", behavior="callback", style="secondary"))
     return builder.actions(actions).build()
 
 
@@ -690,7 +690,7 @@ def _hunt_result(outcome) -> DocumentMessage:
         )
         if outcome.battle_report is not None:
             builder.field("战报", M.link("查看完整战报", public_url("battle", outcome.battle_report.share_id)))
-        return builder.actions((Action("companion.bind", _companion_projector(companion).name("term.companion_bind"), f"伙伴出战 {companion.reference}", behavior="send"),)).build()
+        return builder.actions((Action("companion.bind", _companion_projector(companion).name("term.companion_bind"), f"伙伴出战 {companion.reference}", behavior="callback"),)).build()
     if outcome.status == "defeated":
         builder = M.document().section("追踪失败", icon="combat").line("目标仍停留在原踪迹，恢复后可以再次挑战。")
         if outcome.battle_report is not None:

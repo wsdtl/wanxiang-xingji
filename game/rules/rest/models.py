@@ -8,7 +8,7 @@ from game.core.gameplay import ActionRecord, CharacterState
 
 
 REST_RECOVERY_AGGREGATE = "snapshot.rest_recovery"
-REST_RULESET_VERSION = "rules.rest.v1"
+REST_RULESET_VERSION = "rules.rest.v2"
 
 
 @dataclass(frozen=True)

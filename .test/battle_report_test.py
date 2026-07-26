@@ -36,6 +36,7 @@ from game.core.gameplay import (  # noqa: E402
     COMBAT_ATTACK,
     COMBAT_DEFENSE,
     ExecutionPhase,
+    EnemyInstance,
     HEALTH_CURRENT,
     HEALTH_MAXIMUM,
     RuleEvent,
@@ -147,6 +148,7 @@ def main() -> None:
         assert turn.after.inactive_keys == ("p2",)
 
         _assert_companion_origin_projection(services)
+        _assert_enemy_term_projection(services)
         previous = install_game_services(services)
         try:
             real_load_public = services.battle_reports.load_public
@@ -180,21 +182,21 @@ def main() -> None:
 
         summary = service.load_public(
             reference.share_id,
-            logical_time=NOW + timedelta(hours=12),
+            logical_time=NOW + timedelta(hours=4),
         )
         assert summary is not None and not summary.detail_available
         assert summary.segments == ()
         removed_details, removed_reports = service.cleanup(
-            logical_time=NOW + timedelta(hours=12)
+            logical_time=NOW + timedelta(hours=4)
         )
         assert removed_details == 2 and removed_reports == 0
-        assert service.cleanup(logical_time=NOW + timedelta(hours=12)) == (0, 0)
+        assert service.cleanup(logical_time=NOW + timedelta(hours=4)) == (0, 0)
 
         assert service.load_public(
             reference.share_id,
-            logical_time=NOW + timedelta(days=2),
+            logical_time=NOW + timedelta(hours=13),
         ) is None
-        assert service.cleanup(logical_time=NOW + timedelta(days=2)) == (0, 1)
+        assert service.cleanup(logical_time=NOW + timedelta(hours=13)) == (0, 1)
 
     print("battle report tests passed")
 
@@ -234,11 +236,37 @@ def _assert_companion_origin_projection(services) -> None:
     )
 
 
+def _assert_enemy_term_projection(services) -> None:
+    behavior_id = "enemy.behavior.heavy_strike"
+    enemy = EnemyInstance(
+        "battle-report-enemy-term-test",
+        "enemy.mountain_ape",
+        1,
+        "enemy.rank.normal",
+        (behavior_id,),
+        "battle-report-enemy-term-test",
+        services.content.catalog.report.content_fingerprint,
+    )
+    view = services.world_views.require(TAIXUAN_WORLD_ID)
+    label = view.enemy_projector.enemy(enemy).name
+    spec = services.battle_reports.builder.enemy(
+        enemy,
+        TAIXUAN_WORLD_ID,
+        label,
+        team_id="enemy",
+        team_label="遭遇一方",
+    )
+    assert spec.resolve_term("enemy.source_0").name == f"{label}·固有能力"
+    assert spec.resolve_term("enemy.source_2").name == view.projector.name(
+        behavior_id
+    )
+
+
 def _assert_web_assets(client: TestClient, share_id: str) -> None:
     response = client.get(f"/battle/{share_id}")
     assert response.status_code == 200
-    assert "/static/battle-report/style.css?v=17" in response.text
-    assert "/static/battle-report/app.js?v=17" in response.text
+    assert "/static/battle-report/style.css?v=18" in response.text
+    assert "/static/battle-report/app.js?v=18" in response.text
     assert 'script type="module"' in response.text
 
     script = client.get("/static/battle-report/app.js").text
@@ -255,6 +283,14 @@ def _assert_web_assets(client: TestClient, share_id: str) -> None:
     assert 'action === "filter"' in script
     assert "event.text" in timeline_script
     assert "event.category" in timeline_script
+    assert "buildActorVisualMap(segment.combatants)" in timeline_script
+    assert 'event.category === "system"' in timeline_script
+    assert "event.source?.key" in timeline_script
+    assert "actorVisuals.get(sourceKey)?.color" in timeline_script
+    assert "combatant.team_id" not in timeline_script
+    assert "buildActorVisualMap(segment.combatants)" in script
+    assert "actorVisuals.get(participant.key)" in script
+    assert "participant-index actor-${actorColor}" in script
     assert "event.kind" not in combined_script
     assert "const MODE_OPTIONS" not in combined_script
     assert ".at(" not in combined_script
@@ -278,6 +314,15 @@ def _assert_web_assets(client: TestClient, share_id: str) -> None:
     assert "scrollbar-width: none" in style
     assert ".participant-stack {" in style
     assert ".timeline-panel {" in style
+    assert "--actor-color" in style
+    assert "--event-type-color" not in style
+    assert ".actor-system" in style
+    assert ".actor-0" in style
+    assert ".actor-15" in style
+    assert ".event-marker.actor-party-" not in style
+    assert ".event-marker.actor-enemy-" not in style
+    assert ".event-marker.tone-" not in style
+    assert "border: 2px solid var(--event-type-color)" not in style
     assert "view-transition" not in style
 
     data_response = client.get(f"/battle/{share_id}/data")
@@ -336,8 +381,8 @@ def _assert_production_preview() -> None:
     preview = preview_path.read_text(encoding="utf-8")
     assert "<style" not in preview
     assert "maximum-scale=1, user-scalable=no" in preview
-    assert "../../static/battle-report/style.css?v=17" in preview
-    assert "../../static/battle-report/app.js?v=17" in preview
+    assert "../../static/battle-report/style.css?v=18" in preview
+    assert "../../static/battle-report/app.js?v=18" in preview
     assert 'script type="module"' in preview
     opening = '<script id="battleReportPreviewData" type="application/json">'
     payload = preview.split(opening, 1)[1].split("</script>", 1)[0]
@@ -361,6 +406,22 @@ def _assert_production_preview() -> None:
             ]
         }
     )
+    initial_participants = embedded["detail"]["segments"][0][
+        "initial_participants"
+    ]
+    for participant in initial_participants:
+        if participant["unit_kind"] != "character":
+            continue
+        permanent_group = next(
+            value
+            for value in participant["detail_groups"]
+            if value["id"] == "permanent_effects"
+        )
+        assert all(
+            effect["source"] == participant["label"]
+            for effect in permanent_group["items"]
+            if effect["id"].startswith("feature.")
+        )
     assert "ability.test" not in payload
     assert "combat.damage.dealt" in payload
     events = [
@@ -377,6 +438,8 @@ def _assert_production_preview() -> None:
         "进入新的战斗阶段" in event["text"]
         and "获得" in event["text"]
         and event["raw"]["values"]["behavior_ids"]
+        and event["subject"]["id"].startswith("enemy.phase.")
+        and event["subject"]["label"].endswith("阶段能力")
         for event in phase_events
     )
 

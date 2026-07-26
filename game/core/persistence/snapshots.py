@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
-from typing import Iterable, TypeVar
+from typing import Iterable, Iterator, TypeVar
 
 from ..account import (
     AccountDirectoryState,
@@ -492,6 +493,12 @@ class SnapshotRepository:
                 f"快照 codec 版本不匹配：需要 {SNAPSHOT_CODEC_VERSION}，当前 {row.codec_version}"
             )
         value = self.codec.loads(row.payload, expected_type)
+        value = self._hydrate_external_collections(
+            uow,
+            aggregate_kind,
+            aggregate_id,
+            value,
+        )
         revision = getattr(value, "revision", None)
         if revision != row.revision:
             raise CorruptPersistenceData(
@@ -520,22 +527,73 @@ class SnapshotRepository:
         expected_type: type[StateT],
         *,
         limit: int = 1_000,
+        after_id: str | None = None,
     ) -> tuple[StateT, ...]:
         """解码同类聚合；业务调度只依赖仓储接口，不直接读取 SQL。"""
 
         values: list[StateT] = []
-        for row in uow.list_snapshots(aggregate_kind, limit=limit):
+        for row in uow.list_snapshots(
+            aggregate_kind,
+            limit=limit,
+            after_id=after_id,
+        ):
             if row.codec_version != SNAPSHOT_CODEC_VERSION:
                 raise CorruptPersistenceData(
                     f"快照 codec 版本不匹配：需要 {SNAPSHOT_CODEC_VERSION}，当前 {row.codec_version}"
                 )
             value = self.codec.loads(row.payload, expected_type)
+            value = self._hydrate_external_collections(
+                uow,
+                aggregate_kind,
+                row.aggregate_id,
+                value,
+            )
             if getattr(value, "revision", None) != row.revision:
                 raise CorruptPersistenceData(
                     f"快照行 revision 与负载不一致：{aggregate_kind}/{row.aggregate_id}"
                 )
             values.append(value)
         return tuple(values)
+
+    def iter_all(
+        self,
+        uow: SqliteUnitOfWork,
+        aggregate_kind: str,
+        expected_type: type[StateT],
+        *,
+        page_size: int = 1_000,
+    ) -> Iterator[StateT]:
+        """用稳定 aggregate_id 游标遍历全部快照，不把总量误当页大小。"""
+
+        after_id: str | None = None
+        while True:
+            rows = uow.list_snapshots(
+                aggregate_kind,
+                limit=page_size,
+                after_id=after_id,
+            )
+            if not rows:
+                return
+            for row in rows:
+                if row.codec_version != SNAPSHOT_CODEC_VERSION:
+                    raise CorruptPersistenceData(
+                        f"快照 codec 版本不匹配：需要 {SNAPSHOT_CODEC_VERSION}，当前 {row.codec_version}"
+                    )
+                value = self.codec.loads(row.payload, expected_type)
+                value = self._hydrate_external_collections(
+                    uow,
+                    aggregate_kind,
+                    row.aggregate_id,
+                    value,
+                )
+                if getattr(value, "revision", None) != row.revision:
+                    raise CorruptPersistenceData(
+                        f"快照行 revision 与负载不一致：{aggregate_kind}/{row.aggregate_id}"
+                    )
+                yield value
+            after_id = rows[-1].aggregate_id
+            if len(rows) < page_size:
+                return
 
     def insert(
         self,
@@ -544,15 +602,41 @@ class SnapshotRepository:
         aggregate_id: str,
         value: object,
         logical_time: datetime,
+        *,
+        expires_at: datetime | None = None,
     ) -> None:
         _require_aware(logical_time)
+        _require_optional_aware(expires_at)
+        self._sync_party_memberships(
+            uow,
+            aggregate_kind,
+            aggregate_id,
+            None,
+            value,
+        )
+        self._sync_world_entities(
+            uow,
+            aggregate_kind,
+            aggregate_id,
+            None,
+            value,
+            logical_time,
+        )
+        persisted = self._extract_append_only_history(
+            uow,
+            aggregate_kind,
+            aggregate_id,
+            value,
+            logical_time,
+        )
         revision = _revision_of(value)
         uow.insert_snapshot(
             aggregate_kind,
             aggregate_id,
             revision,
-            self.codec.dumps(value),
+            self.codec.dumps(persisted),
             logical_time.isoformat(),
+            expires_at.isoformat() if expires_at is not None else None,
         )
 
     def update(
@@ -563,18 +647,253 @@ class SnapshotRepository:
         previous: object,
         current: object,
         logical_time: datetime,
+        *,
+        expires_at: datetime | None = None,
     ) -> None:
         _require_aware(logical_time)
+        _require_optional_aware(expires_at)
         previous_revision = _revision_of(previous)
         current_revision = _revision_of(current)
+        self._sync_party_memberships(
+            uow,
+            aggregate_kind,
+            aggregate_id,
+            previous,
+            current,
+        )
+        self._sync_world_entities(
+            uow,
+            aggregate_kind,
+            aggregate_id,
+            previous,
+            current,
+            logical_time,
+        )
+        persisted = self._extract_append_only_history(
+            uow,
+            aggregate_kind,
+            aggregate_id,
+            current,
+            logical_time,
+        )
         uow.compare_and_swap_snapshot(
             aggregate_kind,
             aggregate_id,
             previous_revision,
             current_revision,
-            self.codec.dumps(current),
+            self.codec.dumps(persisted),
             logical_time.isoformat(),
+            expires_at.isoformat() if expires_at is not None else None,
         )
+
+    def delete(
+        self,
+        uow: SqliteUnitOfWork,
+        aggregate_kind: str,
+        aggregate_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> bool:
+        return uow.delete_snapshot(
+            aggregate_kind,
+            aggregate_id,
+            expected_revision=expected_revision,
+        )
+
+    def compact(self, value: StateT) -> StateT:
+        """返回与磁盘热快照一致的领域值，供提交后的调用方继续使用。"""
+
+        if isinstance(value, LedgerState):
+            return replace(value, journal=(), applied_transactions={})  # type: ignore[return-value]
+        if isinstance(value, RewardClaimState):
+            return replace(value, records={})  # type: ignore[return-value]
+        if isinstance(value, WorldState):
+            return replace(value, presences={}, reservations={})  # type: ignore[return-value]
+        return value
+
+    def _extract_append_only_history(
+        self,
+        uow: SqliteUnitOfWork,
+        aggregate_kind: str,
+        aggregate_id: str,
+        value: object,
+        logical_time: datetime,
+    ) -> object:
+        if aggregate_kind == LEDGER_AGGREGATE and isinstance(value, LedgerState):
+            entries_by_transaction: dict[str, list[JournalEntry]] = {}
+            for entry in value.journal:
+                entries_by_transaction.setdefault(entry.transaction_id, []).append(entry)
+            for transaction_id, record in sorted(value.applied_transactions.items()):
+                entries = entries_by_transaction.get(transaction_id, ())
+                applied_at = entries[0].logical_time if entries else logical_time
+                uow.insert_ledger_transaction(
+                    aggregate_id,
+                    transaction_id,
+                    record.fingerprint,
+                    record.resulting_revision,
+                    applied_at.isoformat(),
+                )
+            for entry in value.journal:
+                if entry.transaction_id not in value.applied_transactions:
+                    raise CorruptPersistenceData(
+                        f"账本流水缺少防重事务：{aggregate_id}/{entry.transaction_id}"
+                    )
+                uow.insert_ledger_journal_entry(
+                    aggregate_id,
+                    entry.id,
+                    entry.transaction_id,
+                    str(entry.currency_id),
+                    str(entry.reason),
+                    entry.actor_id,
+                    entry.logical_time.isoformat(),
+                    self.codec.dumps(entry),
+                )
+            return self.compact(value)
+        if aggregate_kind == REWARD_CLAIM_AGGREGATE and isinstance(value, RewardClaimState):
+            for settlement_id, record in sorted(value.records.items()):
+                uow.insert_reward_claim(
+                    value.scope_id,
+                    settlement_id,
+                    record.fingerprint,
+                    record.resulting_revision,
+                    record.receipt.logical_time.isoformat(),
+                )
+            return self.compact(value)
+        return value
+
+    @staticmethod
+    def _sync_party_memberships(
+        uow: SqliteUnitOfWork,
+        aggregate_kind: str,
+        aggregate_id: str,
+        previous: object | None,
+        current: object,
+    ) -> None:
+        if aggregate_kind != PARTY_AGGREGATE or not isinstance(current, PartyState):
+            return
+        if previous is not None and not isinstance(previous, PartyState):
+            raise TypeError("队伍快照更新前后类型不一致")
+
+        def active_members(state: PartyState | None):
+            if state is None:
+                return {}
+            return {
+                member.subject_id: (party.id, member.joined_at)
+                for party in state.parties.values()
+                if party.status is PartyStatus.ACTIVE
+                for member in party.members.values()
+            }
+
+        before = active_members(previous)
+        after = active_members(current)
+        for subject_id, (party_id, _joined_at) in before.items():
+            if subject_id not in after:
+                uow.delete_party_membership(subject_id, party_id)
+        for subject_id, (party_id, joined_at) in after.items():
+            prior = before.get(subject_id)
+            if prior is not None:
+                if prior[0] != party_id:
+                    uow.delete_party_membership(subject_id, prior[0])
+                else:
+                    continue
+            uow.insert_party_membership(
+                subject_id,
+                party_id,
+                aggregate_id,
+                joined_at.isoformat(),
+            )
+
+    def _hydrate_external_collections(
+        self,
+        uow: SqliteUnitOfWork,
+        aggregate_kind: str,
+        aggregate_id: str,
+        value: StateT,
+    ) -> StateT:
+        if aggregate_kind != WORLD_AGGREGATE or not isinstance(value, WorldState):
+            return value
+        presences = {}
+        for row in uow.list_world_presences(aggregate_id):
+            presence = self.codec.loads(row.payload, WorldPresence)
+            if presence.id != row.presence_id or presence.revision != row.revision:
+                raise CorruptPersistenceData(
+                    f"世界存在体关系行与负载不一致：{aggregate_id}/{row.presence_id}"
+                )
+            presences[presence.id] = presence
+        reservations = {}
+        for row in uow.list_world_reservations(aggregate_id):
+            reservation = self.codec.loads(row.payload, WorldReservation)
+            if reservation.id != row.reservation_id:
+                raise CorruptPersistenceData(
+                    f"世界预约关系行与负载不一致：{aggregate_id}/{row.reservation_id}"
+                )
+            reservations[reservation.id] = reservation
+        return replace(  # type: ignore[return-value]
+            value,
+            presences=presences,
+            reservations=reservations,
+        )
+
+    def _sync_world_entities(
+        self,
+        uow: SqliteUnitOfWork,
+        aggregate_kind: str,
+        aggregate_id: str,
+        previous: object | None,
+        current: object,
+        logical_time: datetime,
+    ) -> None:
+        if aggregate_kind != WORLD_AGGREGATE or not isinstance(current, WorldState):
+            return
+        if previous is not None and not isinstance(previous, WorldState):
+            raise TypeError("世界快照更新前后类型不一致")
+        before_presences = previous.presences if isinstance(previous, WorldState) else {}
+        for presence_id, presence in before_presences.items():
+            if presence_id not in current.presences:
+                uow.delete_world_presence(
+                    aggregate_id,
+                    presence_id,
+                    presence.revision,
+                )
+        for presence_id, presence in current.presences.items():
+            prior = before_presences.get(presence_id)
+            if prior is None:
+                uow.insert_world_presence(
+                    aggregate_id,
+                    presence_id,
+                    presence.owner_id,
+                    presence.revision,
+                    self.codec.dumps(presence),
+                    logical_time.isoformat(),
+                )
+            elif prior != presence:
+                uow.update_world_presence(
+                    aggregate_id,
+                    presence_id,
+                    prior.revision,
+                    presence.revision,
+                    presence.owner_id,
+                    self.codec.dumps(presence),
+                    logical_time.isoformat(),
+                )
+
+        before_reservations = previous.reservations if isinstance(previous, WorldState) else {}
+        for reservation_id in before_reservations:
+            if reservation_id not in current.reservations:
+                uow.delete_world_reservation(aggregate_id, reservation_id)
+        for reservation_id, reservation in current.reservations.items():
+            prior = before_reservations.get(reservation_id)
+            if prior != reservation:
+                uow.upsert_world_reservation(
+                    aggregate_id,
+                    reservation_id,
+                    reservation.owner_id,
+                    reservation.expires_at.isoformat()
+                    if reservation.expires_at is not None
+                    else None,
+                    self.codec.dumps(reservation),
+                    logical_time.isoformat(),
+                )
 
 
 def _revision_of(value: object) -> int:
@@ -587,6 +906,11 @@ def _revision_of(value: object) -> int:
 def _require_aware(value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("持久化逻辑时间必须包含时区")
+
+
+def _require_optional_aware(value: datetime | None) -> None:
+    if value is not None:
+        _require_aware(value)
 
 
 __all__ = [

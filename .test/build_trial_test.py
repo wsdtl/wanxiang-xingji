@@ -139,6 +139,16 @@ async def _main() -> None:
                 segment = view.segments[0]
                 assert len(segment.combatants) == expected_participants[mode_id]
                 assert len(segment.initial_participants) == expected_participants[mode_id]
+                trial_targets = tuple(
+                    value
+                    for value in segment.combatants
+                    if value.unit_kind == "trial_target"
+                )
+                assert all(
+                    value.terms["enemy.source_0"].name
+                    == f"{value.label}·固有能力"
+                    for value in trial_targets
+                )
                 assert segment.events and segment.transitions
                 assert any(value.kind == "turn" for value in segment.transitions)
                 assert segment.final_participants

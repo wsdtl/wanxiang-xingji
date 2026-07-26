@@ -132,7 +132,7 @@ class Action:
     id: str
     label: str
     data: str
-    behavior: ActionBehavior = "send"
+    behavior: ActionBehavior = "callback"
     style: ActionStyle = "primary"
     permission: ActionPermission = "everyone"
     specified_user_ids: tuple[str, ...] = ()
@@ -146,6 +146,8 @@ class Action:
             raise ValueError("消息动作缺少 label")
         if not self.data.strip():
             raise ValueError("消息动作缺少 data")
+        if self.behavior == "callback" and self.data[-1].isspace():
+            raise ValueError("callback 动作必须是完整命令，data 末尾不能保留参数空位")
         if self.behavior == "link" and self.reply:
             raise ValueError("链接动作不支持 reply")
         if self.permission == "specified" and not self.specified_user_ids:

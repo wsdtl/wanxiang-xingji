@@ -28,10 +28,12 @@ from game.core.gameplay.grants import (  # noqa: E402
     MigrationManifestEntry,
     code_entitlement_id,
     grant_code_digest,
+    normalize_grant_code,
     sign_grant_proof,
 )
 from game.core.gameplay.rewards import (  # noqa: E402
     CurrencyReward,
+    RewardClaimState,
     RewardExpectations,
     StackItemReward,
 )
@@ -61,7 +63,7 @@ KEYS = RewardSettlementStorageKeys(
 
 def main() -> None:
     assert GRANT_FOUNDATION_VERSION == "grant.foundation.v1"
-    assert PERSISTENCE_SCHEMA_VERSION == 6
+    assert PERSISTENCE_SCHEMA_VERSION == 8
     with TemporaryDirectory() as directory:
         _assert_complete_grant_flow(Path(directory))
     print("grant foundation tests passed")
@@ -86,6 +88,7 @@ def _assert_complete_grant_flow(directory: Path) -> None:
     _assert_signed_receipt(service, database)
     _assert_migration_manifest(service, database)
     _assert_revocation(service, database, rewards)
+    _assert_missing_claim_scope_is_initialized(service, rewards)
 
 
 def _assert_schema(database: SqliteDatabase) -> None:
@@ -106,6 +109,12 @@ def _assert_schema(database: SqliteDatabase) -> None:
 
 
 def _assert_code_redemption(service, database, rewards) -> None:
+    assert normalize_grant_code("vip-666") == "VIP666"
+    try:
+        normalize_grant_code("VIP66")
+        raise AssertionError("少于六位的兑换码必须拒绝")
+    except ValueError:
+        pass
     campaign = GrantCampaign(
         "campaign.public-code",
         1,
@@ -178,6 +187,44 @@ def _assert_code_redemption(service, database, rewards) -> None:
     rolled_back_id = code_entitlement_id(campaign.id, exhausted_command.id, "account-a")
     with database.unit_of_work(write=False) as uow:
         assert GrantRepository().load_entitlement(uow, rolled_back_id) is None
+
+
+def _assert_missing_claim_scope_is_initialized(service, rewards) -> None:
+    campaign = GrantCampaign(
+        "campaign.six-digit-code",
+        1,
+        "issuer.operations",
+        "source.grant_code",
+        "offer.six_digit_code",
+        1,
+        GrantRedemptionPolicy.PER_ACCOUNT,
+        1,
+        None,
+        TIME - timedelta(minutes=1),
+        TIME + timedelta(days=1),
+    )
+    service.create_campaign(campaign, created_at=TIME)
+    service.register_code(
+        "credential.six-digit-code",
+        campaign.id,
+        "VIP666",
+        issued_at=TIME,
+    )
+    current = rewards.load_snapshot(KEYS, claim_scope_id="account-a")
+    legacy = replace(current, claims=RewardClaimState("account-legacy"))
+    before = current.ledger.accounts["wallet-a"].balance
+    result = service.redeem_code(
+        GrantRedemptionCommand("redeem-six-digit", campaign.id, "account-legacy"),
+        "vip-666",
+        _currency_bundle(legacy, 7),
+        KEYS,
+        context=_context(2_005),
+    )
+    assert result.ok and result.value, result.failure
+    loaded = rewards.load_snapshot(KEYS, claim_scope_id="account-legacy")
+    assert loaded.claims.revision == 1
+    assert loaded.ledger.accounts["wallet-a"].balance == before + 7
+    assert service.find_account_redemption(campaign.id, "account-legacy") == result.value.receipt
 
 
 def _assert_activity_and_atomic_failure(service, database, rewards) -> None:

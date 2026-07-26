@@ -297,7 +297,7 @@ async def confirm_purchase(message: str, result: CharacterOverviewResult) -> Non
         if quoted.quote is None or quoted.quote.id != parts[1]:
             await send_game_reply(
                 _failure(
-                    "购买报价已经变化，请重新确认",
+                    "购买报价已经变化，请重新查看挂单",
                     Action("market.buy.restart", "重新报价", f"购买 {parts[0]}"),
                 )
             )

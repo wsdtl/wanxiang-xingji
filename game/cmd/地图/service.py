@@ -202,7 +202,7 @@ def _location_detail(
                     f"map.travel.{binding.anchor_id}",
                     "前往",
                     intent.command(),
-                    behavior="send",
+                    behavior="callback",
                 ),
             )
         )

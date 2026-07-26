@@ -143,7 +143,7 @@ def render_preview(document: dict[str, object]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>万象行纪 · 正式战报预览</title>
-  <link rel="stylesheet" href="../../static/battle-report/style.css?v=17">
+  <link rel="stylesheet" href="../../static/battle-report/style.css?v=18">
 </head>
 <body data-mode="compact">
   <main class="report-shell" id="reportRoot" aria-live="polite">
@@ -153,7 +153,7 @@ def render_preview(document: dict[str, object]) -> str:
     </section>
   </main>
   <script id="battleReportPreviewData" type="application/json">{payload}</script>
-  <script type="module" src="../../static/battle-report/app.js?v=17"></script>
+  <script type="module" src="../../static/battle-report/app.js?v=18"></script>
 </body>
 </html>
 """

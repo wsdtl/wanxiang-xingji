@@ -9,7 +9,7 @@ from launch import C, Scheduler, config, logger
 
 @Scheduler._sync(
     "interval",
-    hours=1,
+    minutes=30,
     id="game_data_lifecycle_cleanup",
     max_instances=1,
     coalesce=True,

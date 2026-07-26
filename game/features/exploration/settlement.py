@@ -1,10 +1,15 @@
 """持续探险批次的跨领域原子结算。"""
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import sha256
 
 from game.content.catalog import CHARACTER_LEVEL_PROGRESSION_ID
+from game.content.catalog.character import (
+    AUTO_HEALTH_TRIGGER_RATIO,
+    AUTO_SPIRIT_TRIGGER_RATIO,
+    REST_FULL_RECOVERY_SECONDS,
+)
 from game.features.errors import StalePreparationError
 from game.core.gameplay import (
     HEALTH_CURRENT,
@@ -24,11 +29,13 @@ from game.core.gameplay import (
     Ruleset,
     SeededRandomSource,
     WeaponState,
+    WorldState,
 )
 from game.rules.character import (
     CHARACTER_SETTINGS_AGGREGATE,
     CharacterSettingsState,
     CharacterWorldState,
+    MULTIVERSE_WORLD_STATE_ID,
     PRIMARY_LEDGER_ID,
 )
 from game.rules.companion import CompanionRosterState
@@ -42,6 +49,7 @@ from game.rules.exploration import (
     ExplorationBatchResult,
     ExplorationRewardKind,
     ExplorationRewardReference,
+    ExplorationRestReason,
     ExplorationBattleSimulator,
     ExplorationState,
     ExplorationStatus,
@@ -119,6 +127,12 @@ class _PreparedBatchLimit:
     state: ExplorationState
 
 
+@dataclass(frozen=True)
+class _PreparedStop:
+    state: ExplorationState
+    reason: ExplorationStopReason
+
+
 _STALE_BATCH = object()
 
 
@@ -138,6 +152,7 @@ class ExplorationSettlementService:
         storage: ExplorationStorageKinds,
         reward_keys_factory,
         companion_growth,
+        rest,
         settlement_observer=None,
     ) -> None:
         self.database = database
@@ -149,6 +164,7 @@ class ExplorationSettlementService:
         self.storage = storage
         self.reward_keys_factory = reward_keys_factory
         self.companion_growth = companion_growth
+        self.rest = rest
         self.settlement_observer = settlement_observer
         catalog = content.catalog
         encounters = EnemyEncounterGenerator(
@@ -194,23 +210,34 @@ class ExplorationSettlementService:
         logical_time: datetime,
         limit: int = MAX_DISCOVERABLE_EXPLORATIONS,
     ) -> int:
-        with self.database.unit_of_work(write=False) as uow:
-            states = self.snapshots.list(
-                uow,
-                EXPLORATION_AGGREGATE,
-                ExplorationState,
-                limit=limit,
-            )
         settled = 0
-        for state in states:
-            if state.status is not ExplorationStatus.RUNNING or state.next_batch_at > logical_time:
-                continue
-            result = self.settle_due(
-                state.character_id,
-                logical_time=logical_time,
-                limit=MAX_CATCH_UP_BATCHES,
-            )
-            settled += len(result.batches)
+        after_id: str | None = None
+        while True:
+            with self.database.unit_of_work(write=False) as uow:
+                states = self.snapshots.list(
+                    uow,
+                    EXPLORATION_AGGREGATE,
+                    ExplorationState,
+                    limit=limit,
+                    after_id=after_id,
+                )
+            if not states:
+                break
+            for state in states:
+                if (
+                    state.status is not ExplorationStatus.RUNNING
+                    or state.next_batch_at > logical_time
+                ):
+                    continue
+                result = self.settle_due(
+                    state.character_id,
+                    logical_time=logical_time,
+                    limit=MAX_CATCH_UP_BATCHES,
+                )
+                settled += len(result.batches)
+            after_id = states[-1].character_id
+            if len(states) < limit:
+                break
         return settled
 
     def load_state(self, character_id: str) -> ExplorationState | None:
@@ -232,11 +259,17 @@ class ExplorationSettlementService:
             prepared = self._prepare_next(character_id, logical_time=logical_time)
             if prepared is None:
                 return None
-            if isinstance(prepared, _PreparedBatchLimit):
-                result = self._commit_batch_limit(
+            if isinstance(prepared, (_PreparedBatchLimit, _PreparedStop)):
+                reason = (
+                    ExplorationStopReason.BATCH_LIMIT
+                    if isinstance(prepared, _PreparedBatchLimit)
+                    else prepared.reason
+                )
+                result = self._commit_stop(
                     character_id,
                     prepared.state,
                     logical_time,
+                    reason,
                 )
             else:
                 result = self._commit_prepared_batch(character_id, prepared)
@@ -249,7 +282,7 @@ class ExplorationSettlementService:
         character_id: str,
         *,
         logical_time: datetime,
-    ) -> _PreparedBatch | _PreparedBatchLimit | None:
+    ) -> _PreparedBatch | _PreparedBatchLimit | _PreparedStop | None:
         with self.database.unit_of_work(write=False) as uow:
             state = self.snapshots.load(
                 uow, EXPLORATION_AGGREGATE, character_id, ExplorationState
@@ -263,6 +296,8 @@ class ExplorationSettlementService:
             if state.batch_index >= MAX_EXPLORATION_BATCHES:
                 return _PreparedBatchLimit(state)
             inputs = self._load_batch_inputs(uow, state, character_id)
+            if not self._location_valid(uow, state, inputs.character_world):
+                return _PreparedStop(state, ExplorationStopReason.INVALID_LOCATION)
         batch_index = state.batch_index + 1
         context = _context(
             f"{state.session_id}:batch:{batch_index}",
@@ -282,7 +317,11 @@ class ExplorationSettlementService:
             provisional_state = record_batch(
                 state,
                 provisional_result,
-                stop_reason=self._stop_reason(simulation, batch_index),
+                stop_reason=self._stop_reason(
+                    simulation,
+                    batch_index,
+                    inputs.settings,
+                ),
             )
             report = self.battle_reports.prepare_capture(
                 build_exploration_battle_report(
@@ -303,11 +342,12 @@ class ExplorationSettlementService:
             )
         return _PreparedBatch(inputs, simulation, context, report)
 
-    def _commit_batch_limit(
+    def _commit_stop(
         self,
         character_id: str,
         expected: ExplorationState,
         logical_time: datetime,
+        reason: ExplorationStopReason,
     ):
         with self.database.unit_of_work() as uow:
             current = self.snapshots.load(
@@ -320,7 +360,7 @@ class ExplorationSettlementService:
                 return _STALE_BATCH
             stopped = stop_exploration(
                 current,
-                ExplorationStopReason.BATCH_LIMIT,
+                reason,
                 logical_time=logical_time,
             )
             self.snapshots.update(
@@ -356,6 +396,16 @@ class ExplorationSettlementService:
             current_inputs = self._load_batch_inputs(uow, state, character_id)
             if not self._same_batch_inputs(inputs, current_inputs):
                 return _STALE_BATCH
+            if not self._location_valid(uow, state, current_inputs.character_world):
+                self._stop_for_reason(
+                    uow,
+                    state,
+                    character_id,
+                    resolved_at,
+                    ExplorationStopReason.INVALID_LOCATION,
+                )
+                uow.commit()
+                return None
             rewards = self._settle_rewards_in_uow(
                 uow,
                 current_inputs,
@@ -386,10 +436,28 @@ class ExplorationSettlementService:
                 simulation,
                 result,
             )
+            stop_reason = self._stop_reason(
+                simulation,
+                batch_index,
+                current_inputs.settings,
+            )
+            rest_reason = self._rest_reason(
+                simulation,
+                after_battle,
+                current_inputs.settings,
+            )
+            if stop_reason is not None:
+                rest_reason = None
             next_state = record_batch(
                 state,
                 result,
-                stop_reason=self._stop_reason(simulation, batch_index),
+                stop_reason=stop_reason,
+                rest_reason=rest_reason,
+                rest_completes_at=(
+                    resolved_at + timedelta(seconds=REST_FULL_RECOVERY_SECONDS)
+                    if rest_reason is not None
+                    else None
+                ),
             )
             self.snapshots.update(
                 uow,
@@ -399,6 +467,8 @@ class ExplorationSettlementService:
                 next_state,
                 resolved_at,
             )
+            if next_state.status is ExplorationStatus.RESTING:
+                next_state = self.rest.start_in_uow(uow, next_state)
             if prepared.report is not None:
                 self.battle_reports.capture_prepared_in_uow(
                     uow,
@@ -440,12 +510,44 @@ class ExplorationSettlementService:
     def _stop_reason(
         simulation: _BatchSimulation,
         batch_index: int,
+        settings: CharacterSettingsState,
     ) -> ExplorationStopReason | None:
-        if simulation.plan.encounter is not None and not simulation.victory:
-            return ExplorationStopReason.DEFEATED
         if batch_index >= MAX_EXPLORATION_BATCHES:
             return ExplorationStopReason.BATCH_LIMIT
+        defeated = (
+            simulation.plan.encounter is not None
+            and not simulation.victory
+            and not simulation.draw
+        )
+        if defeated and not settings.auto_rest:
+            return ExplorationStopReason.DEFEATED
         return None
+
+    @staticmethod
+    def _rest_reason(
+        simulation: _BatchSimulation,
+        character: CharacterState,
+        settings: CharacterSettingsState,
+    ) -> ExplorationRestReason | None:
+        if not settings.auto_rest:
+            return None
+        if (
+            simulation.plan.encounter is not None
+            and not simulation.victory
+            and not simulation.draw
+        ):
+            return ExplorationRestReason.DEFEATED
+        health_low = (
+            simulation.health_maximum > 0
+            and character.resources[HEALTH_CURRENT] / simulation.health_maximum
+            < AUTO_HEALTH_TRIGGER_RATIO
+        )
+        spirit_low = (
+            simulation.spirit_maximum > 0
+            and character.resources[SPIRIT_CURRENT] / simulation.spirit_maximum
+            < AUTO_SPIRIT_TRIGGER_RATIO
+        )
+        return ExplorationRestReason.LOW_RESOURCES if health_low or spirit_low else None
 
     @staticmethod
     def _batch_result(
@@ -749,7 +851,13 @@ class ExplorationSettlementService:
                 inputs.state.next_batch_at,
             )
         medicines_used = ()
-        if simulation.victory and inputs.settings.auto_use_medicine:
+        defeated_without_rest = (
+            simulation.plan.encounter is not None
+            and not simulation.victory
+            and not simulation.draw
+            and not inputs.settings.auto_rest
+        )
+        if inputs.settings.auto_use_medicine and not defeated_without_rest:
             after_battle, medicines_used = self.medicine.apply(
                 uow,
                 after_battle,
@@ -805,9 +913,25 @@ class ExplorationSettlementService:
         character_id: str,
         resolved_at: datetime,
     ) -> None:
+        self._stop_for_reason(
+            uow,
+            state,
+            character_id,
+            resolved_at,
+            ExplorationStopReason.CAPACITY_FULL,
+        )
+
+    def _stop_for_reason(
+        self,
+        uow,
+        state: ExplorationState,
+        character_id: str,
+        resolved_at: datetime,
+        reason: ExplorationStopReason,
+    ) -> None:
         stopped = stop_exploration(
             state,
-            ExplorationStopReason.CAPACITY_FULL,
+            reason,
             logical_time=resolved_at,
         )
         self.snapshots.update(
@@ -817,6 +941,38 @@ class ExplorationSettlementService:
             state,
             stopped,
             resolved_at,
+        )
+
+    def _location_valid(
+        self,
+        uow,
+        state: ExplorationState,
+        character_world: CharacterWorldState,
+    ) -> bool:
+        world = self.snapshots.require(
+            uow,
+            self.storage.world,
+            MULTIVERSE_WORLD_STATE_ID,
+            WorldState,
+        )
+        presence = next(
+            (
+                value
+                for value in world.presences.values()
+                if value.owner_id == state.character_id
+            ),
+            None,
+        )
+        if presence is None:
+            return False
+        resolved = self.content.worlds.resolve_position(
+            character_world.world_id,
+            presence.position,
+            function_id="location.function.exploration",
+        )
+        return (
+            resolved is not None
+            and resolved.binding.content_ref == state.region_id
         )
 
     def _weapon_revisions(self, uow, loadout: LoadoutState) -> dict[str, int]:

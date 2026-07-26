@@ -526,9 +526,9 @@ def _gear_actions(asset: ItemInstance, overview: CharacterOverview) -> list[Acti
         None,
     )
     if slot_id is not None:
-        equip_action = Action("item.unequip", "卸下", f"卸下 {slot_id}", behavior="fill")
+        equip_action = Action("item.unequip", "卸下", f"卸下 {slot_id}")
     else:
-        equip_action = Action("item.equip", "装备", f"装备 {reference}", behavior="fill")
+        equip_action = Action("item.equip", "装备", f"装备 {reference}")
     protected = overview.inventory.is_protected(asset.id)
     actions = [
         equip_action,
@@ -537,7 +537,7 @@ def _gear_actions(asset: ItemInstance, overview: CharacterOverview) -> list[Acti
             "item.unprotect" if protected else "item.protect",
             "取消珍藏" if protected else "珍藏",
             f"取消珍藏 {reference}" if protected else f"珍藏 {reference}",
-            behavior="send",
+            behavior="callback",
             style="secondary",
         ),
     ]
@@ -555,7 +555,7 @@ def _gear_actions(asset: ItemInstance, overview: CharacterOverview) -> list[Acti
                 "item.recycle",
                 "回收",
                 f"回收 {reference}",
-                behavior="send",
+                behavior="callback",
                 style="secondary",
             )
         )

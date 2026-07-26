@@ -81,6 +81,12 @@ def _start_message(result, view) -> DocumentMessage:
             .action(current_action_action())
             .build()
         )
+    if result.status == "exploration_managed":
+        return (
+            builder.line("当前由探险自动休整接管")
+            .action(Action("rest.stop_exploration", "停止探险", "停止探险"))
+            .build()
+        )
     return builder.line(result.failure_message or "休息没有开始").build()
 
 
@@ -91,6 +97,12 @@ def _stop_message(result, view) -> DocumentMessage:
         return builder.line("当前没有正在进行的休息").build()
     if result.status == "failed":
         return builder.line(result.failure_message or "休息没有结束").build()
+    if result.status == "exploration_managed":
+        return (
+            builder.line("当前由探险自动休整接管")
+            .action(Action("rest.stop_exploration", "停止探险", "停止探险"))
+            .build()
+        )
     builder.row(
         (f"恢复{_resource_name(view, HEALTH_CURRENT)}", _number(result.recovered_health)),
         (f"恢复{_resource_name(view, SPIRIT_CURRENT)}", _number(result.recovered_spirit)),

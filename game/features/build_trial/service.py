@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from game.content.catalog.character import CHARACTER_LEVEL_PROGRESSION_ID
 from game.core.gameplay import (
     CharacterState,
     InscriptionPreference,
@@ -185,17 +186,19 @@ class BuildTrialFeature:
                     team_label="试炼者一方",
                 )
             )
-        for index, entity_id in enumerate(outcome.enemy_entity_ids, start=1):
+        level = character.progressions[CHARACTER_LEVEL_PROGRESSION_ID].level
+        enemies = self.battles.enemy_instances(mode, level)
+        for index, enemy in enumerate(enemies, start=1):
             name = (
                 mode.target_name
                 if mode.target_count == 1
                 else f"{mode.target_name}{index}号"
             )
             combatants.append(
-                self.battle_reports.builder.world_actor(
-                    entity_id,
-                    name,
+                self.battle_reports.builder.enemy(
+                    enemy,
                     character_world.world_id,
+                    name,
                     team_id="trial_target",
                     team_label="试炼目标",
                     unit_kind="trial_target",

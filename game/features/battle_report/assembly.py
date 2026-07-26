@@ -166,30 +166,39 @@ class BattleReportBuilder:
         *,
         team_id: str,
         team_label: str,
+        unit_kind: str = "enemy",
     ) -> BattleCombatantSpec:
         """敌人只按自身来源世界解释，不读取任何玩家所在世界。"""
 
         view = self.world_views.require(source_world_id)
         definition = self.content.catalog.enemies.require(enemy.definition_id)
         rank = self.content.catalog.enemies.ranks.require(enemy.rank_id)
+        empty = ContributionSpec()
         mechanisms = [
             (f"{label}·固有能力", definition.base_contribution),
-            (view.projector.name(rank.id), rank.contribution),
-            *(
-                (
-                    view.projector.name(behavior_id),
-                    self.content.catalog.enemies.behaviors.require(
-                        behavior_id
-                    ).contribution,
-                )
-                for behavior_id in enemy.behavior_ids
+            (
+                view.projector.name(rank.id)
+                if rank.contribution != empty
+                else "",
+                rank.contribution,
             ),
         ]
+        for behavior_id in enemy.behavior_ids:
+            behavior = self.content.catalog.enemies.behaviors.require(behavior_id)
+            mechanisms.append(
+                (
+                    (
+                        view.projector.name(behavior_id)
+                        if behavior.contribution != empty
+                        else ""
+                    ),
+                    behavior.contribution,
+                )
+            )
         overrides = {
             f"enemy.source_{index}": BattleReportTerm(name)
-            for index, (name, contribution) in enumerate(
-                value for value in mechanisms if value[1] != ContributionSpec()
-            )
+            for index, (name, contribution) in enumerate(mechanisms)
+            if contribution != empty
         }
         for phase in enemy.phase_loadouts:
             overrides[str(phase.id)] = BattleReportTerm(f"{label}·阶段能力")
@@ -198,7 +207,7 @@ class BattleReportBuilder:
             label=label,
             team_id=team_id,
             team_label=team_label,
-            unit_kind="enemy",
+            unit_kind=unit_kind,
             projection_kind="enemy_world",
             world_id=source_world_id,
             overrides=overrides,
@@ -214,7 +223,7 @@ class BattleReportBuilder:
         team_label: str,
         unit_kind: str,
     ) -> BattleCombatantSpec:
-        """用于灾厄和试炼目标等没有普通 EnemyInstance 的世界来源单位。"""
+        """用于没有正式 EnemyInstance 的合成世界来源单位。"""
 
         return self._skin_spec(
             entity_id=entity_id,
@@ -494,14 +503,21 @@ def _source_graph(
 ) -> dict[str, str]:
     entity_ids = {value.entity_id for value in specs}
     owners = {value.entity_id: value.entity_id for value in specs}
+    ambiguous: set[str] = set()
 
     def register(source_id: str, owner_id: str) -> None:
         source = str(source_id or "").strip()
         if not source:
             return
+        if source in ambiguous:
+            return
         previous = owners.get(source)
         if previous is not None and previous != owner_id:
-            raise ValueError(f"战报来源 {source} 同时归属于多个参战者")
+            if source in entity_ids:
+                raise ValueError(f"战报实体来源 {source} 不能归属于其他参战者")
+            owners.pop(source)
+            ambiguous.add(source)
+            return
         owners[source] = owner_id
 
     for spec in specs:
@@ -512,7 +528,7 @@ def _source_graph(
             for effect in entity.active_effects:
                 if effect.source_id in entity_ids:
                     register(effect.source_id, effect.source_id)
-                elif effect.source_id not in owners:
+                else:
                     register(effect.source_id, entity_id)
     return owners
 

@@ -247,9 +247,9 @@ async def _assert_rest_window_and_exploration(
         logical_time=started_at + timedelta(seconds=121),
     )
     assert second.status == "stopped"
-    assert 0.5 < second.progress_ratio < 0.53
-    assert second.recovered_health < 2
-    assert second.recovered_spirit < 2
+    assert 0.55 < second.progress_ratio < 0.57
+    assert second.recovered_health < 4
+    assert second.recovered_spirit < 5
 
     region = services.content.exploration_regions.definitions()[0]
     moved = services.world_travel.move(
@@ -301,11 +301,11 @@ async def _assert_rest_window_and_exploration(
     )
     assert final_rest.status == "started"
     assert services.rest.settle_all_due(
-        logical_time=final_started_at + timedelta(minutes=30)
+        logical_time=final_started_at + timedelta(minutes=10)
     ) == 1
     completed = services.rest.view(
         character_id,
-        logical_time=final_started_at + timedelta(minutes=30),
+        logical_time=final_started_at + timedelta(minutes=10),
     )
     assert completed.status == "idle"
     assert completed.character is not None

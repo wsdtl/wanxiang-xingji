@@ -29,7 +29,7 @@ def build_test_actions() -> tuple[Action, ...]:
     return (
         Action("callback", "回调", f"{COMMAND} 回调", behavior="callback", visited_label="已点 回调"),
         Action("send", "即发", f"{COMMAND} 即发", behavior="send", visited_label="已点 即发"),
-        Action("fill", "回填", f"{COMMAND} 回填", behavior="fill", style="secondary"),
+        Action("fill", "回填", f"{COMMAND} 回填 ", behavior="fill", style="secondary"),
         Action("reply", "引用", f"{COMMAND} 引用", behavior="send", style="secondary", reply=True),
         Action("markdown", "Markdown", f"{COMMAND} Markdown", behavior="send"),
         Action("image", "图片", f"{COMMAND} 图片", behavior="send"),

@@ -4,10 +4,13 @@ import {
   renderFacts,
   renderSnapshotParticipant,
   safeToken,
-} from "./ui.js?v=17";
+} from "./ui.js?v=18";
+
+const ACTOR_PALETTE_SIZE = 16;
 
 export function renderCompactTimeline(segment, ui) {
   const mode = ui.modes[0];
+  const actorVisuals = buildActorVisualMap(segment.combatants);
   const section = node("section", "mode-panel compact-panel");
   section.dataset.mode = mode.id;
   section.append(renderTimelineHeading(mode.label));
@@ -21,7 +24,7 @@ export function renderCompactTimeline(segment, ui) {
       timeline.append(node("div", "round-heading", entry.round_label));
       previousRound = entry.round_label;
     }
-    timeline.append(renderCompactEntry(entry, ui));
+    timeline.append(renderCompactEntry(entry, ui, actorVisuals));
   });
   section.append(timeline);
   return section;
@@ -54,6 +57,7 @@ export function renderDetailedTimeline(segment, filter, ui) {
 }
 
 export function renderDetailedTimelineEntries(segment, filter, ui) {
+  const actorVisuals = buildActorVisualMap(segment.combatants);
   const timeline = node("div", "timeline detailed-timeline region-update");
   const entries = segment.timeline.filter(
     (entry) => entry.events.some((event) => matchesFilter(event, filter, ui)),
@@ -61,8 +65,19 @@ export function renderDetailedTimelineEntries(segment, filter, ui) {
   if (!entries.length) {
     timeline.append(node("p", "empty-state", ui.text.empty_filter));
   }
-  entries.forEach((entry) => timeline.append(renderDetailedEntry(entry, filter, ui)));
+  entries.forEach((entry) => timeline.append(renderDetailedEntry(entry, filter, ui, actorVisuals)));
   return timeline;
+}
+
+export function buildActorVisualMap(combatants = []) {
+  const actors = new Map();
+  combatants.forEach((combatant, index) => {
+    actors.set(combatant.key, {
+      color: String(index % ACTOR_PALETTE_SIZE),
+      number: index + 1,
+    });
+  });
+  return actors;
 }
 
 export function renderRawDataAccess(segment, ui) {
@@ -78,24 +93,24 @@ export function renderRawDataAccess(segment, ui) {
   return details;
 }
 
-function renderCompactEntry(entry, ui) {
+function renderCompactEntry(entry, ui, actorVisuals) {
   const primaryEvents = entry.events.filter((event) => event.compact_visible);
   const secondaryEvents = entry.events.filter((event) => !event.compact_visible);
   const article = node("article", `action-card tone-${safeToken(entry.tone)}`);
   article.append(node("div", "action-head", [node("div", "action-title", entry.title)]));
   if (primaryEvents.length) {
     const events = node("ol", "event-list compact-event-list");
-    primaryEvents.forEach((event) => events.append(renderEvent(event, false, ui)));
+    primaryEvents.forEach((event) => events.append(renderEvent(event, false, ui, actorVisuals)));
     article.append(events);
   }
   if (secondaryEvents.length) {
-    article.append(renderEventGroup(ui.text.process_group_label, secondaryEvents, ui));
+    article.append(renderEventGroup(ui.text.process_group_label, secondaryEvents, ui, actorVisuals));
   }
   article.append(renderComparison(entry.comparison, ui));
   return article;
 }
 
-function renderDetailedEntry(entry, filter, ui) {
+function renderDetailedEntry(entry, filter, ui, actorVisuals) {
   const article = node("article", `action-card detailed-action tone-${safeToken(entry.tone)}`);
   article.append(
     node("div", "action-head", [
@@ -109,19 +124,19 @@ function renderDetailedEntry(entry, filter, ui) {
   const eventList = node("ol", "event-list");
   entry.events
     .filter((event) => matchesFilter(event, filter, ui))
-    .forEach((event) => eventList.append(renderEvent(event, true, ui)));
+    .forEach((event) => eventList.append(renderEvent(event, true, ui, actorVisuals)));
   article.append(eventList);
   article.append(renderComparison(entry.comparison, ui));
   return article;
 }
 
-function renderEvent(event, includeFacts, ui) {
+function renderEvent(event, includeFacts, ui, actorVisuals) {
   const item = node("li", "event");
   item.dataset.tone = event.tone || "neutral";
   item.dataset.category = event.category || "";
   item.append(
     node("div", "event-heading", [
-      node("span", `event-marker tone-${safeToken(event.category)}`, ""),
+      renderEventMarker(event, actorVisuals),
       includeFacts ? node("span", "event-label", event.label) : null,
       node("span", "event-text", event.text),
     ]),
@@ -144,11 +159,31 @@ function renderEvent(event, includeFacts, ui) {
   return item;
 }
 
-function renderEventGroup(title, events, ui) {
+function renderEventMarker(event, actorVisuals) {
+  const sourceKey = event.source?.key || "";
+  const actorColor = event.category === "system"
+    ? "system"
+    : actorVisuals.get(sourceKey)?.color || "system";
+  const marker = node(
+    "span",
+    `event-marker actor-${actorColor}`,
+    "",
+  );
+  marker.dataset.actorKey = actorColor === "system" ? "system" : sourceKey;
+  marker.dataset.actorColor = actorColor;
+  marker.dataset.eventCategory = event.category || "";
+  marker.title = actorColor === "system"
+    ? event.label
+    : `${event.source?.label || sourceKey} · ${event.label}`;
+  marker.setAttribute("aria-hidden", "true");
+  return marker;
+}
+
+function renderEventGroup(title, events, ui, actorVisuals) {
   const details = node("details", "event-group");
   details.append(node("summary", "", `${title} · ${events.length}`));
   const list = node("ol", "event-list");
-  events.forEach((event) => list.append(renderEvent(event, false, ui)));
+  events.forEach((event) => list.append(renderEvent(event, false, ui, actorVisuals)));
   details.append(list);
   return details;
 }

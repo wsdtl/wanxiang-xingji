@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from typing import Mapping
+
 from game.core.gameplay import (
+    AttributeResolver,
     CharacterContribution,
     CharacterProjection,
     CharacterProjector,
@@ -10,6 +14,8 @@ from game.core.gameplay import (
     EquipmentContributionProvider,
     InventoryState,
     LoadoutState,
+    ResourceDefinition,
+    RuleEntity,
     TagSet,
     WeaponContributionProvider,
     equipment_state_from_instance,
@@ -65,4 +71,23 @@ class PlayerCombatProjector:
         )
 
 
-__all__ = ["PlayerCombatProjector"]
+def fully_restored_entity(
+    entity: RuleEntity,
+    resources: Mapping[str, ResourceDefinition],
+    attributes: AttributeResolver,
+) -> RuleEntity:
+    """返回战斗资源按当前投影上限填满的实体副本。"""
+
+    snapshot = entity.snapshot(attributes)
+    restored = {}
+    for resource_id, definition in resources.items():
+        if definition.maximum_attribute is not None:
+            restored[resource_id] = snapshot.value(definition.maximum_attribute)
+        elif definition.fixed_maximum is not None:
+            restored[resource_id] = definition.fixed_maximum
+        else:
+            restored[resource_id] = definition.minimum
+    return replace(entity, resources=restored)
+
+
+__all__ = ["PlayerCombatProjector", "fully_restored_entity"]

@@ -26,6 +26,7 @@ def main() -> None:
     _assert_header_rules()
     _assert_qq_translation(message)
     _assert_strict_structure()
+    _assert_action_behavior_contract()
     _assert_icon_registration()
     asyncio.run(_assert_local_translation(message))
     asyncio.run(_assert_public_manager_rejects_native_payload())
@@ -47,7 +48,7 @@ def _sample_message():
             (
                 Action("view", "查看", "查看 示例物品", behavior="send"),
                 Action("fill", "回填", "查看 ", behavior="fill", style="secondary"),
-                Action("callback", "回调", "测试 回调", behavior="callback"),
+                Action("callback", "回调", "测试 回调"),
             )
         )
         .build()
@@ -136,6 +137,25 @@ def _assert_strict_structure() -> None:
         raise AssertionError("未知 icon key 必须被拒绝")
     except ValueError as exc:
         assert "未知消息图标分类" in str(exc)
+    for invalid_index in (0, "party-invite:internal-id"):
+        try:
+            M.document().section("测试", icon="test").item(invalid_index, "正文")
+            raise AssertionError("列表编号不能暴露内部业务标识")
+        except ValueError as exc:
+            assert "正整数" in str(exc)
+
+
+def _assert_action_behavior_contract() -> None:
+    try:
+        Action("callback-prefix", "错误回调", "查看 ", behavior="callback")
+        raise AssertionError("callback 动作必须拒绝待补充命令")
+    except ValueError:
+        pass
+
+    assert Action("callback-default", "立即查看", "查看 地图").behavior == "callback"
+    assert Action("fill-prefix", "填写目标", "查看 ", behavior="fill").behavior == "fill"
+    assert Action("fill-seed", "填写数量", "使用 I1", behavior="fill").behavior == "fill"
+    assert Action("native-send", "原生命令", "查看 地图", behavior="send").behavior == "send"
 
 
 def _assert_icon_registration() -> None:

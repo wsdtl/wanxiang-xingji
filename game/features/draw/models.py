@@ -10,7 +10,7 @@ from typing import Mapping
 from game.core.gameplay import DrawReceipt
 
 
-DRAW_HISTORY_LIMIT = 100
+DRAW_HISTORY_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -18,12 +18,25 @@ class DrawHistoryRecord:
     operation_id: str
     receipt: DrawReceipt
     created_at: datetime
+    tickets_spent: int | None = None
+    currency_spent: int | None = None
 
     def __post_init__(self) -> None:
         if not self.operation_id.strip():
             raise ValueError("抽奖记录缺少操作身份")
         if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
             raise ValueError("抽奖记录时间必须包含时区")
+        if (self.tickets_spent is None) != (self.currency_spent is None):
+            raise ValueError("抽奖记录支付信息不完整")
+        if self.tickets_spent is None:
+            return
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (self.tickets_spent, self.currency_spent)
+        ):
+            raise ValueError("抽奖记录支付数量必须是非负整数")
+        if self.tickets_spent > self.receipt.rolls:
+            raise ValueError("抽奖记录消耗的抽奖签超过抽取次数")
 
 
 @dataclass(frozen=True)
@@ -58,11 +71,15 @@ class DrawOperationResult:
     pity_count: int = 0
     failure_message: str = ""
     guarantee_counts: Mapping[str, int] = field(default_factory=dict)
+    currency_available: int = 0
+    currency_required: int = 0
 
     def __post_init__(self) -> None:
         counts = {str(key): int(value) for key, value in self.guarantee_counts.items()}
         if any(value < 0 for value in counts.values()):
             raise ValueError("抽奖保底计数不能小于 0")
+        if self.ticket_count < 0 or self.currency_available < 0 or self.currency_required < 0:
+            raise ValueError("抽奖资源数量不能小于 0")
         object.__setattr__(self, "guarantee_counts", MappingProxyType(counts))
 
 
@@ -72,11 +89,14 @@ class DrawPoolView:
     pity_count: int
     records: tuple[DrawHistoryRecord, ...] = ()
     guarantee_counts: Mapping[str, int] = field(default_factory=dict)
+    currency_balance: int = 0
 
     def __post_init__(self) -> None:
         counts = {str(key): int(value) for key, value in self.guarantee_counts.items()}
         if any(value < 0 for value in counts.values()):
             raise ValueError("抽奖保底计数不能小于 0")
+        if self.ticket_count < 0 or self.currency_balance < 0:
+            raise ValueError("抽奖资源数量不能小于 0")
         object.__setattr__(self, "records", tuple(self.records))
         object.__setattr__(self, "guarantee_counts", MappingProxyType(counts))
 

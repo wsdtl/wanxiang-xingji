@@ -13,7 +13,6 @@ from game.core.gameplay import (
     CharacterState,
     InscriptionPreference,
     CreateSocialRequest,
-    HEALTH_CURRENT,
     InventoryState,
     LoadoutState,
     ResolveSocialRequest,
@@ -204,15 +203,6 @@ class SparringFeature:
             existing = self.battle_reports.reference_in_uow(uow, report_id)
             if request.status is SocialRequestStatus.ACCEPTED and existing is not None:
                 return SparringResult("replayed", request, existing, challenger, defender)
-            if (
-                challenger.resources[HEALTH_CURRENT] <= 0
-                or defender.resources[HEALTH_CURRENT] <= 0
-            ):
-                return SparringResult(
-                    "unavailable",
-                    request,
-                    failure_message="双方血气必须大于 0 才能切磋",
-                )
             if request.status is not SocialRequestStatus.PENDING:
                 return SparringResult("terminal", request=request, failure_message="切磋请求已经处理")
             challenger_bundle = self._snapshot_bundle(uow, challenger.id)

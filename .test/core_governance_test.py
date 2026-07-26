@@ -266,11 +266,11 @@ def _assert_item_use_components_are_wired() -> None:
         assert route.handler.__module__ == "game.cmd.物品.use"
         action = route.action("I1")
         assert action.data
-        assert action.behavior in {"fill", "send"}
+        assert action.behavior in {"fill", "callback"}
 
     delegated = ITEM_USE_ROUTE_REGISTRY["item_component.use_dimension_shift"]
     delegated_action = delegated.action("I1")
-    assert (delegated_action.data, delegated_action.behavior) == ("跃迁", "send")
+    assert (delegated_action.data, delegated_action.behavior) == ("跃迁", "callback")
     for route in ITEM_USE_ROUTES:
         if route is delegated:
             continue

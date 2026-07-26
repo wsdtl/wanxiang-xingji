@@ -116,13 +116,13 @@ def _request_message(result) -> DocumentMessage:
             "party-sparring.accept",
             "接受",
             f"接受组队切磋 {result.request.id}",
-            behavior="send",
+            behavior="callback",
         ),
         Action(
             "party-sparring.reject",
             "拒绝",
             f"拒绝组队切磋 {result.request.id}",
-            behavior="send",
+            behavior="callback",
             style="secondary",
         ),
     )).build()

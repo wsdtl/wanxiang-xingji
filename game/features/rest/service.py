@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+from math import ceil
 
 from game.content.catalog.character import (
     REST_ACTION_ID,
@@ -116,107 +117,173 @@ class RestFeature:
             exploration = self.snapshots.load(
                 uow, self.storage.exploration, character_id, ExplorationState
             )
-            if exploration is not None and exploration.status is ExplorationStatus.RUNNING:
+            if exploration is not None and exploration.active:
                 return RestOperationResult("exploring")
-            character = self.snapshots.require(
-                uow, self.storage.character, character_id, CharacterState
-            )
-            inventory = self.snapshots.require(
-                uow, self.storage.inventory, character_id, InventoryState
-            )
-            loadout = self.snapshots.require(
-                uow, self.storage.loadout, character_id, LoadoutState
-            )
-            health_maximum, spirit_maximum = self._maximums(character, inventory, loadout)
-            if (
-                character.resources[HEALTH_CURRENT] >= health_maximum
-                and character.resources[SPIRIT_CURRENT] >= spirit_maximum
-            ):
-                return RestOperationResult(
-                    "full",
-                    character,
-                    health_maximum=health_maximum,
-                    spirit_maximum=spirit_maximum,
-                )
-            action_state = self.snapshots.load(
-                uow, self.storage.action, character_id, ActionState
-            )
-            if action_state is None:
-                action_state = ActionState(character_id)
-                self.snapshots.insert(
-                    uow,
-                    self.storage.action,
-                    character_id,
-                    action_state,
-                    logical_time,
-                )
-            running_rest = self._running_rest(action_state)
-            if running_rest is not None:
-                return RestOperationResult("already_running", character, running_rest)
-            if action_state.running(ActionSlotKind.MAIN):
-                return RestOperationResult("main_action_occupied", character)
-
-            previous_recovery = self.snapshots.load(
-                uow, REST_RECOVERY_AGGREGATE, character_id, RestRecoveryState
-            )
-            recovery = self._prepare_window(character, previous_recovery)
-            if previous_recovery is None:
-                self.snapshots.insert(
-                    uow,
-                    REST_RECOVERY_AGGREGATE,
-                    character_id,
-                    recovery,
-                    logical_time,
-                )
-            elif recovery != previous_recovery:
-                self.snapshots.update(
-                    uow,
-                    REST_RECOVERY_AGGREGATE,
-                    character_id,
-                    previous_recovery,
-                    recovery,
-                    logical_time,
-                )
-
-            action_id = f"rest:{character_id}:{logical_time.isoformat()}"
-            transaction = ActionTransaction(
+            result = self._start_in_uow(
+                uow,
                 operation_id,
                 character_id,
-                action_state.revision,
-                (
-                    StartAction(
-                        action_id,
-                        REST_ACTION_ID,
-                        ActionSnapshot(
-                            logical_time,
-                            REST_RULESET_VERSION,
-                            self.content.report.content_fingerprint,
-                            operation_id,
-                            character.revision,
-                            loadout.revision,
-                            {"recovery_revision": recovery.revision},
-                        ),
-                    ),
-                ),
+                logical_time=logical_time,
+                context=context,
             )
-            outcome = self.actions.execute_in_uow(uow, transaction, context=context)
-            if outcome.failure or outcome.value is None:
+            if result.status == "started":
+                uow.commit()
+            return result
+
+    def start_exploration_in_uow(
+        self,
+        uow,
+        operation_id: str,
+        character_id: str,
+        session_id: str,
+        *,
+        logical_time: datetime,
+    ) -> RestOperationResult:
+        exploration = self.snapshots.require(
+            uow, self.storage.exploration, character_id, ExplorationState
+        )
+        if (
+            exploration.status is not ExplorationStatus.RESTING
+            or exploration.session_id != session_id
+        ):
+            raise ValueError("探险休息端口与当前会话不一致")
+        return self._start_in_uow(
+            uow,
+            operation_id,
+            character_id,
+            logical_time=logical_time,
+            context=game_operation_context(operation_id, logical_time=logical_time),
+            exploration_session_id=session_id,
+            allow_full=True,
+        )
+
+    def _start_in_uow(
+        self,
+        uow,
+        operation_id: str,
+        character_id: str,
+        *,
+        logical_time: datetime,
+        context,
+        exploration_session_id: str | None = None,
+        allow_full: bool = False,
+    ) -> RestOperationResult:
+        character = self.snapshots.require(
+            uow, self.storage.character, character_id, CharacterState
+        )
+        inventory = self.snapshots.require(
+            uow, self.storage.inventory, character_id, InventoryState
+        )
+        loadout = self.snapshots.require(
+            uow, self.storage.loadout, character_id, LoadoutState
+        )
+        health_maximum, spirit_maximum = self._maximums(character, inventory, loadout)
+        if not allow_full and (
+            character.resources[HEALTH_CURRENT] >= health_maximum
+            and character.resources[SPIRIT_CURRENT] >= spirit_maximum
+        ):
+            return RestOperationResult(
+                "full",
+                character,
+                health_maximum=health_maximum,
+                spirit_maximum=spirit_maximum,
+            )
+        action_state = self.snapshots.load(
+            uow, self.storage.action, character_id, ActionState
+        )
+        if action_state is None:
+            action_state = ActionState(character_id)
+            self.snapshots.insert(
+                uow,
+                self.storage.action,
+                character_id,
+                action_state,
+                logical_time,
+            )
+        running_rest = self._running_rest(action_state)
+        if running_rest is not None:
+            if (
+                exploration_session_id is not None
+                and self._exploration_session_id(running_rest) != exploration_session_id
+            ):
                 return RestOperationResult(
                     "failed",
                     character,
-                    recovery=recovery,
-                    failure_message=(outcome.failure.message if outcome.failure else "休息没有开始"),
+                    running_rest,
+                    failure_message="当前休息不属于这次探险",
                 )
-            uow.commit()
-            return RestOperationResult(
-                "started",
-                character,
-                outcome.value.execution.transitions[-1],
+            return RestOperationResult("already_running", character, running_rest)
+        if action_state.running(ActionSlotKind.MAIN):
+            return RestOperationResult("main_action_occupied", character)
+
+        previous_recovery = self.snapshots.load(
+            uow, REST_RECOVERY_AGGREGATE, character_id, RestRecoveryState
+        )
+        recovery = self._prepare_window(character, previous_recovery)
+        if previous_recovery is None:
+            self.snapshots.insert(
+                uow,
+                REST_RECOVERY_AGGREGATE,
+                character_id,
                 recovery,
-                health_maximum,
-                spirit_maximum,
-                progress_ratio=_recovery_ratio(recovery.accumulated_seconds),
+                logical_time,
             )
+        elif recovery != previous_recovery:
+            self.snapshots.update(
+                uow,
+                REST_RECOVERY_AGGREGATE,
+                character_id,
+                previous_recovery,
+                recovery,
+                logical_time,
+            )
+
+        values = {"recovery_revision": recovery.revision}
+        if exploration_session_id is not None:
+            values["exploration_session_id"] = exploration_session_id
+        action_id = f"rest:{character_id}:{logical_time.isoformat()}"
+        remaining_seconds = max(
+            0,
+            ceil(REST_FULL_RECOVERY_SECONDS - recovery.accumulated_seconds),
+        )
+        transaction = ActionTransaction(
+            operation_id,
+            character_id,
+            action_state.revision,
+            (
+                StartAction(
+                    action_id,
+                    REST_ACTION_ID,
+                    ActionSnapshot(
+                        logical_time,
+                        REST_RULESET_VERSION,
+                        self.content.report.content_fingerprint,
+                        operation_id,
+                        character.revision,
+                        loadout.revision,
+                        values,
+                    ),
+                    duration_seconds=remaining_seconds,
+                ),
+            ),
+        )
+        outcome = self.actions.execute_in_uow(uow, transaction, context=context)
+        if outcome.failure or outcome.value is None:
+            return RestOperationResult(
+                "failed",
+                character,
+                recovery=recovery,
+                failure_message=(outcome.failure.message if outcome.failure else "休息没有开始"),
+            )
+        return RestOperationResult(
+            "started",
+            character,
+            outcome.value.execution.transitions[-1],
+            recovery,
+            health_maximum,
+            spirit_maximum,
+            progress_ratio=_recovery_ratio(recovery.accumulated_seconds),
+        )
 
     def stop(
         self,
@@ -225,7 +292,6 @@ class RestFeature:
         *,
         logical_time: datetime,
     ) -> RestOperationResult:
-        context = game_operation_context(operation_id, logical_time=logical_time)
         with self.database.unit_of_work() as uow:
             action_state = self.snapshots.load(
                 uow, self.storage.action, character_id, ActionState
@@ -233,101 +299,118 @@ class RestFeature:
             action = self._running_rest(action_state)
             if action is None or action_state is None:
                 return RestOperationResult("not_running")
-            character = self.snapshots.require(
-                uow, self.storage.character, character_id, CharacterState
-            )
-            inventory = self.snapshots.require(
-                uow, self.storage.inventory, character_id, InventoryState
-            )
-            loadout = self.snapshots.require(
-                uow, self.storage.loadout, character_id, LoadoutState
-            )
-            recovery = self.snapshots.require(
-                uow, REST_RECOVERY_AGGREGATE, character_id, RestRecoveryState
-            )
-            health_maximum, spirit_maximum = self._maximums(character, inventory, loadout)
-            accumulated = recovery.accumulated_seconds + self._elapsed(action, logical_time)
-            ratio = _recovery_ratio(accumulated)
-            health_target = recovery.baseline_health + max(
-                0.0, health_maximum - recovery.baseline_health
-            ) * ratio
-            spirit_target = recovery.baseline_spirit + max(
-                0.0, spirit_maximum - recovery.baseline_spirit
-            ) * ratio
-            health_current = character.resources[HEALTH_CURRENT]
-            spirit_current = character.resources[SPIRIT_CURRENT]
-            health_gain = max(0.0, min(health_maximum, health_target) - health_current)
-            spirit_gain = max(0.0, min(spirit_maximum, spirit_target) - spirit_current)
-            updated_character = character
-            character_events = ()
-            operations = tuple(
-                ChangeCharacterResource(resource_id, amount, "source.rest", action.id)
-                for resource_id, amount in (
-                    (HEALTH_CURRENT, health_gain),
-                    (SPIRIT_CURRENT, spirit_gain),
-                )
-                if amount > 0
-            )
-            if operations:
-                character_outcome = self.character_engine.execute(
-                    CharacterTransaction(
-                        f"{operation_id}:character",
-                        character_id,
-                        character.revision,
-                        "character.rest",
-                        operations,
-                    ),
-                    state=character,
-                    context=context,
-                )
-                if character_outcome.failure or character_outcome.value is None:
-                    return RestOperationResult(
-                        "failed",
-                        character,
-                        action,
-                        recovery,
-                        health_maximum,
-                        spirit_maximum,
-                        failure_message=(
-                            character_outcome.failure.message
-                            if character_outcome.failure
-                            else "休息恢复没有完成"
-                        ),
-                    )
-                updated_character = character_outcome.value.state
-                character_events = character_outcome.value.events
-                self.snapshots.update(
-                    uow,
-                    self.storage.character,
-                    character_id,
-                    character,
-                    updated_character,
-                    logical_time,
-                )
-
-            due = logical_time >= action.completes_at
-            action_operations = (
-                (
-                    CompleteAction(
-                        action.id,
-                        ActionResult("outcome.rest_completed", logical_time),
-                    ),
-                    ClaimAction(action.id),
-                )
-                if due
-                else (CancelAction(action.id),)
-            )
-            action_outcome = self.actions.execute_in_uow(
+            if self._exploration_session_id(action) is not None:
+                return RestOperationResult("exploration_managed", action=action)
+            result = self._stop_in_uow(
                 uow,
-                ActionTransaction(
-                    operation_id,
+                operation_id,
+                character_id,
+                action_state,
+                action,
+                logical_time=logical_time,
+            )
+            if result.status not in {"failed", "not_running"}:
+                uow.commit()
+            return result
+
+    def exploration_action_in_uow(self, uow, character_id: str, session_id: str):
+        action_state = self.snapshots.load(
+            uow, self.storage.action, character_id, ActionState
+        )
+        action = self._running_rest(action_state)
+        if action is None:
+            return None
+        return action if self._exploration_session_id(action) == session_id else None
+
+    def stop_exploration_in_uow(
+        self,
+        uow,
+        operation_id: str,
+        character_id: str,
+        session_id: str,
+        *,
+        logical_time: datetime,
+    ) -> RestOperationResult:
+        action_state = self.snapshots.load(
+            uow, self.storage.action, character_id, ActionState
+        )
+        action = self._running_rest(action_state)
+        if action is None or action_state is None:
+            return RestOperationResult("not_running")
+        if self._exploration_session_id(action) != session_id:
+            return RestOperationResult(
+                "failed",
+                action=action,
+                failure_message="当前休息不属于这次探险",
+            )
+        return self._stop_in_uow(
+            uow,
+            operation_id,
+            character_id,
+            action_state,
+            action,
+            logical_time=logical_time,
+        )
+
+    def _stop_in_uow(
+        self,
+        uow,
+        operation_id: str,
+        character_id: str,
+        action_state: ActionState,
+        action,
+        *,
+        logical_time: datetime,
+    ) -> RestOperationResult:
+        context = game_operation_context(operation_id, logical_time=logical_time)
+        character = self.snapshots.require(
+            uow, self.storage.character, character_id, CharacterState
+        )
+        inventory = self.snapshots.require(
+            uow, self.storage.inventory, character_id, InventoryState
+        )
+        loadout = self.snapshots.require(
+            uow, self.storage.loadout, character_id, LoadoutState
+        )
+        recovery = self.snapshots.require(
+            uow, REST_RECOVERY_AGGREGATE, character_id, RestRecoveryState
+        )
+        health_maximum, spirit_maximum = self._maximums(character, inventory, loadout)
+        accumulated = recovery.accumulated_seconds + self._elapsed(action, logical_time)
+        ratio = _recovery_ratio(accumulated)
+        health_target = recovery.baseline_health + max(
+            0.0, health_maximum - recovery.baseline_health
+        ) * ratio
+        spirit_target = recovery.baseline_spirit + max(
+            0.0, spirit_maximum - recovery.baseline_spirit
+        ) * ratio
+        health_current = character.resources[HEALTH_CURRENT]
+        spirit_current = character.resources[SPIRIT_CURRENT]
+        health_gain = max(0.0, min(health_maximum, health_target) - health_current)
+        spirit_gain = max(0.0, min(spirit_maximum, spirit_target) - spirit_current)
+        updated_character = character
+        character_events = ()
+        operations = tuple(
+            ChangeCharacterResource(resource_id, amount, "source.rest", action.id)
+            for resource_id, amount in (
+                (HEALTH_CURRENT, health_gain),
+                (SPIRIT_CURRENT, spirit_gain),
+            )
+            if amount > 0
+        )
+        if operations:
+            character_outcome = self.character_engine.execute(
+                CharacterTransaction(
+                    f"{operation_id}:character",
                     character_id,
-                    action_state.revision,
-                    action_operations,
+                    character.revision,
+                    "character.rest",
+                    operations,
                 ),
+                state=character,
                 context=context,
             )
-            if action_outcome.failure or action_outcome.value is None:
+            if character_outcome.failure or character_outcome.value is None:
                 return RestOperationResult(
                     "failed",
                     character,
@@ -336,44 +419,101 @@ class RestFeature:
                     health_maximum,
                     spirit_maximum,
                     failure_message=(
-                        action_outcome.failure.message
-                        if action_outcome.failure
-                        else "休息行动没有结束"
+                        character_outcome.failure.message
+                        if character_outcome.failure
+                        else "休息恢复没有完成"
                     ),
                 )
-
-            timestamp = logical_time.isoformat()
-            sequence = len(action_outcome.value.execution.events)
-            for offset, event in enumerate(character_events):
-                uow.append_fact(
-                    operation_id,
-                    sequence + offset,
-                    event.kind,
-                    self.snapshots.codec.dumps(event),
-                    timestamp,
-                )
-
-            fully_recovered = (
-                updated_character.resources[HEALTH_CURRENT] >= health_maximum
-                and updated_character.resources[SPIRIT_CURRENT] >= spirit_maximum
+            updated_character = character_outcome.value.state
+            character_events = character_outcome.value.events
+            self.snapshots.update(
+                uow,
+                self.storage.character,
+                character_id,
+                character,
+                updated_character,
+                logical_time,
             )
-            if fully_recovered or ratio >= 1.0:
-                current_recovery = RestRecoveryState(
-                    character_id,
-                    updated_character.resources[HEALTH_CURRENT],
-                    updated_character.resources[SPIRIT_CURRENT],
-                    updated_character.resources[HEALTH_CURRENT],
-                    updated_character.resources[SPIRIT_CURRENT],
-                    revision=recovery.revision + 1,
-                )
-            else:
-                current_recovery = replace(
-                    recovery,
-                    last_health=updated_character.resources[HEALTH_CURRENT],
-                    last_spirit=updated_character.resources[SPIRIT_CURRENT],
-                    accumulated_seconds=accumulated,
-                    revision=recovery.revision + 1,
-                )
+
+        due = logical_time >= action.completes_at
+        action_operations = (
+            (
+                CompleteAction(
+                    action.id,
+                    ActionResult("outcome.rest_completed", logical_time),
+                ),
+                ClaimAction(action.id),
+            )
+            if due
+            else (CancelAction(action.id),)
+        )
+        action_outcome = self.actions.execute_in_uow(
+            uow,
+            ActionTransaction(
+                operation_id,
+                character_id,
+                action_state.revision,
+                action_operations,
+            ),
+            context=context,
+        )
+        if action_outcome.failure or action_outcome.value is None:
+            return RestOperationResult(
+                "failed",
+                character,
+                action,
+                recovery,
+                health_maximum,
+                spirit_maximum,
+                failure_message=(
+                    action_outcome.failure.message
+                    if action_outcome.failure
+                    else "休息行动没有结束"
+                ),
+            )
+
+        timestamp = logical_time.isoformat()
+        sequence = len(action_outcome.value.execution.events)
+        for offset, event in enumerate(character_events):
+            uow.append_fact(
+                operation_id,
+                sequence + offset,
+                event.kind,
+                self.snapshots.codec.dumps(event),
+                timestamp,
+            )
+
+        fully_recovered = (
+            updated_character.resources[HEALTH_CURRENT] >= health_maximum
+            and updated_character.resources[SPIRIT_CURRENT] >= spirit_maximum
+        )
+        if fully_recovered or ratio >= 1.0:
+            current_recovery = RestRecoveryState(
+                character_id,
+                updated_character.resources[HEALTH_CURRENT],
+                updated_character.resources[SPIRIT_CURRENT],
+                updated_character.resources[HEALTH_CURRENT],
+                updated_character.resources[SPIRIT_CURRENT],
+                revision=recovery.revision + 1,
+            )
+        else:
+            current_recovery = replace(
+                recovery,
+                last_health=updated_character.resources[HEALTH_CURRENT],
+                last_spirit=updated_character.resources[SPIRIT_CURRENT],
+                accumulated_seconds=accumulated,
+                revision=recovery.revision + 1,
+            )
+        if fully_recovered or ratio >= 1.0:
+            deleted = self.snapshots.delete(
+                uow,
+                REST_RECOVERY_AGGREGATE,
+                character_id,
+                expected_revision=recovery.revision,
+            )
+            if not deleted:
+                raise RuntimeError("休息恢复窗口已经变化")
+        else:
             self.snapshots.update(
                 uow,
                 REST_RECOVERY_AGGREGATE,
@@ -382,36 +522,50 @@ class RestFeature:
                 current_recovery,
                 logical_time,
             )
-            uow.commit()
-            return RestOperationResult(
-                "completed" if due or fully_recovered else "stopped",
-                updated_character,
-                action,
-                current_recovery,
-                health_maximum,
-                spirit_maximum,
-                health_gain,
-                spirit_gain,
-                ratio,
-            )
+        return RestOperationResult(
+            "completed" if due or fully_recovered else "stopped",
+            updated_character,
+            action,
+            current_recovery,
+            health_maximum,
+            spirit_maximum,
+            health_gain,
+            spirit_gain,
+            ratio,
+        )
 
     def settle_all_due(self, *, logical_time: datetime, limit: int = 1_000) -> int:
-        with self.database.unit_of_work(write=False) as uow:
-            states = self.snapshots.list(
-                uow, self.storage.action, ActionState, limit=limit
-            )
         settled = 0
-        for state in states:
-            action = self._running_rest(state)
-            if action is None or action.completes_at > logical_time:
-                continue
-            result = self.stop(
-                f"rest:auto_complete:{action.id}",
-                state.owner_id,
-                logical_time=logical_time,
-            )
-            if result.status == "completed":
-                settled += 1
+        after_id: str | None = None
+        while True:
+            with self.database.unit_of_work(write=False) as uow:
+                states = self.snapshots.list(
+                    uow,
+                    self.storage.action,
+                    ActionState,
+                    limit=limit,
+                    after_id=after_id,
+                )
+            if not states:
+                break
+            for state in states:
+                action = self._running_rest(state)
+                if (
+                    action is None
+                    or self._exploration_session_id(action) is not None
+                    or action.completes_at > logical_time
+                ):
+                    continue
+                result = self.stop(
+                    f"rest:auto_complete:{action.id}",
+                    state.owner_id,
+                    logical_time=logical_time,
+                )
+                if result.status == "completed":
+                    settled += 1
+            after_id = states[-1].owner_id
+            if len(states) < limit:
+                break
         return settled
 
     def _maximums(self, character, inventory, loadout) -> tuple[float, float]:
@@ -464,6 +618,11 @@ class RestFeature:
             ),
             None,
         )
+
+    @staticmethod
+    def _exploration_session_id(action) -> str | None:
+        value = action.snapshot.values.get("exploration_session_id")
+        return str(value) if isinstance(value, str) and value else None
 
     @staticmethod
     def _elapsed(action, logical_time: datetime) -> float:

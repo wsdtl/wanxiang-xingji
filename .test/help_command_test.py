@@ -61,7 +61,8 @@ async def _main() -> None:
         "开始探险",
         "帮助 行动",
     ]
-    assert all(button["action"]["enter"] for button in buttons)
+    assert all(button["action"]["type"] == 1 for button in buttons)
+    assert all("enter" not in button["action"] for button in buttons)
 
     with TemporaryDirectory() as directory:
         services = build_game_services(

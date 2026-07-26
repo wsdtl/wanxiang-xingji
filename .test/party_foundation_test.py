@@ -58,6 +58,7 @@ INVITATION_KIND = "social_request.party_invitation"
 def main() -> None:
     _assert_party_rules_and_battle_projection()
     _assert_persistence_and_atomic_invitation()
+    _assert_independent_party_shards_and_membership_guard()
     print("party foundation tests passed")
 
 
@@ -357,6 +358,91 @@ def _assert_persistence_and_atomic_invitation() -> None:
         assert social_after == social_before
         assert party_after == party_before
         assert social_after.requests[second.id].status is SocialRequestStatus.PENDING
+
+
+def _assert_independent_party_shards_and_membership_guard() -> None:
+    engine = PartyEngine(_catalog(PartyDefinition("party_type.pair", 2)))
+    with TemporaryDirectory() as directory:
+        database = SqliteDatabase(Path(directory) / "party-shards.db")
+        database.initialize()
+        parties = PersistedPartyService(database, engine)
+        created_a = parties.execute(
+            "party-a",
+            PartyCommand(
+                "create-party-a",
+                "leader-a",
+                0,
+                CreateParty("party-a", "party_type.pair"),
+            ),
+            context=_context(101, seconds=101),
+        ).unwrap()
+        created_b = parties.execute(
+            "party-b",
+            PartyCommand(
+                "create-party-b",
+                "leader-b",
+                0,
+                CreateParty("party-b", "party_type.pair"),
+            ),
+            context=_context(102, seconds=102),
+        ).unwrap()
+        before_b = parties.load("party-b")
+        ready_a = parties.execute(
+            "party-a",
+            PartyCommand(
+                "ready-party-a",
+                "leader-a",
+                created_a.execution.state.revision,
+                SetPartyMemberReady("party-a", True),
+            ),
+            context=_context(103, seconds=103),
+        ).unwrap()
+        assert ready_a.execution.state.revision == 2
+        assert parties.load("party-b") == before_b
+        ready_b = parties.execute(
+            "party-b",
+            PartyCommand(
+                "ready-party-b",
+                "leader-b",
+                created_b.execution.state.revision,
+                SetPartyMemberReady("party-b", True),
+            ),
+            context=_context(104, seconds=104),
+        ).unwrap()
+        assert ready_b.execution.state.revision == 2
+
+        duplicate = parties.execute(
+            "party-c",
+            PartyCommand(
+                "duplicate-party-membership",
+                "leader-a",
+                0,
+                CreateParty("party-c", "party_type.pair"),
+            ),
+            context=_context(105, seconds=105),
+        )
+        assert duplicate.failure
+        assert duplicate.failure.code == "party.exclusive_membership"
+        assert parties.load("party-c") is None
+
+        disband_time = TIME + timedelta(seconds=106)
+        disbanded = parties.execute(
+            "party-a",
+            PartyCommand(
+                "disband-party-a",
+                "leader-a",
+                ready_a.execution.state.revision,
+                DisbandParty("party-a"),
+            ),
+            context=_context(106, seconds=106),
+        ).unwrap()
+        assert disbanded.execution.party.status is PartyStatus.DISBANDED
+        with database.unit_of_work(write=False) as uow:
+            row = uow.require_snapshot("snapshot.party", "party-a")
+            assert row.expires_at == (disband_time + timedelta(hours=6)).isoformat()
+            assert uow.load_party_membership("leader-a") is None
+            membership_b = uow.load_party_membership("leader-b")
+            assert membership_b is not None and membership_b.party_id == "party-b"
 
 
 if __name__ == "__main__":

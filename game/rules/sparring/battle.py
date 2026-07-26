@@ -1,4 +1,4 @@
-"""把两个真实角色的当前配装接入公共自动战斗核心。"""
+"""把两个真实角色的当前配装按满资源状态接入公共自动战斗核心。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from game.core.gameplay import (
     TagSet,
 )
 from game.core.gameplay.character import CharacterState
+from game.rules.combat import fully_restored_entity
 from game.rules.companion import CompanionRosterState, PlayerBattleLineupProjector
 
 
@@ -39,7 +40,7 @@ class SparringBattleOutcome:
 
 
 class SparringBattleSimulator:
-    """切磋只读取双方快照，不修改角色血气、灵力、装备或背包。"""
+    """切磋以满资源投影双方当前配装，不修改任何持久状态。"""
 
     def __init__(self, content, player_lineup: PlayerBattleLineupProjector) -> None:
         self.content = content
@@ -85,6 +86,12 @@ class SparringBattleSimulator:
             context_tags=TagSet.of("scene.sparring", "side.defender"),
         )
         entities = {**challenger_lineup.entities, **defender_lineup.entities}
+        for character_id in (challenger.id, defender.id):
+            entities[character_id] = fully_restored_entity(
+                entities[character_id],
+                self.content.resources,
+                self.content.enemy_projector.attributes,
+            )
         participants = tuple(
             BattleParticipant(entity_id, "team.challenger", index)
             for index, entity_id in enumerate(challenger_lineup.participant_ids)

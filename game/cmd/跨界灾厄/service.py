@@ -150,7 +150,7 @@ def _status_message(
             "disaster.ranking",
             "排行",
             "灾厄排行",
-            behavior="send",
+            behavior="callback",
             style="secondary",
         )
     ]
@@ -168,7 +168,7 @@ def _status_message(
                 "disaster.challenge",
                 f"讨伐（剩余{remaining}次）",
                 "讨伐灾厄",
-                behavior="send",
+                behavior="callback",
             ),
         )
     return builder.actions(tuple(actions)).build()
@@ -211,7 +211,7 @@ def _challenge_message(result: DimensionalDisasterChallengeResult, projector) ->
                 "disaster.ranking",
                 "排行",
                 "灾厄排行",
-                behavior="send",
+                behavior="callback",
                 style="secondary",
             )
         ]
@@ -226,7 +226,7 @@ def _challenge_message(result: DimensionalDisasterChallengeResult, projector) ->
                     "disaster.challenge",
                     f"再次讨伐（剩余{remaining}次）",
                     "讨伐灾厄",
-                    behavior="send",
+                    behavior="callback",
                 ),
             )
         return builder.actions(tuple(actions)).build()

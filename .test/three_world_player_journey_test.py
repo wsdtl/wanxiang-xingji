@@ -286,7 +286,7 @@ async def _explore_until_progress(
             )
             if gained_experience and gained_drop:
                 break
-            if settled.state is None or settled.state.status is not ExplorationStatus.RUNNING:
+            if settled.state is None or settled.state.status is ExplorationStatus.STOPPED:
                 break
         assert batches, f"{world_id} 第 {attempt} 次探险没有形成结算批次"
         assert "探险" in _content(
@@ -299,7 +299,7 @@ async def _explore_until_progress(
             character.id,
             logical_time=clock[0],
         ).state
-        if state is not None and state.status is ExplorationStatus.RUNNING:
+        if state is not None and state.active:
             assert "停止" in _content(
                 await _dispatch(
                     "停止探险",
@@ -324,7 +324,7 @@ async def _explore_until_progress(
             f"journey-recovery-rest-{index}-{attempt}",
         )
         assert "已经开始休息" in _content(rest)
-        clock[0] += timedelta(minutes=30)
+        clock[0] += timedelta(minutes=10)
         recovered = await _dispatch(
             "结束休息",
             f"journey-recovery-stop-{index}-{attempt}",

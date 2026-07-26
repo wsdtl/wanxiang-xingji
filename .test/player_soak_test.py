@@ -35,6 +35,7 @@ from game.rules.exploration import ExplorationStatus  # noqa: E402
 from game.rules.item import asset_reference  # noqa: E402
 from launch import config  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
+from launch.message_events import subscribe_message_events, unsubscribe_message_events  # noqa: E402
 
 
 TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -78,6 +79,8 @@ async def _main() -> Counter:
         services.database.initialize()
         previous = install_game_services(services)
         stats: Counter = Counter()
+        message_events = []
+        subscribe_message_events(message_events.append)
         try:
             await LocalEventHandler.run()
             characters = {}
@@ -147,7 +150,7 @@ async def _main() -> Counter:
                                 stats["draws"] += 1
                             else:
                                 stats["defeats"] += 1
-                        if settled.state is None or settled.state.status is not ExplorationStatus.RUNNING:
+                        if settled.state is None or settled.state.status is ExplorationStatus.STOPPED:
                             if settled.state is not None and settled.state.stop_reason is not None:
                                 stats[f"stop_{settled.state.stop_reason.value}"] += 1
                                 stats[
@@ -164,7 +167,7 @@ async def _main() -> Counter:
                         character.id,
                         logical_time=clock[0],
                     ).state
-                    if state is not None and state.status is ExplorationStatus.RUNNING:
+                    if state is not None and state.active:
                         stopped = await _dispatch(
                             client_id,
                             "停止探险",
@@ -205,7 +208,7 @@ async def _main() -> Counter:
                 )
 
             await _spar(services, characters)
-            await _party(services, characters)
+            await _party(services, characters, message_events)
 
             all_instance_ids = []
             for client_id, character in characters.items():
@@ -234,6 +237,7 @@ async def _main() -> Counter:
             stats["players"] = len(characters)
             return stats
         finally:
+            unsubscribe_message_events(message_events.append)
             restore_game_services(previous)
 
 
@@ -302,7 +306,7 @@ async def _spar(services, characters) -> None:
     assert services.characters.load_character(characters[right_client].id) == right_before
 
 
-async def _party(services, characters) -> None:
+async def _party(services, characters, message_events) -> None:
     leader, second, third = (value[0] for value in PERSONAS[:3])
     created = await _dispatch(leader, "创建队伍", "soak-party-create")
     assert "你现在是队长" in _content(created)
@@ -313,11 +317,17 @@ async def _party(services, characters) -> None:
             f"soak-party-invite-{index}",
         )
         assert "发出队伍邀请" in _content(invited)
-        incoming = await _dispatch(member, "组队", f"soak-party-view-{index}")
+        request_id = f"soak-party-view-{index}"
+        await _dispatch(member, "组队", request_id)
+        outgoing = next(
+            event
+            for event in reversed(message_events)
+            if event.direction == "outgoing" and event.request_id == request_id
+        )
         accept = next(
-            action.data
-            for action in incoming.replies[0].message.actions
-            if action.label == "接受"
+            interaction.data
+            for interaction in outgoing.interactions
+            if interaction.kind == "command_link" and interaction.label == "接受"
         )
         joined = await _dispatch(member, accept, f"soak-party-accept-{index}")
         assert "已经加入队伍" in _content(joined)

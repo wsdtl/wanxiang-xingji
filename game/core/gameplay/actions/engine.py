@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Mapping, Protocol
 
 from ..context import RuleContext
@@ -29,10 +30,13 @@ class StartAction:
     action_id: str
     definition_id: StableId
     snapshot: ActionSnapshot
+    duration_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if not self.action_id.strip():
             raise ValueError("StartAction.action_id 不能为空")
+        if self.duration_seconds is not None and self.duration_seconds < 0:
+            raise ValueError("StartAction.duration_seconds 不能小于 0")
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,11 @@ class ActionEngine:
             )
             if occupied >= self.commission_slots:
                 self._fail("action.commission_slots_full", "委托行动槽已经占满")
+        duration = (
+            definition.duration
+            if operation.duration_seconds is None
+            else timedelta(seconds=operation.duration_seconds)
+        )
         record = ActionRecord(
             operation.action_id,
             definition.id,
@@ -227,7 +236,7 @@ class ActionEngine:
             definition.slot_kind,
             ActionStatus.RUNNING,
             context.logical_time,
-            context.logical_time + definition.duration,
+            context.logical_time + duration,
             operation.snapshot,
         )
         records[record.id] = record

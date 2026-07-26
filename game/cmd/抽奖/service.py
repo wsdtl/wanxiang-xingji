@@ -12,6 +12,7 @@ from game.content import (
     DRAW_BREAKTHROUGH_GUARANTEE_SLOT_ID,
     DRAW_BREAKTHROUGH_PITY_THRESHOLD,
     DRAW_BREAKTHROUGH_WEIGHT,
+    DRAW_CURRENCY_COST_PER_ROLL,
     DRAW_HIGH_WEIGHT,
     DRAW_LOW_WEIGHT,
     DRAW_MID_PITY_THRESHOLD,
@@ -91,6 +92,7 @@ async def pool(current: CurrentCharacterResult) -> None:
         services = current_game_services()
         status = await asyncio.to_thread(services.draw.status, character.id, history_limit=0)
         projector = services.world_view(current.character_world).projector
+        currency_name = projector.name(PRIMARY_CURRENCY_ID)
         high_open = bool(DRAW_CATALOG_CONTENT.special_item_ids)
         low_weight = DRAW_LOW_WEIGHT if high_open else DRAW_LOW_WEIGHT + DRAW_HIGH_WEIGHT
         builder = (
@@ -98,12 +100,15 @@ async def pool(current: CurrentCharacterResult) -> None:
             .section("抽奖奖池", icon="reward")
             .line("每张抽奖签封存一次未定结果，使用后由界门正式显化。")
             .row(
-                ("持有", f"{status.ticket_count} 张"),
+                ("抽奖签", f"{status.ticket_count} 张"),
+                (currency_name, status.currency_balance),
+            )
+            .row(
                 ("珍稀", f"{status.pity_count}/{DRAW_MID_PITY_THRESHOLD}"),
                 ("破境", f"{_breakthrough_pity(status)}/{DRAW_BREAKTHROUGH_PITY_THRESHOLD}"),
             )
-            .line(f"常规 {low_weight / 1000:.0f}% | 金币或基础恢复药")
-            .line(f"珍稀 {DRAW_MID_WEIGHT / 1000:.0f}% | 金币或进阶恢复药")
+            .line(f"常规 {low_weight / 1000:.0f}% | {currency_name}或基础恢复药")
+            .line(f"珍稀 {DRAW_MID_WEIGHT / 1000:.0f}% | {currency_name}或进阶恢复药")
         )
         if high_open:
             names = "、".join(
@@ -120,7 +125,10 @@ async def pool(current: CurrentCharacterResult) -> None:
         builder.note(
             f"每 {DRAW_MID_PITY_THRESHOLD} 抽至少出现一次珍稀或更高档",
             f"连续 {DRAW_BREAKTHROUGH_PITY_THRESHOLD} 抽未获得破境凭证时额外保底 1 枚",
-            f"每次消耗 1 张 {projector.name(DRAW_TICKET_ITEM_ID)}",
+            f"单抽和十连优先消耗{projector.name(DRAW_TICKET_ITEM_ID)}，每缺 1 张支付 "
+            f"{DRAW_CURRENCY_COST_PER_ROLL} {currency_name}",
+            f"十连最多支付 {10 * DRAW_CURRENCY_COST_PER_ROLL} {currency_name}；"
+            f"50 抽全货币为 {50 * DRAW_CURRENCY_COST_PER_ROLL} {currency_name}，不设十连折扣",
         ).actions(_actions())
         await send_game_reply(builder.build())
     except Exception as exc:
@@ -163,12 +171,17 @@ async def history(current: CurrentCharacterResult) -> None:
 
 def _result_message(result: DrawOperationResult, projector, rolls: int) -> DocumentMessage:
     if result.status == "insufficient":
+        currency_name = projector.name(PRIMARY_CURRENCY_ID)
         return (
             M.document()
             .section("抽奖", icon="notice")
             .line(result.failure_message)
-            .field("持有", f"{result.ticket_count} 张")
-            .note("抽奖签由战斗余响凝成，会从探险、组队首领和跨界灾厄中掉落")
+            .row(
+                ("抽奖签", f"{result.ticket_count} 张"),
+                (f"可用{currency_name}", result.currency_available),
+                ("需要", result.currency_required),
+            )
+            .note("本次没有扣除抽奖签、货币，也没有推进保底")
             .action(Action("draw.explore", "前往探险", "探险", style="secondary"))
             .build()
         )
@@ -182,13 +195,15 @@ def _result_message(result: DrawOperationResult, projector, rolls: int) -> Docum
     if animation:
         builder.image(animation, alt="抽奖演出", width=360, height=203)
     builder.section("抽奖·显化结果", icon="reward").row(
-        ("消耗", f"{record.receipt.rolls} 张"),
+        ("消耗", _payment_text(record, projector)),
         ("最高", TIER_LABELS[tier]),
     )
     for name, quantity in _reward_lines(record, projector):
         builder.line(f"获得 {name} x{quantity}")
     builder.row(
-        ("剩余", f"{result.ticket_count} 张"),
+        ("余签", f"{result.ticket_count} 张"),
+        (projector.name(PRIMARY_CURRENCY_ID), result.currency_available),
+    ).row(
         ("珍稀", f"{result.pity_count}/{DRAW_MID_PITY_THRESHOLD}"),
         ("破境", f"{_breakthrough_pity(result)}/{DRAW_BREAKTHROUGH_PITY_THRESHOLD}"),
     ).actions(_actions())
@@ -213,6 +228,17 @@ def _reward_lines(record: DrawHistoryRecord, projector) -> tuple[tuple[str, int]
 def _summary(record: DrawHistoryRecord, projector) -> str:
     lines = _reward_lines(record, projector)
     return "、".join(f"{name} x{quantity}" for name, quantity in lines[:3])
+
+
+def _payment_text(record: DrawHistoryRecord, projector) -> str:
+    if record.tickets_spent is None or record.currency_spent is None:
+        return f"{projector.name(DRAW_TICKET_ITEM_ID)} {record.receipt.rolls} 张"
+    values = []
+    if record.tickets_spent:
+        values.append(f"{projector.name(DRAW_TICKET_ITEM_ID)} {record.tickets_spent} 张")
+    if record.currency_spent:
+        values.append(f"{projector.name(PRIMARY_CURRENCY_ID)} {record.currency_spent}")
+    return " + ".join(values)
 
 
 def _highest_tier(record: DrawHistoryRecord) -> str:
@@ -245,9 +271,9 @@ def _animation_url(rolls: int, tier: str) -> str:
 
 def _actions() -> tuple[Action, ...]:
     return (
-        Action("draw-once", "单抽（1张）", "抽奖", behavior="send"),
-        Action("draw-ten", "十连（10张）", "十连抽奖", behavior="send"),
-        Action("draw-pool", "奖池", "抽奖奖池", behavior="send", style="secondary"),
+        Action("draw-once", "单抽", "抽奖", behavior="callback"),
+        Action("draw-ten", "十连", "十连抽奖", behavior="callback"),
+        Action("draw-pool", "奖池", "抽奖奖池", behavior="callback", style="secondary"),
     )
 
 

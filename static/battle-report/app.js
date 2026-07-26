@@ -1,9 +1,10 @@
 import {
+  buildActorVisualMap,
   renderCompactTimeline,
   renderDetailedTimeline,
   renderDetailedTimelineEntries,
   renderRawDataAccess,
-} from "./timeline.js?v=17";
+} from "./timeline.js?v=18";
 import {
   activateMotion,
   animateRegion,
@@ -16,7 +17,7 @@ import {
   renderStatusGroup,
   replaceRegion,
   safeToken,
-} from "./ui.js?v=17";
+} from "./ui.js?v=18";
 
 const root = document.querySelector("#reportRoot");
 
@@ -159,6 +160,7 @@ function updateSegmentView() {
 function updateSnapshotView() {
   const segment = currentSegment();
   const participants = snapshotParticipants(segment);
+  const actorVisuals = buildActorVisualMap(segment.combatants);
   const disclosure = root.querySelector(".participant-disclosure");
   if (!disclosure) {
     return;
@@ -181,7 +183,7 @@ function updateSnapshotView() {
     node(
       "div",
       "participant-stack region-update",
-      participants.map((participant, index) => renderParticipantSummary(participant, index)),
+      participants.map((participant) => renderParticipantSummary(participant, actorVisuals)),
     ),
   );
   requestAnimationFrame(() => activateMotion(root));
@@ -397,6 +399,7 @@ function renderReportBody(segment) {
 
 function renderSummaryPanel(segment) {
   const participants = snapshotParticipants(segment);
+  const actorVisuals = buildActorVisualMap(segment.combatants);
   const selected = state.report.ui.snapshots.find((item) => item.id === state.snapshot);
   const snapshotSwitch = node(
     "div",
@@ -420,7 +423,7 @@ function renderSummaryPanel(segment) {
       node(
         "div",
         "participant-stack",
-        participants.map((participant, index) => renderParticipantSummary(participant, index)),
+        participants.map((participant) => renderParticipantSummary(participant, actorVisuals)),
       ),
     ]),
   ]);
@@ -432,10 +435,16 @@ function renderSummaryPanel(segment) {
   return node("aside", "summary-panel", disclosure);
 }
 
-function renderParticipantSummary(participant, index) {
+function renderParticipantSummary(participant, actorVisuals) {
+  const actor = actorVisuals.get(participant.key);
+  const actorColor = actor?.color || "system";
+  const actorNumber = actor ? String(actor.number).padStart(2, "0") : "--";
+  const badge = node("span", `participant-index actor-${actorColor}`, actorNumber);
+  badge.dataset.actorKey = participant.key;
+  badge.dataset.actorColor = actorColor;
   return node("article", "participant-summary", [
     node("div", "participant-heading", [
-      node("span", "participant-index", String(index + 1).padStart(2, "0")),
+      badge,
       node("div", "", [node("strong", "", participant.label)]),
     ]),
     ...(participant.gauges || []).map((gauge) => renderGauge(gauge)),

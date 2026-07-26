@@ -223,11 +223,10 @@ class WorldProgressFeature:
                 )
                 for region in regions
             )
-            claim = self.snapshots.require(
+            world_reward_claimed = self.reward_settlement.is_settled_in_uow(
                 uow,
-                self.storage.reward_claim,
                 character_id,
-                RewardClaimState,
+                _world_completion_settlement_id(character_id, world_id),
             )
         maximum = WORLD_PROGRESS_DEFINITION.maximum_points
         return WorldProgressView(
@@ -243,7 +242,7 @@ class WorldProgressFeature:
                 )
                 for region, state in zip(regions, values)
             ),
-            _world_completion_settlement_id(character_id, world_id) in claim.records,
+            world_reward_claimed,
         )
 
     def ranking_view(
@@ -320,11 +319,10 @@ class WorldProgressFeature:
         """从行纪权威快照显式重建可丢弃的实时排名投影。"""
 
         with self.database.unit_of_work() as uow:
-            states = self.snapshots.list(
+            states = self.snapshots.iter_all(
                 uow,
                 self.storage.progress,
                 WorldProgressState,
-                limit=100_000,
             )
             grouped: dict[str, dict[str, object]] = {}
             for state in states:

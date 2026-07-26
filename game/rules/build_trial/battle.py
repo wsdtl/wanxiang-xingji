@@ -66,18 +66,7 @@ class BuildTrialBattleSimulator:
         entities = dict(lineup.entities)
         entities[character.id] = self._fully_restored(entities[character.id])
         level = character.progressions[CHARACTER_LEVEL_PROGRESSION_ID].level
-        enemy_instances = tuple(
-            EnemyInstance(
-                id=f"build-trial-target:{mode.id}:{index}",
-                definition_id=mode.target_definition_id,
-                level=level,
-                rank_id="enemy.rank.build_trial",
-                behavior_ids=(),
-                generation_seed=f"{mode.random_seed}:{index}",
-                content_version=self.content.report.content_fingerprint,
-            )
-            for index in range(1, mode.target_count + 1)
-        )
+        enemy_instances = self.enemy_instances(mode, level)
         enemies = tuple(
             self.content.enemy_projector.project(instance)
             for instance in enemy_instances
@@ -152,6 +141,20 @@ class BuildTrialBattleSimulator:
                 if lineup.companion is not None
                 else None
             ),
+        )
+
+    def enemy_instances(self, mode, level: int) -> tuple[EnemyInstance, ...]:
+        return tuple(
+            EnemyInstance(
+                id=f"build-trial-target:{mode.id}:{index}",
+                definition_id=mode.target_definition_id,
+                level=level,
+                rank_id="enemy.rank.build_trial",
+                behavior_ids=(),
+                generation_seed=f"{mode.random_seed}:{index}",
+                content_version=self.content.report.content_fingerprint,
+            )
+            for index in range(1, mode.target_count + 1)
         )
 
     def _fully_restored(self, entity):

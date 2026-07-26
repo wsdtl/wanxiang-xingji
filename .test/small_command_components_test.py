@@ -70,6 +70,7 @@ def main() -> None:
 async def _main() -> None:
     for command in (
         "自动用药",
+        "自动休整",
         "铭刻",
         "铭刻能力",
         "铭刻原名",
@@ -355,6 +356,15 @@ async def _main() -> None:
             assert "当前状态: _关闭_" in disabled.replies[0].message.content
             assert {action.label for action in disabled.replies[0].message.actions} == {"开启"}
 
+            auto_rest = await dispatch(
+                client_id="small-command-player",
+                raw_message="自动休整",
+                sender_name="试剑客",
+                event_id="small-command-auto-rest-status",
+            )
+            assert "当前状态: _开启_" in auto_rest.replies[0].message.content
+            assert {action.label for action in auto_rest.replies[0].message.actions} == {"关闭"}
+
             inscription = await dispatch(
                 client_id="small-command-player",
                 raw_message="铭刻",
@@ -460,7 +470,7 @@ async def _main() -> None:
                 if value.label == "回收"
             )
             assert recycle.data == f"回收 E{candidate_ref}"
-            assert recycle.behavior == "send"
+            assert recycle.behavior == "callback"
 
             unequipped = await dispatch(
                 client_id="small-command-player",

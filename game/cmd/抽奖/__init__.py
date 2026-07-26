@@ -13,9 +13,9 @@ from . import service
     cmd="抽奖",
     help=HelpSpec(
         category="活动",
-        summary="消耗一张抽奖签显化一次未定结果",
+        summary="优先消耗一张抽奖签，不足时支付 250 主货币",
         usage=("抽奖",),
-        side_effect="成功后消耗一张抽奖签",
+        side_effect="成功后优先消耗一张抽奖签，不足时扣除 250 主货币",
         order=10,
     ),
 )
@@ -27,9 +27,9 @@ async def draw_once(current=Depends(current_character)) -> None:
     cmd="十连抽奖",
     help=HelpSpec(
         category="活动",
-        summary="一次消耗十张抽奖签连续显化",
+        summary="优先消耗现有抽奖签，缺口按每抽 250 主货币补足",
         usage=("十连抽奖",),
-        side_effect="成功后消耗十张抽奖签",
+        side_effect="成功后优先消耗最多十张抽奖签，缺口按每张 250 主货币扣除",
         order=20,
     ),
 )

@@ -79,6 +79,7 @@ def main() -> None:
         ):
             confirmation_callers.add(source_path.relative_to(command_root).as_posix())
     assert confirmation_callers == {"回收/service.py"}
+    _assert_action_command_semantics(command_root)
 
     mixed = (
         Action("secondary.first", "辅助一", "secondary 1", style="secondary"),
@@ -115,6 +116,63 @@ def main() -> None:
         "secondary.second",
     )
     print("command interaction tests passed")
+
+
+def _assert_action_command_semantics(command_root: Path) -> None:
+    violations: list[str] = []
+    for source_path in command_root.rglob("*.py"):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "Action"
+            ):
+                continue
+            behavior = _literal_keyword(node, "behavior") or "callback"
+            if behavior not in {"callback", "send", "fill"}:
+                continue
+            data_node = node.args[2] if len(node.args) >= 3 else _keyword_node(node, "data")
+            trailing_space = _literal_trailing_space(data_node)
+            location = f"{source_path.relative_to(command_root)}:{node.lineno}"
+            if behavior == "send":
+                violations.append(f"{location} send 在群聊不会立即执行，请使用 callback")
+            if behavior == "callback" and trailing_space:
+                violations.append(f"{location} callback 保留了参数空位")
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            action_behavior = _literal_keyword(node, "action_behavior")
+            if action_behavior == "send":
+                location = f"{source_path.relative_to(command_root)}:{node.lineno}"
+                violations.append(f"{location} action_behavior 不能使用 send")
+    assert not violations, "按钮命令语义不一致:\n" + "\n".join(violations)
+
+
+def _literal_keyword(node: ast.Call, name: str) -> str | None:
+    value = _keyword_node(node, name)
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value
+    return None
+
+
+def _keyword_node(node: ast.Call, name: str) -> ast.expr | None:
+    return next((keyword.value for keyword in node.keywords if keyword.arg == name), None)
+
+
+def _literal_trailing_space(node: ast.expr | None) -> bool | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return bool(node.value) and node.value[-1].isspace()
+    if isinstance(node, ast.JoinedStr):
+        if not node.values:
+            return False
+        suffix = node.values[-1]
+        if isinstance(suffix, ast.Constant) and isinstance(suffix.value, str):
+            return bool(suffix.value) and suffix.value[-1].isspace()
+        return False
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _literal_trailing_space(node.right)
+    return None
 
 
 if __name__ == "__main__":

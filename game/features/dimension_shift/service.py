@@ -27,7 +27,7 @@ from game.rules.character import (
     WorldShiftResult,
     shift_world,
 )
-from game.rules.exploration import ExplorationState, ExplorationStatus
+from game.rules.exploration import ExplorationState
 
 from .models import DimensionShiftStorageKinds
 
@@ -80,7 +80,7 @@ class DimensionShiftFeature:
                 and action.running(ActionSlotKind.MAIN)
             ) or (
                 exploration is not None
-                and exploration.status is ExplorationStatus.RUNNING
+                and exploration.active
             ):
                 return WorldShiftResult("main_action_occupied", current)
             inventory = self.snapshots.require(

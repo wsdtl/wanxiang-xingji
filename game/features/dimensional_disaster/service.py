@@ -73,7 +73,7 @@ from game.rules.disaster import (
     record_disaster_challenge,
     roll_draw_ticket_drop,
 )
-from game.rules.exploration import ExplorationState, ExplorationStatus
+from game.rules.exploration import ExplorationState
 from game.rules.encounter import EnemyEncounterGenerator
 from game.rules.battle_report import (
     BattleReportDraft,
@@ -277,7 +277,7 @@ class DimensionalDisasterFeature:
                 return DimensionalDisasterChallengeResult("main_action_occupied", event, activity)
             if (
                 inputs.exploration is not None
-                and inputs.exploration.status is ExplorationStatus.RUNNING
+                and inputs.exploration.active
             ):
                 return DimensionalDisasterChallengeResult("exploring", event, activity)
             if inputs.character.resources[HEALTH_CURRENT] <= 0:
@@ -630,7 +630,6 @@ class DimensionalDisasterFeature:
         logical_time: datetime,
     ) -> BattleReportDraft:
         outcome = "讨伐胜利" if battle.player_victory else "战斗结束"
-        enemy_id = f"enemy:{event.event_id}"
         combatants = [
             self.battle_reports.builder.character(
                 character,
@@ -652,10 +651,10 @@ class DimensionalDisasterFeature:
                 )
             )
         combatants.append(
-            self.battle_reports.builder.world_actor(
-                enemy_id,
-                event.narrative.name,
+            self.battle_reports.builder.enemy(
+                self.battles.enemy_instance(event.combat, event.event_id),
                 event.source_world_id,
+                event.narrative.name,
                 team_id="enemy",
                 team_label="次元灾厄",
                 unit_kind="dimensional_disaster",
@@ -715,12 +714,11 @@ class DimensionalDisasterFeature:
             )
             if existing is not None:
                 return False
-            previous_events = self.snapshots.list(
+            previous_events = tuple(self.snapshots.iter_all(
                 uow,
                 DIMENSIONAL_DISASTER_AGGREGATE,
                 DimensionalDisasterState,
-                limit=1_000,
-            )
+            ))
             recent = tuple(
                 value.definition_id
                 for value in sorted(
@@ -734,12 +732,11 @@ class DimensionalDisasterFeature:
                 source_world_ids=self.playable_world_ids,
                 recent_definition_ids=recent,
             )
-            characters = self.snapshots.list(
+            characters = tuple(self.snapshots.iter_all(
                 uow,
                 self.storage.character,
                 CharacterState,
-                limit=100_000,
-            )
+            ))
             levels = [
                 value.progressions[CHARACTER_LEVEL_PROGRESSION_ID].level
                 for value in characters
@@ -842,12 +839,11 @@ class DimensionalDisasterFeature:
 
     def _settle_due(self, logical_time: datetime) -> int:
         with self.database.unit_of_work(write=False) as uow:
-            events = self.snapshots.list(
+            events = tuple(self.snapshots.iter_all(
                 uow,
                 DIMENSIONAL_DISASTER_AGGREGATE,
                 DimensionalDisasterState,
-                limit=1_000,
-            )
+            ))
         settled = 0
         for event in events:
             if event.status is DimensionalDisasterStatus.CLOSED or event.closes_at > logical_time:
@@ -1129,12 +1125,11 @@ class DimensionalDisasterFeature:
 
     def _latest_state(self) -> DimensionalDisasterState | None:
         with self.database.unit_of_work(write=False) as uow:
-            states = self.snapshots.list(
+            states = tuple(self.snapshots.iter_all(
                 uow,
                 DIMENSIONAL_DISASTER_AGGREGATE,
                 DimensionalDisasterState,
-                limit=1_000,
-            )
+            ))
         return max(states, key=lambda value: value.opens_at) if states else None
 
     def _current_windows(self, logical_time: datetime):

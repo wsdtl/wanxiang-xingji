@@ -4,24 +4,56 @@ from __future__ import annotations
 
 from contextlib import closing, suppress
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import sqlite3
+import zlib
 
 from .errors import (
     AggregateNotFound,
     ConcurrencyConflict,
+    CorruptPersistenceData,
     SchemaVersionError,
     TransactionMismatch,
 )
 
 
-PERSISTENCE_SCHEMA_VERSION = 6
+PERSISTENCE_SCHEMA_VERSION = 8
+PREVIOUS_PERSISTENCE_SCHEMA_VERSION = 7
 SNAPSHOT_CODEC_VERSION = 1
+_RECEIPT_CODEC_HEADER = b"zlib.v1\0"
+
+
+def _encode_receipt_payload(payload: str) -> bytes:
+    if not isinstance(payload, str):
+        raise TypeError("事务回执必须是字符串")
+    return _RECEIPT_CODEC_HEADER + zlib.compress(payload.encode("utf-8"), level=9)
+
+
+def _decode_receipt_payload(payload: object) -> str:
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, memoryview):
+        payload = payload.tobytes()
+    if not isinstance(payload, bytes) or not payload.startswith(_RECEIPT_CODEC_HEADER):
+        raise CorruptPersistenceData("事务回执压缩格式无效")
+    try:
+        return zlib.decompress(payload[len(_RECEIPT_CODEC_HEADER) :]).decode("utf-8")
+    except (UnicodeDecodeError, zlib.error) as exc:
+        raise CorruptPersistenceData("事务回执压缩数据损坏") from exc
 
 _REQUIRED_TABLES = frozenset(
     {
         "persistence_metadata",
         "aggregate_snapshot",
+        "ledger_transaction",
+        "ledger_journal_entry",
+        "reward_claim",
+        "party_membership",
+        "world_presence",
+        "world_reservation",
+        "market_listing",
         "committed_transaction",
         "outbox_event",
         "content_activation",
@@ -58,12 +90,68 @@ _EXPECTED_COLUMNS = {
         ("codec_version", "INTEGER", 0),
         ("payload", "TEXT", 0),
         ("updated_at", "TEXT", 0),
+        ("expires_at", "TEXT", 0),
+    ),
+    "ledger_transaction": (
+        ("ledger_id", "TEXT", 1),
+        ("transaction_id", "TEXT", 2),
+        ("fingerprint", "TEXT", 0),
+        ("resulting_revision", "INTEGER", 0),
+        ("applied_at", "TEXT", 0),
+    ),
+    "ledger_journal_entry": (
+        ("ledger_id", "TEXT", 1),
+        ("entry_id", "TEXT", 2),
+        ("transaction_id", "TEXT", 0),
+        ("currency_id", "TEXT", 0),
+        ("reason", "TEXT", 0),
+        ("actor_id", "TEXT", 0),
+        ("logical_time", "TEXT", 0),
+        ("payload", "TEXT", 0),
+    ),
+    "reward_claim": (
+        ("scope_id", "TEXT", 1),
+        ("settlement_id", "TEXT", 2),
+        ("fingerprint", "TEXT", 0),
+        ("resulting_revision", "INTEGER", 0),
+        ("claimed_at", "TEXT", 0),
+    ),
+    "party_membership": (
+        ("subject_id", "TEXT", 1),
+        ("party_id", "TEXT", 0),
+        ("party_scope_id", "TEXT", 0),
+        ("joined_at", "TEXT", 0),
+    ),
+    "world_presence": (
+        ("world_id", "TEXT", 1),
+        ("presence_id", "TEXT", 2),
+        ("owner_id", "TEXT", 0),
+        ("revision", "INTEGER", 0),
+        ("payload", "TEXT", 0),
+        ("updated_at", "TEXT", 0),
+    ),
+    "world_reservation": (
+        ("world_id", "TEXT", 1),
+        ("reservation_id", "TEXT", 2),
+        ("owner_id", "TEXT", 0),
+        ("expires_at", "TEXT", 0),
+        ("payload", "TEXT", 0),
+        ("updated_at", "TEXT", 0),
+    ),
+    "market_listing": (
+        ("scope_id", "TEXT", 1),
+        ("listing_id", "TEXT", 2),
+        ("number", "INTEGER", 0),
+        ("seller_id", "TEXT", 0),
+        ("expires_at", "TEXT", 0),
+        ("payload", "TEXT", 0),
+        ("updated_at", "TEXT", 0),
     ),
     "committed_transaction": (
         ("transaction_id", "TEXT", 1),
         ("fingerprint", "TEXT", 0),
         ("scope_id", "TEXT", 0),
-        ("receipt_payload", "TEXT", 0),
+        ("receipt_payload", "BLOB", 0),
         ("committed_at", "TEXT", 0),
     ),
     "outbox_event": (
@@ -138,7 +226,6 @@ _EXPECTED_COLUMNS = {
         ("account_id", "TEXT", 0),
         ("conflict_id", "TEXT", 0),
         ("transaction_id", "TEXT", 0),
-        ("receipt_payload", "TEXT", 0),
         ("processed_at", "TEXT", 0),
     ),
     "fact_journal": (
@@ -244,7 +331,6 @@ _EXPECTED_COLUMNS = {
         ("account_id", "TEXT", 0),
         ("settlement_id", "TEXT", 0),
         ("request_fingerprint", "TEXT", 0),
-        ("receipt_payload", "TEXT", 0),
         ("redeemed_at", "TEXT", 0),
     ),
     "migration_manifest": (
@@ -282,6 +368,47 @@ _EXPECTED_COLUMNS = {
     ),
 }
 
+_V7_EXPECTED_COLUMNS = dict(_EXPECTED_COLUMNS)
+_V7_EXPECTED_COLUMNS.update(
+    {
+        "committed_transaction": (
+            ("transaction_id", "TEXT", 1),
+            ("fingerprint", "TEXT", 0),
+            ("scope_id", "TEXT", 0),
+            ("receipt_payload", "TEXT", 0),
+            ("committed_at", "TEXT", 0),
+        ),
+        "reward_claim": (
+            ("scope_id", "TEXT", 1),
+            ("settlement_id", "TEXT", 2),
+            ("fingerprint", "TEXT", 0),
+            ("receipt_payload", "TEXT", 0),
+            ("resulting_revision", "INTEGER", 0),
+            ("claimed_at", "TEXT", 0),
+        ),
+        "account_evidence": (
+            ("evidence_id", "TEXT", 1),
+            ("fingerprint", "TEXT", 0),
+            ("account_id", "TEXT", 0),
+            ("conflict_id", "TEXT", 0),
+            ("transaction_id", "TEXT", 0),
+            ("receipt_payload", "TEXT", 0),
+            ("processed_at", "TEXT", 0),
+        ),
+        "grant_redemption": (
+            ("redemption_id", "TEXT", 1),
+            ("entitlement_id", "TEXT", 0),
+            ("campaign_id", "TEXT", 0),
+            ("credential_id", "TEXT", 0),
+            ("account_id", "TEXT", 0),
+            ("settlement_id", "TEXT", 0),
+            ("request_fingerprint", "TEXT", 0),
+            ("receipt_payload", "TEXT", 0),
+            ("redeemed_at", "TEXT", 0),
+        ),
+    }
+)
+
 _SCHEMA_SQL = """
 CREATE TABLE persistence_metadata (
     key TEXT PRIMARY KEY,
@@ -295,14 +422,116 @@ CREATE TABLE aggregate_snapshot (
     codec_version INTEGER NOT NULL CHECK (codec_version > 0),
     payload TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    expires_at TEXT,
     PRIMARY KEY (aggregate_kind, aggregate_id)
 ) WITHOUT ROWID;
+
+CREATE INDEX aggregate_snapshot_expiry_idx
+ON aggregate_snapshot(expires_at, aggregate_kind, aggregate_id)
+WHERE expires_at IS NOT NULL;
+
+CREATE TABLE ledger_transaction (
+    ledger_id TEXT NOT NULL,
+    transaction_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
+    applied_at TEXT NOT NULL,
+    PRIMARY KEY (ledger_id, transaction_id)
+) WITHOUT ROWID;
+
+CREATE INDEX ledger_transaction_time_idx
+ON ledger_transaction(ledger_id, applied_at, transaction_id);
+
+CREATE TABLE ledger_journal_entry (
+    ledger_id TEXT NOT NULL,
+    entry_id TEXT NOT NULL,
+    transaction_id TEXT NOT NULL,
+    currency_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    logical_time TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (ledger_id, entry_id),
+    FOREIGN KEY (ledger_id, transaction_id)
+        REFERENCES ledger_transaction(ledger_id, transaction_id)
+        ON DELETE RESTRICT
+) WITHOUT ROWID;
+
+CREATE INDEX ledger_journal_time_idx
+ON ledger_journal_entry(ledger_id, logical_time, entry_id);
+
+CREATE TABLE reward_claim (
+    scope_id TEXT NOT NULL,
+    settlement_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
+    claimed_at TEXT NOT NULL,
+    PRIMARY KEY (scope_id, settlement_id),
+    UNIQUE (settlement_id),
+    FOREIGN KEY (settlement_id)
+        REFERENCES committed_transaction(transaction_id)
+        ON DELETE RESTRICT
+) WITHOUT ROWID;
+
+CREATE INDEX reward_claim_time_idx
+ON reward_claim(scope_id, claimed_at, settlement_id);
+
+CREATE TABLE party_membership (
+    subject_id TEXT PRIMARY KEY,
+    party_id TEXT NOT NULL,
+    party_scope_id TEXT NOT NULL,
+    joined_at TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX party_membership_party_idx
+ON party_membership(party_id, subject_id);
+
+CREATE TABLE world_presence (
+    world_id TEXT NOT NULL,
+    presence_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (world_id, presence_id)
+) WITHOUT ROWID;
+
+CREATE INDEX world_presence_owner_idx
+ON world_presence(world_id, owner_id, presence_id);
+
+CREATE TABLE world_reservation (
+    world_id TEXT NOT NULL,
+    reservation_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    expires_at TEXT,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (world_id, reservation_id)
+) WITHOUT ROWID;
+
+CREATE INDEX world_reservation_expiry_idx
+ON world_reservation(expires_at, world_id, reservation_id);
+
+CREATE TABLE market_listing (
+    scope_id TEXT NOT NULL,
+    listing_id TEXT NOT NULL,
+    number INTEGER NOT NULL CHECK (number > 0),
+    seller_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope_id, listing_id),
+    UNIQUE (scope_id, number)
+) WITHOUT ROWID;
+
+CREATE INDEX market_listing_expiry_idx
+ON market_listing(scope_id, expires_at, listing_id);
 
 CREATE TABLE committed_transaction (
     transaction_id TEXT PRIMARY KEY,
     fingerprint TEXT NOT NULL,
     scope_id TEXT NOT NULL,
-    receipt_payload TEXT NOT NULL,
+    receipt_payload BLOB NOT NULL,
     committed_at TEXT NOT NULL
 ) WITHOUT ROWID;
 
@@ -391,7 +620,6 @@ CREATE TABLE account_evidence (
     account_id TEXT,
     conflict_id TEXT,
     transaction_id TEXT NOT NULL UNIQUE,
-    receipt_payload TEXT NOT NULL,
     processed_at TEXT NOT NULL,
     CHECK ((account_id IS NULL) <> (conflict_id IS NULL)),
     FOREIGN KEY (account_id) REFERENCES account_record(account_id) ON DELETE RESTRICT,
@@ -550,7 +778,6 @@ CREATE TABLE grant_redemption (
     account_id TEXT NOT NULL,
     settlement_id TEXT NOT NULL UNIQUE,
     request_fingerprint TEXT NOT NULL,
-    receipt_payload TEXT NOT NULL,
     redeemed_at TEXT NOT NULL,
     FOREIGN KEY (entitlement_id) REFERENCES grant_entitlement(entitlement_id) ON DELETE RESTRICT,
     FOREIGN KEY (campaign_id) REFERENCES grant_campaign(campaign_id) ON DELETE RESTRICT,
@@ -629,6 +856,64 @@ class AggregateSnapshotRow:
     aggregate_id: str
     revision: int
     codec_version: int
+    payload: str
+    updated_at: str
+    expires_at: str | None
+
+
+@dataclass(frozen=True)
+class LedgerTransactionRow:
+    ledger_id: str
+    transaction_id: str
+    fingerprint: str
+    resulting_revision: int
+    applied_at: str
+
+
+@dataclass(frozen=True)
+class RewardClaimRow:
+    scope_id: str
+    settlement_id: str
+    fingerprint: str
+    resulting_revision: int
+    claimed_at: str
+
+
+@dataclass(frozen=True)
+class PartyMembershipRow:
+    subject_id: str
+    party_id: str
+    party_scope_id: str
+    joined_at: str
+
+
+@dataclass(frozen=True)
+class WorldPresenceRow:
+    world_id: str
+    presence_id: str
+    owner_id: str
+    revision: int
+    payload: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class WorldReservationRow:
+    world_id: str
+    reservation_id: str
+    owner_id: str
+    expires_at: str | None
+    payload: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class MarketListingRow:
+    scope_id: str
+    listing_id: str
+    number: int
+    seller_id: str
+    expires_at: str
     payload: str
     updated_at: str
 
@@ -711,6 +996,8 @@ class SqliteDatabase:
                     raise SchemaVersionError(
                         "数据库包含未知结构，拒绝按万象行纪正式数据库初始化"
                     )
+                connection.execute("PRAGMA auto_vacuum = INCREMENTAL")
+                connection.execute("VACUUM")
                 try:
                     connection.executescript(
                         "BEGIN EXCLUSIVE;\n"
@@ -724,19 +1011,39 @@ class SqliteDatabase:
                     raise
                 _validate_schema_shape(connection)
                 return
-            missing = _REQUIRED_TABLES - tables
-            if missing:
-                raise SchemaVersionError(
-                    f"数据库结构不完整，缺少表：{', '.join(sorted(missing))}"
-                )
             row = connection.execute(
                 "SELECT value FROM persistence_metadata WHERE key = ?",
                 ("schema_version",),
             ).fetchone()
-            if row is None or row[0] != str(PERSISTENCE_SCHEMA_VERSION):
-                actual = row[0] if row else "missing"
+            actual = str(row[0]) if row else "missing"
+            if actual == str(PREVIOUS_PERSISTENCE_SCHEMA_VERSION):
+                _validate_v7_migration_source(connection)
+                backup_path = _backup_before_schema_migration(
+                    connection,
+                    self.path,
+                    busy_timeout_ms=self.busy_timeout_ms,
+                )
+                try:
+                    _migrate_v7_to_v8(connection)
+                except Exception as exc:
+                    raise SchemaVersionError(
+                        f"数据库 v7 -> v8 升级失败；原库事务已回滚，迁移前备份位于 {backup_path}"
+                    ) from exc
+                actual = str(PERSISTENCE_SCHEMA_VERSION)
+                tables = _table_names(connection)
+                missing = _REQUIRED_TABLES - tables
+                if missing:
+                    raise SchemaVersionError(
+                        f"数据库升级后结构不完整，缺少表：{', '.join(sorted(missing))}"
+                    )
+            if actual != str(PERSISTENCE_SCHEMA_VERSION):
                 raise SchemaVersionError(
                     f"数据库结构版本不匹配：需要 {PERSISTENCE_SCHEMA_VERSION}，当前 {actual}"
+                )
+            missing = _REQUIRED_TABLES - tables
+            if missing:
+                raise SchemaVersionError(
+                    f"数据库结构不完整，缺少表：{', '.join(sorted(missing))}"
                 )
             _validate_schema_shape(connection)
         finally:
@@ -790,6 +1097,20 @@ class SqliteDatabase:
             raise
         return target
 
+    def reclaim_free_pages(self, *, max_pages: int = 256) -> tuple[int, int]:
+        """低频回收尾部空闲页；不执行会长时间独占数据库的全量 VACUUM。"""
+
+        if max_pages < 1:
+            raise ValueError("数据库增量回收页数必须大于 0")
+        with closing(self.connect()) as connection:
+            before = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+            connection.execute("PRAGMA optimize")
+            auto_vacuum = int(connection.execute("PRAGMA auto_vacuum").fetchone()[0])
+            if before and auto_vacuum == 2:
+                connection.execute(f"PRAGMA incremental_vacuum({int(max_pages)})")
+            after = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+        return before, after
+
 
 class SqliteUnitOfWork:
     """只有显式调用 commit() 才提交，离开上下文默认回滚。"""
@@ -827,7 +1148,8 @@ class SqliteUnitOfWork:
     ) -> AggregateSnapshotRow | None:
         row = self.connection.execute(
             """
-            SELECT aggregate_kind, aggregate_id, revision, codec_version, payload, updated_at
+            SELECT aggregate_kind, aggregate_id, revision, codec_version, payload,
+                   updated_at, expires_at
             FROM aggregate_snapshot
             WHERE aggregate_kind = ? AND aggregate_id = ?
             """,
@@ -846,20 +1168,22 @@ class SqliteUnitOfWork:
         aggregate_kind: str,
         *,
         limit: int = 1_000,
+        after_id: str | None = None,
     ) -> tuple[AggregateSnapshotRow, ...]:
-        """按稳定聚合类型列出快照，供业务调度器发现待处理实例。"""
+        """按稳定游标列出一页快照，避免固定 LIMIT 永久漏扫尾部。"""
 
         if not aggregate_kind.strip() or limit < 1:
             raise ValueError("聚合类型不能为空且 limit 必须大于 0")
         rows = self.connection.execute(
             """
-            SELECT aggregate_kind, aggregate_id, revision, codec_version, payload, updated_at
+            SELECT aggregate_kind, aggregate_id, revision, codec_version, payload,
+                   updated_at, expires_at
             FROM aggregate_snapshot
-            WHERE aggregate_kind = ?
+            WHERE aggregate_kind = ? AND (? IS NULL OR aggregate_id > ?)
             ORDER BY aggregate_id
             LIMIT ?
             """,
-            (aggregate_kind, limit),
+            (aggregate_kind, after_id, after_id, limit),
         ).fetchall()
         return tuple(AggregateSnapshotRow(**dict(row)) for row in rows)
 
@@ -870,6 +1194,7 @@ class SqliteUnitOfWork:
         revision: int,
         payload: str,
         updated_at: str,
+        expires_at: str | None = None,
     ) -> None:
         if revision < 0:
             raise ValueError("聚合初始 revision 不能小于 0")
@@ -877,8 +1202,9 @@ class SqliteUnitOfWork:
             self.connection.execute(
                 """
                 INSERT INTO aggregate_snapshot(
-                    aggregate_kind, aggregate_id, revision, codec_version, payload, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    aggregate_kind, aggregate_id, revision, codec_version, payload,
+                    updated_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     aggregate_kind,
@@ -887,6 +1213,7 @@ class SqliteUnitOfWork:
                     SNAPSHOT_CODEC_VERSION,
                     payload,
                     updated_at,
+                    expires_at,
                 ),
             )
         except sqlite3.IntegrityError as exc:
@@ -902,13 +1229,14 @@ class SqliteUnitOfWork:
         new_revision: int,
         payload: str,
         updated_at: str,
+        expires_at: str | None = None,
     ) -> None:
         if new_revision != expected_revision + 1:
             raise ValueError("聚合条件更新必须恰好增加一个 revision")
         cursor = self.connection.execute(
             """
             UPDATE aggregate_snapshot
-            SET revision = ?, codec_version = ?, payload = ?, updated_at = ?
+            SET revision = ?, codec_version = ?, payload = ?, updated_at = ?, expires_at = ?
             WHERE aggregate_kind = ? AND aggregate_id = ? AND revision = ?
             """,
             (
@@ -916,6 +1244,7 @@ class SqliteUnitOfWork:
                 SNAPSHOT_CODEC_VERSION,
                 payload,
                 updated_at,
+                expires_at,
                 aggregate_kind,
                 aggregate_id,
                 expected_revision,
@@ -926,6 +1255,423 @@ class SqliteUnitOfWork:
                 f"聚合 revision 冲突：{aggregate_kind}/{aggregate_id} expected={expected_revision}"
             )
 
+    def set_snapshot_expiry(
+        self,
+        aggregate_kind: str,
+        aggregate_id: str,
+        expected_revision: int,
+        expires_at: str | None,
+    ) -> None:
+        cursor = self.connection.execute(
+            """
+            UPDATE aggregate_snapshot
+            SET expires_at = ?
+            WHERE aggregate_kind = ? AND aggregate_id = ? AND revision = ?
+            """,
+            (expires_at, aggregate_kind, aggregate_id, expected_revision),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrencyConflict(
+                f"快照过期时间更新冲突：{aggregate_kind}/{aggregate_id}"
+            )
+
+    def delete_snapshot(
+        self,
+        aggregate_kind: str,
+        aggregate_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> bool:
+        if expected_revision is None:
+            cursor = self.connection.execute(
+                "DELETE FROM aggregate_snapshot WHERE aggregate_kind = ? AND aggregate_id = ?",
+                (aggregate_kind, aggregate_id),
+            )
+        else:
+            cursor = self.connection.execute(
+                """
+                DELETE FROM aggregate_snapshot
+                WHERE aggregate_kind = ? AND aggregate_id = ? AND revision = ?
+                """,
+                (aggregate_kind, aggregate_id, expected_revision),
+            )
+        return cursor.rowcount == 1
+
+    def delete_expired_snapshots(self, logical_time: str, *, limit: int = 5_000) -> int:
+        if limit < 1:
+            raise ValueError("快照清理 limit 必须大于 0")
+        cursor = self.connection.execute(
+            """
+            DELETE FROM aggregate_snapshot
+            WHERE (aggregate_kind, aggregate_id) IN (
+                SELECT aggregate_kind, aggregate_id
+                FROM aggregate_snapshot
+                WHERE expires_at IS NOT NULL
+                  AND julianday(expires_at) <= julianday(?)
+                ORDER BY expires_at, aggregate_kind, aggregate_id
+                LIMIT ?
+            )
+            """,
+            (logical_time, limit),
+        )
+        return cursor.rowcount
+
+    def load_ledger_transaction(
+        self,
+        ledger_id: str,
+        transaction_id: str,
+    ) -> LedgerTransactionRow | None:
+        row = self.connection.execute(
+            """
+            SELECT ledger_id, transaction_id, fingerprint, resulting_revision, applied_at
+            FROM ledger_transaction
+            WHERE ledger_id = ? AND transaction_id = ?
+            """,
+            (ledger_id, transaction_id),
+        ).fetchone()
+        return LedgerTransactionRow(**dict(row)) if row else None
+
+    def insert_ledger_transaction(
+        self,
+        ledger_id: str,
+        transaction_id: str,
+        fingerprint: str,
+        resulting_revision: int,
+        applied_at: str,
+    ) -> None:
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO ledger_transaction(
+                    ledger_id, transaction_id, fingerprint, resulting_revision, applied_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (ledger_id, transaction_id, fingerprint, resulting_revision, applied_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConcurrencyConflict(
+                f"账本事务已经提交：{ledger_id}/{transaction_id}"
+            ) from exc
+
+    def insert_ledger_journal_entry(
+        self,
+        ledger_id: str,
+        entry_id: str,
+        transaction_id: str,
+        currency_id: str,
+        reason: str,
+        actor_id: str,
+        logical_time: str,
+        payload: str,
+    ) -> None:
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO ledger_journal_entry(
+                    ledger_id, entry_id, transaction_id, currency_id, reason,
+                    actor_id, logical_time, payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ledger_id,
+                    entry_id,
+                    transaction_id,
+                    currency_id,
+                    reason,
+                    actor_id,
+                    logical_time,
+                    payload,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConcurrencyConflict(
+                f"账本流水已经存在：{ledger_id}/{entry_id}"
+            ) from exc
+
+    def load_reward_claim(self, scope_id: str, settlement_id: str) -> RewardClaimRow | None:
+        row = self.connection.execute(
+            """
+            SELECT scope_id, settlement_id, fingerprint, resulting_revision, claimed_at
+            FROM reward_claim
+            WHERE scope_id = ? AND settlement_id = ?
+            """,
+            (scope_id, settlement_id),
+        ).fetchone()
+        return RewardClaimRow(**dict(row)) if row else None
+
+    def insert_reward_claim(
+        self,
+        scope_id: str,
+        settlement_id: str,
+        fingerprint: str,
+        resulting_revision: int,
+        claimed_at: str,
+    ) -> None:
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO reward_claim(
+                    scope_id, settlement_id, fingerprint, resulting_revision, claimed_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    scope_id,
+                    settlement_id,
+                    fingerprint,
+                    resulting_revision,
+                    claimed_at,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConcurrencyConflict(
+                f"奖励领取已经提交：{scope_id}/{settlement_id}"
+            ) from exc
+
+    def load_party_membership(self, subject_id: str) -> PartyMembershipRow | None:
+        row = self.connection.execute(
+            """
+            SELECT subject_id, party_id, party_scope_id, joined_at
+            FROM party_membership
+            WHERE subject_id = ?
+            """,
+            (subject_id,),
+        ).fetchone()
+        return PartyMembershipRow(**dict(row)) if row else None
+
+    def insert_party_membership(
+        self,
+        subject_id: str,
+        party_id: str,
+        party_scope_id: str,
+        joined_at: str,
+    ) -> None:
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO party_membership(subject_id, party_id, party_scope_id, joined_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (subject_id, party_id, party_scope_id, joined_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConcurrencyConflict(f"角色已经属于其他队伍：{subject_id}") from exc
+
+    def delete_party_membership(self, subject_id: str, party_id: str) -> None:
+        cursor = self.connection.execute(
+            "DELETE FROM party_membership WHERE subject_id = ? AND party_id = ?",
+            (subject_id, party_id),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrencyConflict(f"队伍成员占用记录已经变化：{subject_id}")
+
+    def list_world_presences(self, world_id: str) -> tuple[WorldPresenceRow, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT world_id, presence_id, owner_id, revision, payload, updated_at
+            FROM world_presence
+            WHERE world_id = ?
+            ORDER BY presence_id
+            """,
+            (world_id,),
+        ).fetchall()
+        return tuple(WorldPresenceRow(**dict(row)) for row in rows)
+
+    def insert_world_presence(
+        self,
+        world_id: str,
+        presence_id: str,
+        owner_id: str,
+        revision: int,
+        payload: str,
+        updated_at: str,
+    ) -> None:
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO world_presence(
+                    world_id, presence_id, owner_id, revision, payload, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (world_id, presence_id, owner_id, revision, payload, updated_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConcurrencyConflict(
+                f"世界存在体已经存在：{world_id}/{presence_id}"
+            ) from exc
+
+    def update_world_presence(
+        self,
+        world_id: str,
+        presence_id: str,
+        expected_revision: int,
+        revision: int,
+        owner_id: str,
+        payload: str,
+        updated_at: str,
+    ) -> None:
+        cursor = self.connection.execute(
+            """
+            UPDATE world_presence
+            SET owner_id = ?, revision = ?, payload = ?, updated_at = ?
+            WHERE world_id = ? AND presence_id = ? AND revision = ?
+            """,
+            (
+                owner_id,
+                revision,
+                payload,
+                updated_at,
+                world_id,
+                presence_id,
+                expected_revision,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrencyConflict(
+                f"世界存在体 revision 冲突：{world_id}/{presence_id}"
+            )
+
+    def delete_world_presence(
+        self,
+        world_id: str,
+        presence_id: str,
+        expected_revision: int,
+    ) -> None:
+        cursor = self.connection.execute(
+            """
+            DELETE FROM world_presence
+            WHERE world_id = ? AND presence_id = ? AND revision = ?
+            """,
+            (world_id, presence_id, expected_revision),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrencyConflict(
+                f"世界存在体删除冲突：{world_id}/{presence_id}"
+            )
+
+    def list_world_reservations(self, world_id: str) -> tuple[WorldReservationRow, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT world_id, reservation_id, owner_id, expires_at, payload, updated_at
+            FROM world_reservation
+            WHERE world_id = ?
+            ORDER BY reservation_id
+            """,
+            (world_id,),
+        ).fetchall()
+        return tuple(WorldReservationRow(**dict(row)) for row in rows)
+
+    def upsert_world_reservation(
+        self,
+        world_id: str,
+        reservation_id: str,
+        owner_id: str,
+        expires_at: str | None,
+        payload: str,
+        updated_at: str,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO world_reservation(
+                world_id, reservation_id, owner_id, expires_at, payload, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(world_id, reservation_id) DO UPDATE SET
+                owner_id = excluded.owner_id,
+                expires_at = excluded.expires_at,
+                payload = excluded.payload,
+                updated_at = excluded.updated_at
+            """,
+            (world_id, reservation_id, owner_id, expires_at, payload, updated_at),
+        )
+
+    def delete_world_reservation(self, world_id: str, reservation_id: str) -> None:
+        cursor = self.connection.execute(
+            "DELETE FROM world_reservation WHERE world_id = ? AND reservation_id = ?",
+            (world_id, reservation_id),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrencyConflict(
+                f"世界预约删除冲突：{world_id}/{reservation_id}"
+            )
+
+    def list_market_listings(self, scope_id: str) -> tuple[MarketListingRow, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT scope_id, listing_id, number, seller_id, expires_at, payload, updated_at
+            FROM market_listing
+            WHERE scope_id = ?
+            ORDER BY number, listing_id
+            """,
+            (scope_id,),
+        ).fetchall()
+        return tuple(MarketListingRow(**dict(row)) for row in rows)
+
+    def insert_market_listing(
+        self,
+        scope_id: str,
+        listing_id: str,
+        number: int,
+        seller_id: str,
+        expires_at: str,
+        payload: str,
+        updated_at: str,
+    ) -> None:
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO market_listing(
+                    scope_id, listing_id, number, seller_id, expires_at, payload, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scope_id,
+                    listing_id,
+                    number,
+                    seller_id,
+                    expires_at,
+                    payload,
+                    updated_at,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConcurrencyConflict(f"二手挂单已经存在：{listing_id}") from exc
+
+    def update_market_listing(
+        self,
+        scope_id: str,
+        listing_id: str,
+        number: int,
+        seller_id: str,
+        expires_at: str,
+        payload: str,
+        updated_at: str,
+    ) -> None:
+        cursor = self.connection.execute(
+            """
+            UPDATE market_listing
+            SET number = ?, seller_id = ?, expires_at = ?, payload = ?, updated_at = ?
+            WHERE scope_id = ? AND listing_id = ?
+            """,
+            (
+                number,
+                seller_id,
+                expires_at,
+                payload,
+                updated_at,
+                scope_id,
+                listing_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrencyConflict(f"二手挂单已经变化：{listing_id}")
+
+    def delete_market_listing(self, scope_id: str, listing_id: str) -> None:
+        cursor = self.connection.execute(
+            "DELETE FROM market_listing WHERE scope_id = ? AND listing_id = ?",
+            (scope_id, listing_id),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrencyConflict(f"二手挂单已经变化：{listing_id}")
+
     def load_transaction(self, transaction_id: str) -> CommittedTransactionRow | None:
         row = self.connection.execute(
             """
@@ -935,7 +1681,11 @@ class SqliteUnitOfWork:
             """,
             (transaction_id,),
         ).fetchone()
-        return CommittedTransactionRow(**dict(row)) if row else None
+        if row is None:
+            return None
+        values = dict(row)
+        values["receipt_payload"] = _decode_receipt_payload(values["receipt_payload"])
+        return CommittedTransactionRow(**values)
 
     def load_content_activation(self, slot_id: str) -> ContentActivationRow | None:
         row = self.connection.execute(
@@ -1341,7 +2091,13 @@ class SqliteUnitOfWork:
                 transaction_id, fingerprint, scope_id, receipt_payload, committed_at
             ) VALUES (?, ?, ?, ?, ?)
             """,
-            (transaction_id, fingerprint, scope_id, receipt_payload, committed_at),
+            (
+                transaction_id,
+                fingerprint,
+                scope_id,
+                _encode_receipt_payload(receipt_payload),
+                committed_at,
+            ),
         )
 
     def append_fact(
@@ -1434,8 +2190,826 @@ def _table_names(connection: sqlite3.Connection) -> frozenset[str]:
     return frozenset(str(row[0]) for row in rows)
 
 
-def _validate_schema_shape(connection: sqlite3.Connection) -> None:
-    for table, expected in _EXPECTED_COLUMNS.items():
+def _validate_v7_migration_source(connection: sqlite3.Connection) -> None:
+    """只接收完整 schema 7；更早版本和残缺数据库都拒绝启动。"""
+
+    missing = _REQUIRED_TABLES - _table_names(connection)
+    if missing:
+        raise SchemaVersionError(
+            f"数据库 v7 结构不完整，缺少表：{', '.join(sorted(missing))}"
+        )
+    _validate_schema_shape(
+        connection,
+        expected_columns=_V7_EXPECTED_COLUMNS,
+        require_reward_claim_transaction=False,
+    )
+    _validate_database_integrity(connection, phase="迁移前")
+
+
+def _backup_before_schema_migration(
+    connection: sqlite3.Connection,
+    source_path: Path,
+    *,
+    busy_timeout_ms: int,
+) -> Path:
+    backup_directory = source_path.parent / "backups"
+    backup_directory.mkdir(parents=True, exist_ok=True)
+    stamp = _migration_backup_stamp(connection, source_path)
+    target = _next_available_backup_path(
+        backup_directory,
+        f"migration_{source_path.stem}_schema{PREVIOUS_PERSISTENCE_SCHEMA_VERSION}_{stamp}",
+    )
+    try:
+        with closing(
+            sqlite3.connect(target, timeout=busy_timeout_ms / 1000)
+        ) as target_connection:
+            connection.backup(target_connection)
+            rows = target_connection.execute("PRAGMA quick_check").fetchall()
+            result = tuple(str(row[0]) for row in rows)
+            if result != ("ok",):
+                raise sqlite3.DatabaseError(
+                    f"迁移前备份完整性校验失败：{', '.join(result)}"
+                )
+    except Exception:
+        with suppress(OSError):
+            target.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def _migration_backup_stamp(
+    connection: sqlite3.Connection,
+    source_path: Path,
+) -> str:
+    row = connection.execute(
+        "SELECT MAX(updated_at) FROM aggregate_snapshot"
+    ).fetchone()
+    value = str(row[0] or "") if row else ""
+    if value:
+        latest = datetime.fromisoformat(value)
+        if latest.tzinfo is not None and latest.utcoffset() is not None:
+            return latest.astimezone(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S_%fZ")
+    modified = datetime.fromtimestamp(source_path.stat().st_mtime, timezone.utc)
+    return modified.strftime("%Y-%m-%d_%H-%M-%S_%fZ")
+
+
+def _next_available_backup_path(
+    directory: Path,
+    stem: str,
+) -> Path:
+    candidate = directory / f"{stem}.db"
+    suffix = 1
+    while candidate.exists():
+        candidate = directory / f"{stem}_{suffix}.db"
+        suffix += 1
+    return candidate
+
+
+def _migrate_v7_to_v8(connection: sqlite3.Connection) -> None:
+    temporary_tables = (
+        "_schema7_committed_transaction",
+        "_schema7_reward_claim",
+        "_schema7_account_evidence",
+        "_schema7_grant_redemption",
+    )
+    occupied = set(temporary_tables) & _table_names(connection)
+    if occupied:
+        raise SchemaVersionError(
+            f"数据库包含迁移保留表：{', '.join(sorted(occupied))}"
+        )
+
+    foreign_keys = int(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+    legacy_alter = int(connection.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("PRAGMA legacy_alter_table = ON")
+    connection.execute("BEGIN EXCLUSIVE")
+    try:
+        _validate_v7_duplicate_receipts(connection)
+        connection.execute(
+            "ALTER TABLE committed_transaction RENAME TO _schema7_committed_transaction"
+        )
+        connection.execute("ALTER TABLE reward_claim RENAME TO _schema7_reward_claim")
+        connection.execute(
+            "ALTER TABLE account_evidence RENAME TO _schema7_account_evidence"
+        )
+        connection.execute(
+            "ALTER TABLE grant_redemption RENAME TO _schema7_grant_redemption"
+        )
+        for statement in (
+            """
+            CREATE TABLE committed_transaction (
+                transaction_id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                receipt_payload BLOB NOT NULL,
+                committed_at TEXT NOT NULL
+            ) WITHOUT ROWID
+            """,
+            """
+            CREATE TABLE reward_claim (
+                scope_id TEXT NOT NULL,
+                settlement_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
+                claimed_at TEXT NOT NULL,
+                PRIMARY KEY (scope_id, settlement_id),
+                UNIQUE (settlement_id),
+                FOREIGN KEY (settlement_id)
+                    REFERENCES committed_transaction(transaction_id)
+                    ON DELETE RESTRICT
+            ) WITHOUT ROWID
+            """,
+            """
+            CREATE TABLE account_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                account_id TEXT,
+                conflict_id TEXT,
+                transaction_id TEXT NOT NULL UNIQUE,
+                processed_at TEXT NOT NULL,
+                CHECK ((account_id IS NULL) <> (conflict_id IS NULL)),
+                FOREIGN KEY (account_id)
+                    REFERENCES account_record(account_id) ON DELETE RESTRICT,
+                FOREIGN KEY (conflict_id)
+                    REFERENCES account_conflict(conflict_id) ON DELETE RESTRICT,
+                FOREIGN KEY (transaction_id)
+                    REFERENCES committed_transaction(transaction_id) ON DELETE RESTRICT
+            ) WITHOUT ROWID
+            """,
+            """
+            CREATE TABLE grant_redemption (
+                redemption_id TEXT PRIMARY KEY,
+                entitlement_id TEXT NOT NULL UNIQUE,
+                campaign_id TEXT NOT NULL,
+                credential_id TEXT,
+                account_id TEXT NOT NULL,
+                settlement_id TEXT NOT NULL UNIQUE,
+                request_fingerprint TEXT NOT NULL,
+                redeemed_at TEXT NOT NULL,
+                FOREIGN KEY (entitlement_id)
+                    REFERENCES grant_entitlement(entitlement_id) ON DELETE RESTRICT,
+                FOREIGN KEY (campaign_id)
+                    REFERENCES grant_campaign(campaign_id) ON DELETE RESTRICT,
+                FOREIGN KEY (credential_id)
+                    REFERENCES grant_credential(credential_id) ON DELETE RESTRICT,
+                FOREIGN KEY (settlement_id)
+                    REFERENCES committed_transaction(transaction_id) ON DELETE RESTRICT
+            ) WITHOUT ROWID
+            """,
+        ):
+            connection.execute(statement)
+        rows = connection.execute(
+            """
+            SELECT transaction_id, fingerprint, scope_id, receipt_payload, committed_at
+            FROM _schema7_committed_transaction
+            ORDER BY transaction_id
+            """
+        ).fetchall()
+        encoded_rows = []
+        for row in rows:
+            payload = row["receipt_payload"]
+            if not isinstance(payload, str):
+                raise SchemaVersionError("数据库 v7 事务回执不是文本")
+            encoded_rows.append(
+                (
+                    str(row["transaction_id"]),
+                    str(row["fingerprint"]),
+                    str(row["scope_id"]),
+                    _encode_receipt_payload(payload),
+                    str(row["committed_at"]),
+                )
+            )
+        connection.executemany(
+            """
+            INSERT INTO committed_transaction(
+                transaction_id, fingerprint, scope_id, receipt_payload, committed_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            encoded_rows,
+        )
+        connection.execute(
+            """
+            INSERT INTO reward_claim(
+                scope_id, settlement_id, fingerprint, resulting_revision, claimed_at
+            )
+            SELECT scope_id, settlement_id, fingerprint, resulting_revision, claimed_at
+            FROM _schema7_reward_claim
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO account_evidence(
+                evidence_id, fingerprint, account_id, conflict_id,
+                transaction_id, processed_at
+            )
+            SELECT evidence_id, fingerprint, account_id, conflict_id,
+                   transaction_id, processed_at
+            FROM _schema7_account_evidence
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO grant_redemption(
+                redemption_id, entitlement_id, campaign_id, credential_id,
+                account_id, settlement_id, request_fingerprint, redeemed_at
+            )
+            SELECT redemption_id, entitlement_id, campaign_id, credential_id,
+                   account_id, settlement_id, request_fingerprint, redeemed_at
+            FROM _schema7_grant_redemption
+            """
+        )
+        for table in reversed(temporary_tables[1:]):
+            connection.execute(f"DROP TABLE {table}")
+        connection.execute("DROP TABLE _schema7_committed_transaction")
+        for statement in (
+            """
+            CREATE INDEX reward_claim_time_idx
+            ON reward_claim(scope_id, claimed_at, settlement_id)
+            """,
+            """
+            CREATE INDEX account_evidence_account_idx
+            ON account_evidence(account_id, processed_at)
+            """,
+            """
+            CREATE INDEX grant_redemption_account_idx
+            ON grant_redemption(campaign_id, account_id, redeemed_at)
+            """,
+        ):
+            connection.execute(statement)
+        connection.execute(
+            "UPDATE persistence_metadata SET value = ? WHERE key = 'schema_version'",
+            (str(PERSISTENCE_SCHEMA_VERSION),),
+        )
+        _validate_schema_shape(connection)
+        _validate_database_integrity(connection, phase="迁移后")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA legacy_alter_table = {legacy_alter}")
+        connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
+
+
+def _validate_v7_duplicate_receipts(connection: sqlite3.Connection) -> None:
+    relations = (
+        ("account_evidence", "evidence_id", "transaction_id"),
+        ("reward_claim", "settlement_id", "settlement_id"),
+    )
+    for table, identity_column, transaction_column in relations:
+        rows = connection.execute(
+            f"""
+            SELECT relation.{identity_column} AS relation_id,
+                   relation.receipt_payload AS relation_payload,
+                   committed.receipt_payload AS committed_payload
+            FROM {table} AS relation
+            LEFT JOIN committed_transaction AS committed
+              ON committed.transaction_id = relation.{transaction_column}
+            """
+        ).fetchall()
+        for row in rows:
+            if row["committed_payload"] is None:
+                raise SchemaVersionError(
+                    f"数据库 v7 关系记录缺少提交事务：{table}/{row['relation_id']}"
+                )
+            if row["relation_payload"] != row["committed_payload"]:
+                raise SchemaVersionError(
+                    f"数据库 v7 重复回执不一致：{table}/{row['relation_id']}"
+                )
+
+
+def _migrate_v6_to_v7(connection: sqlite3.Connection) -> None:
+    statements = (
+        "ALTER TABLE aggregate_snapshot ADD COLUMN expires_at TEXT",
+        """
+        CREATE INDEX aggregate_snapshot_expiry_idx
+        ON aggregate_snapshot(expires_at, aggregate_kind, aggregate_id)
+        WHERE expires_at IS NOT NULL
+        """,
+        """
+        CREATE TABLE ledger_transaction (
+            ledger_id TEXT NOT NULL,
+            transaction_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
+            applied_at TEXT NOT NULL,
+            PRIMARY KEY (ledger_id, transaction_id)
+        ) WITHOUT ROWID
+        """,
+        """
+        CREATE INDEX ledger_transaction_time_idx
+        ON ledger_transaction(ledger_id, applied_at, transaction_id)
+        """,
+        """
+        CREATE TABLE ledger_journal_entry (
+            ledger_id TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            transaction_id TEXT NOT NULL,
+            currency_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            logical_time TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (ledger_id, entry_id),
+            FOREIGN KEY (ledger_id, transaction_id)
+                REFERENCES ledger_transaction(ledger_id, transaction_id)
+                ON DELETE RESTRICT
+        ) WITHOUT ROWID
+        """,
+        """
+        CREATE INDEX ledger_journal_time_idx
+        ON ledger_journal_entry(ledger_id, logical_time, entry_id)
+        """,
+        """
+        CREATE TABLE reward_claim (
+            scope_id TEXT NOT NULL,
+            settlement_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            receipt_payload TEXT NOT NULL,
+            resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
+            claimed_at TEXT NOT NULL,
+            PRIMARY KEY (scope_id, settlement_id),
+            UNIQUE (settlement_id)
+        ) WITHOUT ROWID
+        """,
+        """
+        CREATE INDEX reward_claim_time_idx
+        ON reward_claim(scope_id, claimed_at, settlement_id)
+        """,
+        """
+        CREATE TABLE party_membership (
+            subject_id TEXT PRIMARY KEY,
+            party_id TEXT NOT NULL,
+            party_scope_id TEXT NOT NULL,
+            joined_at TEXT NOT NULL
+        ) WITHOUT ROWID
+        """,
+        """
+        CREATE INDEX party_membership_party_idx
+        ON party_membership(party_id, subject_id)
+        """,
+        """
+        CREATE TABLE world_presence (
+            world_id TEXT NOT NULL,
+            presence_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision >= 0),
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (world_id, presence_id)
+        ) WITHOUT ROWID
+        """,
+        """
+        CREATE INDEX world_presence_owner_idx
+        ON world_presence(world_id, owner_id, presence_id)
+        """,
+        """
+        CREATE TABLE world_reservation (
+            world_id TEXT NOT NULL,
+            reservation_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            expires_at TEXT,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (world_id, reservation_id)
+        ) WITHOUT ROWID
+        """,
+        """
+        CREATE INDEX world_reservation_expiry_idx
+        ON world_reservation(expires_at, world_id, reservation_id)
+        """,
+        """
+        CREATE TABLE market_listing (
+            scope_id TEXT NOT NULL,
+            listing_id TEXT NOT NULL,
+            number INTEGER NOT NULL CHECK (number > 0),
+            seller_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (scope_id, listing_id),
+            UNIQUE (scope_id, number)
+        ) WITHOUT ROWID
+        """,
+        """
+        CREATE INDEX market_listing_expiry_idx
+        ON market_listing(scope_id, expires_at, listing_id)
+        """,
+    )
+    connection.execute("BEGIN EXCLUSIVE")
+    try:
+        for statement in statements:
+            connection.execute(statement)
+        _migrate_ledger_snapshots(connection)
+        _migrate_reward_claim_snapshots(connection)
+        _migrate_party_snapshots(connection)
+        _migrate_world_snapshots(connection)
+        _migrate_market_snapshots(connection)
+        connection.execute(
+            "UPDATE persistence_metadata SET value = ? WHERE key = 'schema_version'",
+            (str(PERSISTENCE_SCHEMA_VERSION),),
+        )
+        _validate_schema_shape(connection)
+        _validate_database_integrity(connection, phase="迁移后")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_ledger_snapshots(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        """
+        SELECT aggregate_id, payload, updated_at
+        FROM aggregate_snapshot
+        WHERE aggregate_kind = 'snapshot.ledger'
+        """
+    ).fetchall()
+    for row in rows:
+        ledger_id = str(row["aggregate_id"])
+        document, fields = _snapshot_document(row["payload"], "economy.state")
+        journal = _collection_items(fields, "journal", "tuple")
+        entries_by_transaction: dict[str, list[dict[str, object]]] = {}
+        for entry in journal:
+            entry_fields = _typed_fields(entry, "economy.journal_entry")
+            transaction_id = str(entry_fields["transaction_id"])
+            entries_by_transaction.setdefault(transaction_id, []).append(entry_fields)
+        applied = _mapping_items(fields, "applied_transactions")
+        for key, value in applied:
+            record = _typed_fields(value, "economy.applied_transaction")
+            transaction_id = str(record["transaction_id"])
+            if str(key) != transaction_id:
+                raise SchemaVersionError("账本防重映射键与事务 ID 不一致")
+            related = entries_by_transaction.get(transaction_id, ())
+            applied_at = (
+                _datetime_value(related[0]["logical_time"])
+                if related
+                else str(row["updated_at"])
+            )
+            connection.execute(
+                """
+                INSERT INTO ledger_transaction(
+                    ledger_id, transaction_id, fingerprint, resulting_revision, applied_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    ledger_id,
+                    transaction_id,
+                    str(record["fingerprint"]),
+                    int(record["resulting_revision"]),
+                    applied_at,
+                ),
+            )
+        for entry in journal:
+            entry_fields = _typed_fields(entry, "economy.journal_entry")
+            connection.execute(
+                """
+                INSERT INTO ledger_journal_entry(
+                    ledger_id, entry_id, transaction_id, currency_id, reason,
+                    actor_id, logical_time, payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ledger_id,
+                    str(entry_fields["id"]),
+                    str(entry_fields["transaction_id"]),
+                    str(entry_fields["currency_id"]),
+                    str(entry_fields["reason"]),
+                    str(entry_fields["actor_id"]),
+                    _datetime_value(entry_fields["logical_time"]),
+                    _node_payload(entry),
+                ),
+            )
+        fields["journal"] = {"$type": "tuple", "items": []}
+        fields["applied_transactions"] = {"$type": "mapping", "items": []}
+        connection.execute(
+            """
+            UPDATE aggregate_snapshot SET payload = ?
+            WHERE aggregate_kind = 'snapshot.ledger' AND aggregate_id = ?
+            """,
+            (_dump_document(document), ledger_id),
+        )
+
+
+def _migrate_reward_claim_snapshots(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        """
+        SELECT aggregate_id, payload
+        FROM aggregate_snapshot
+        WHERE aggregate_kind = 'snapshot.reward_claim'
+        """
+    ).fetchall()
+    for row in rows:
+        document, fields = _snapshot_document(row["payload"], "reward.claim_state")
+        scope_id = str(fields["scope_id"])
+        if scope_id != str(row["aggregate_id"]):
+            raise SchemaVersionError("奖励领取快照作用域与聚合 ID 不一致")
+        for key, value in _mapping_items(fields, "records"):
+            record = _typed_fields(value, "reward.claim_record")
+            settlement_id = str(record["settlement_id"])
+            receipt = record["receipt"]
+            receipt_fields = _typed_fields(receipt, "reward.receipt")
+            if str(key) != settlement_id:
+                raise SchemaVersionError("奖励领取映射键与结算 ID 不一致")
+            connection.execute(
+                """
+                INSERT INTO reward_claim(
+                    scope_id, settlement_id, fingerprint, receipt_payload,
+                    resulting_revision, claimed_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scope_id,
+                    settlement_id,
+                    str(record["fingerprint"]),
+                    _node_payload(receipt),
+                    int(record["resulting_revision"]),
+                    _datetime_value(receipt_fields["logical_time"]),
+                ),
+            )
+        fields["records"] = {"$type": "mapping", "items": []}
+        connection.execute(
+            """
+            UPDATE aggregate_snapshot SET payload = ?
+            WHERE aggregate_kind = 'snapshot.reward_claim' AND aggregate_id = ?
+            """,
+            (_dump_document(document), scope_id),
+        )
+
+
+def _migrate_party_snapshots(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        """
+        SELECT aggregate_id, revision, codec_version, payload, updated_at
+        FROM aggregate_snapshot
+        WHERE aggregate_kind = 'snapshot.party'
+        ORDER BY aggregate_id
+        """
+    ).fetchall()
+    for row in rows:
+        document, fields = _snapshot_document(row["payload"], "party.state")
+        parties = _mapping_items(fields, "parties")
+        if len(parties) <= 1 and all(str(key) == str(row["aggregate_id"]) for key, _ in parties):
+            _populate_party_memberships(connection, parties, str(row["aggregate_id"]))
+            continue
+        for key, party_node in parties:
+            party_id = str(key)
+            party_fields = _typed_fields(party_node, "party.value")
+            if str(party_fields["id"]) != party_id:
+                raise SchemaVersionError("队伍映射键与队伍 ID 不一致")
+            next_document = json.loads(json.dumps(document, ensure_ascii=False))
+            next_fields = _typed_fields(next_document["value"], "party.state")
+            next_fields["scope_id"] = party_id
+            next_fields["parties"] = {
+                "$type": "mapping",
+                "items": [[party_id, party_node]],
+            }
+            status = party_fields["status"]
+            active = isinstance(status, dict) and status.get("$enum") == "active"
+            expires_at = None
+            if not active:
+                expires_at = (
+                    datetime.fromisoformat(str(row["updated_at"])) + timedelta(hours=24)
+                ).isoformat()
+            connection.execute(
+                """
+                INSERT INTO aggregate_snapshot(
+                    aggregate_kind, aggregate_id, revision, codec_version, payload,
+                    updated_at, expires_at
+                ) VALUES ('snapshot.party', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    party_id,
+                    int(row["revision"]),
+                    int(row["codec_version"]),
+                    _dump_document(next_document),
+                    str(row["updated_at"]),
+                    expires_at,
+                ),
+            )
+            _populate_party_memberships(connection, ((party_id, party_node),), party_id)
+        connection.execute(
+            """
+            DELETE FROM aggregate_snapshot
+            WHERE aggregate_kind = 'snapshot.party' AND aggregate_id = ?
+            """,
+            (str(row["aggregate_id"]),),
+        )
+
+
+def _populate_party_memberships(connection, parties, scope_id: str) -> None:
+    for party_id, party_node in parties:
+        party_fields = _typed_fields(party_node, "party.value")
+        status = party_fields["status"]
+        if not isinstance(status, dict) or status.get("$enum") != "active":
+            continue
+        for subject_id, member_node in _mapping_node_items(party_fields["members"]):
+            member_fields = _typed_fields(member_node, "party.member")
+            connection.execute(
+                """
+                INSERT INTO party_membership(subject_id, party_id, party_scope_id, joined_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    str(subject_id),
+                    str(party_id),
+                    scope_id,
+                    _datetime_value(member_fields["joined_at"]),
+                ),
+            )
+
+
+def _migrate_world_snapshots(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        """
+        SELECT aggregate_id, payload, updated_at
+        FROM aggregate_snapshot
+        WHERE aggregate_kind = 'snapshot.world'
+        """
+    ).fetchall()
+    for row in rows:
+        document, fields = _snapshot_document(row["payload"], "world.state")
+        world_id = str(fields["world_id"])
+        if world_id != str(row["aggregate_id"]):
+            raise SchemaVersionError("世界快照 ID 与聚合 ID 不一致")
+        for key, node in _mapping_items(fields, "presences"):
+            presence = _typed_fields(node, "world.presence")
+            presence_id = str(presence["id"])
+            if str(key) != presence_id:
+                raise SchemaVersionError("世界存在体映射键与 ID 不一致")
+            connection.execute(
+                """
+                INSERT INTO world_presence(
+                    world_id, presence_id, owner_id, revision, payload, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    world_id,
+                    presence_id,
+                    str(presence["owner_id"]),
+                    int(presence["revision"]),
+                    _node_payload(node),
+                    str(row["updated_at"]),
+                ),
+            )
+        for key, node in _mapping_items(fields, "reservations"):
+            reservation = _typed_fields(node, "world.reservation")
+            reservation_id = str(reservation["id"])
+            if str(key) != reservation_id:
+                raise SchemaVersionError("世界预约映射键与 ID 不一致")
+            expires_node = reservation.get("expires_at")
+            expires_at = _datetime_value(expires_node) if expires_node is not None else None
+            connection.execute(
+                """
+                INSERT INTO world_reservation(
+                    world_id, reservation_id, owner_id, expires_at, payload, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    world_id,
+                    reservation_id,
+                    str(reservation["owner_id"]),
+                    expires_at,
+                    _node_payload(node),
+                    str(row["updated_at"]),
+                ),
+            )
+        fields["presences"] = {"$type": "mapping", "items": []}
+        fields["reservations"] = {"$type": "mapping", "items": []}
+        connection.execute(
+            """
+            UPDATE aggregate_snapshot SET payload = ?
+            WHERE aggregate_kind = 'snapshot.world' AND aggregate_id = ?
+            """,
+            (_dump_document(document), world_id),
+        )
+
+
+def _migrate_market_snapshots(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        """
+        SELECT aggregate_id, payload, updated_at
+        FROM aggregate_snapshot
+        WHERE aggregate_kind = 'snapshot.market'
+        """
+    ).fetchall()
+    for row in rows:
+        document, fields = _snapshot_document(
+            row["payload"],
+            "game.economy.market_state.v1",
+        )
+        scope_id = str(fields["scope_id"])
+        if scope_id != str(row["aggregate_id"]):
+            raise SchemaVersionError("二手市场作用域与聚合 ID 不一致")
+        for key, node in _mapping_items(fields, "listings"):
+            listing = _typed_fields(node, "game.economy.market_listing.v1")
+            listing_id = str(listing["id"])
+            if str(key) != listing_id:
+                raise SchemaVersionError("二手挂单映射键与 ID 不一致")
+            connection.execute(
+                """
+                INSERT INTO market_listing(
+                    scope_id, listing_id, number, seller_id, expires_at,
+                    payload, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scope_id,
+                    listing_id,
+                    int(listing["number"]),
+                    str(listing["seller_id"]),
+                    _datetime_value(listing["expires_at"]),
+                    _node_payload(node),
+                    str(row["updated_at"]),
+                ),
+            )
+        fields["listings"] = {"$type": "mapping", "items": []}
+        connection.execute(
+            """
+            UPDATE aggregate_snapshot SET payload = ?
+            WHERE aggregate_kind = 'snapshot.market' AND aggregate_id = ?
+            """,
+            (_dump_document(document), scope_id),
+        )
+
+
+def _snapshot_document(payload: str, expected_type: str) -> tuple[dict, dict]:
+    try:
+        document = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise SchemaVersionError("迁移快照不是有效 JSON") from exc
+    if document.get("format") != "structured-json.v1":
+        raise SchemaVersionError("迁移快照格式未知")
+    return document, _typed_fields(document.get("value"), expected_type)
+
+
+def _typed_fields(node: object, expected_type: str) -> dict:
+    if not isinstance(node, dict) or node.get("$type") != expected_type:
+        raise SchemaVersionError(f"迁移快照类型错误：需要 {expected_type}")
+    fields = node.get("$fields")
+    if not isinstance(fields, dict):
+        raise SchemaVersionError(f"迁移快照缺少字段：{expected_type}")
+    return fields
+
+
+def _mapping_node_items(node: object) -> list:
+    if not isinstance(node, dict) or node.get("$type") != "mapping":
+        raise SchemaVersionError("迁移快照映射结构无效")
+    items = node.get("items")
+    if not isinstance(items, list):
+        raise SchemaVersionError("迁移快照映射条目无效")
+    return items
+
+
+def _mapping_items(fields: dict, name: str) -> list:
+    return _mapping_node_items(fields.get(name))
+
+
+def _collection_items(fields: dict, name: str, collection_type: str) -> list:
+    node = fields.get(name)
+    if not isinstance(node, dict) or node.get("$type") != collection_type:
+        raise SchemaVersionError(f"迁移快照集合结构无效：{name}")
+    items = node.get("items")
+    if not isinstance(items, list):
+        raise SchemaVersionError(f"迁移快照集合条目无效：{name}")
+    return items
+
+
+def _datetime_value(node: object) -> str:
+    if not isinstance(node, dict) or node.get("$type") != "datetime":
+        raise SchemaVersionError("迁移快照时间结构无效")
+    value = str(node.get("value") or "")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise SchemaVersionError("迁移快照时间缺少时区")
+    return value
+
+
+def _node_payload(node: object) -> str:
+    return json.dumps(
+        {"format": "structured-json.v1", "value": node},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _dump_document(document: object) -> str:
+    return json.dumps(
+        document,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _validate_schema_shape(
+    connection: sqlite3.Connection,
+    *,
+    expected_columns: dict[str, tuple[tuple[str, str, int], ...]] = _EXPECTED_COLUMNS,
+    require_reward_claim_transaction: bool = True,
+) -> None:
+    for table, expected in expected_columns.items():
         rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
         actual = tuple((str(row[1]), str(row[2]).upper(), int(row[5])) for row in rows)
         if actual != expected:
@@ -1446,6 +3020,23 @@ def _validate_schema_shape(connection: sqlite3.Connection) -> None:
     }
     if "outbox_event_pending_idx" not in indexes:
         raise SchemaVersionError("数据库缺少 Outbox 待发布索引")
+    required_lifecycle_indexes = {
+        "aggregate_snapshot": {"aggregate_snapshot_expiry_idx"},
+        "ledger_transaction": {"ledger_transaction_time_idx"},
+        "ledger_journal_entry": {"ledger_journal_time_idx"},
+        "reward_claim": {"reward_claim_time_idx"},
+        "party_membership": {"party_membership_party_idx"},
+        "world_presence": {"world_presence_owner_idx"},
+        "world_reservation": {"world_reservation_expiry_idx"},
+        "market_listing": {"market_listing_expiry_idx"},
+    }
+    for table, expected_indexes in required_lifecycle_indexes.items():
+        actual_indexes = {
+            str(row[1])
+            for row in connection.execute(f"PRAGMA index_list({table})").fetchall()
+        }
+        if not expected_indexes.issubset(actual_indexes):
+            raise SchemaVersionError(f"数据库缺少生命周期索引：{table}")
     cycle_indexes = {
         str(row[1])
         for row in connection.execute("PRAGMA index_list(cycle_work_item)").fetchall()
@@ -1531,6 +3122,28 @@ def _validate_schema_shape(connection: sqlite3.Connection) -> None:
         for row in report_foreign_keys
     ):
         raise SchemaVersionError("战报片段外键结构不正确")
+    ledger_journal_keys = {
+        (str(row[3]), str(row[2]), str(row[4]))
+        for row in connection.execute(
+            "PRAGMA foreign_key_list(ledger_journal_entry)"
+        ).fetchall()
+    }
+    if ledger_journal_keys != {
+        ("ledger_id", "ledger_transaction", "ledger_id"),
+        ("transaction_id", "ledger_transaction", "transaction_id"),
+    }:
+        raise SchemaVersionError("账本流水事务外键结构不正确")
+    reward_claim_keys = {
+        (str(row[3]), str(row[2]), str(row[4]))
+        for row in connection.execute("PRAGMA foreign_key_list(reward_claim)").fetchall()
+    }
+    expected_reward_claim_keys = (
+        {("settlement_id", "committed_transaction", "transaction_id")}
+        if require_reward_claim_transaction
+        else set()
+    )
+    if reward_claim_keys != expected_reward_claim_keys:
+        raise SchemaVersionError("奖励领取事务外键结构不正确")
     expected_account_foreign_keys = {
         "account_identity": {
             ("account_id", "account_record", "account_id"),
@@ -1595,15 +3208,42 @@ def _validate_schema_shape(connection: sqlite3.Connection) -> None:
             raise SchemaVersionError(f"权益表外键结构不正确：{table}")
 
 
+def _validate_database_integrity(
+    connection: sqlite3.Connection,
+    *,
+    phase: str,
+) -> None:
+    quick_check = tuple(
+        str(row[0]) for row in connection.execute("PRAGMA quick_check")
+    )
+    if quick_check != ("ok",):
+        raise SchemaVersionError(
+            f"数据库{phase}完整性校验失败：{', '.join(quick_check)}"
+        )
+    foreign_key_rows = connection.execute("PRAGMA foreign_key_check").fetchall()
+    if foreign_key_rows:
+        first = foreign_key_rows[0]
+        raise SchemaVersionError(
+            "数据库"
+            f"{phase}外键校验失败：{first[0]}/{first[1]}/{first[2]}/{first[3]}"
+        )
+
+
 __all__ = [
     "AggregateSnapshotRow",
     "CommittedTransactionRow",
     "ContentActivationRow",
     "CycleCursorRow",
     "CycleWorkItemRow",
+    "LedgerTransactionRow",
+    "MarketListingRow",
     "OutboxEventRow",
+    "PartyMembershipRow",
     "PERSISTENCE_SCHEMA_VERSION",
     "SNAPSHOT_CODEC_VERSION",
+    "RewardClaimRow",
     "SqliteDatabase",
     "SqliteUnitOfWork",
+    "WorldPresenceRow",
+    "WorldReservationRow",
 ]

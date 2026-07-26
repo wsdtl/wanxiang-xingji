@@ -72,7 +72,8 @@ def _assert_account_relations_and_hmac(path: Path) -> None:
     secret = "account-test-secret-32-bytes-long"
     service = PersistedAccountService(database, AccountEngine(SequenceIds()), secret)
 
-    group = _group_evidence("event-group-1")
+    group_openid = "GROUP-OPENID-1234567890"
+    group = _group_evidence("event-group-1", group=group_openid)
     first = service.resolve_identity(group)
     assert first.resolved and first.created and first.account
     assert first.account.id == "account-1"
@@ -85,7 +86,7 @@ def _assert_account_relations_and_hmac(path: Path) -> None:
     assert delayed_replay.replayed and delayed_replay.account == first.account
     try:
         service.resolve_identity(
-            _group_evidence("event-group-1", member="M999")
+            _group_evidence("event-group-1", member="M999", group=group_openid)
         )
         raise AssertionError("同一事件 ID 不能更换身份集合")
     except TransactionMismatch:
@@ -105,6 +106,7 @@ def _assert_account_relations_and_hmac(path: Path) -> None:
             "event-conflict",
             user="U123",
             member="U999",
+            group=group_openid,
         )
     )
     assert not conflict.resolved and conflict.conflict
@@ -133,7 +135,7 @@ def _assert_account_relations_and_hmac(path: Path) -> None:
         b"U123",
         b"U999",
         b"M456",
-        b"G1",
+        group_openid.encode("utf-8"),
     ):
         assert raw_value not in raw_database
 

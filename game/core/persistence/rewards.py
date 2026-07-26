@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from ..gameplay.context import RuleContext
@@ -143,6 +143,29 @@ class PersistedRewardSettlementService:
         with self.database.unit_of_work(write=False) as uow:
             return self._load_snapshot(uow, keys, claim_scope_id)
 
+    def is_settled_in_uow(
+        self,
+        uow: SqliteUnitOfWork,
+        claim_scope_id: str,
+        settlement_id: str,
+    ) -> bool:
+        """从永久关系记录判断奖励是否已经提交，并校验双写事实一致。"""
+
+        if not claim_scope_id.strip() or not settlement_id.strip():
+            raise ValueError("奖励领取作用域和结算 ID 不能为空")
+        committed = uow.load_transaction(settlement_id)
+        claim = uow.load_reward_claim(claim_scope_id, settlement_id)
+        if committed is None and claim is None:
+            return False
+        if committed is None or claim is None:
+            raise CorruptPersistenceData("奖励提交事务与关系化领取记录不完整")
+        if (
+            committed.scope_id != claim_scope_id
+            or committed.fingerprint != claim.fingerprint
+        ):
+            raise CorruptPersistenceData("奖励提交事务与关系化领取记录不一致")
+        return True
+
     def settle(
         self,
         settlement: RewardSettlement,
@@ -190,23 +213,32 @@ class PersistedRewardSettlementService:
                     raise TransactionMismatch(
                         f"同一奖励事务 ID 对应不同内容：{settlement.id}"
                     )
-                outcome = self.engine.settle(
-                    settlement,
-                    snapshot=snapshot,
-                    context=context,
+                claim = uow.load_reward_claim(
+                    settlement.claim_scope_id,
+                    settlement.id,
                 )
-                if outcome.failure:
+                if claim is None:
                     raise CorruptPersistenceData(
-                        "数据库已有提交事务，但领取快照无法重放同一奖励"
+                        "数据库已有奖励提交事务，但缺少关系化领取记录"
                     )
-                assert outcome.value is not None
                 receipt = self.snapshots.codec.loads(
                     committed.receipt_payload,
                     RewardReceipt,
                 )
-                if receipt != outcome.value.receipt or not outcome.value.replayed:
-                    raise CorruptPersistenceData("事务表与领取快照中的奖励凭据不一致")
-                return outcome
+                if (
+                    claim.fingerprint != fingerprint
+                    or claim.resulting_revision > snapshot.claims.revision
+                ):
+                    raise CorruptPersistenceData("事务表与奖励领取记录不一致")
+                return RuleOutcome.success(
+                    RewardSettlementExecution(
+                        settlement.id,
+                        snapshot,
+                        receipt,
+                        (),
+                        replayed=True,
+                    )
+                )
 
             outcome = self.engine.settle(
                 settlement,
@@ -220,13 +252,6 @@ class PersistedRewardSettlementService:
                 raise CorruptPersistenceData(
                     "领取快照声明奖励已完成，但缺少数据库提交事务"
                 )
-            self._save_changed(
-                uow,
-                keys,
-                snapshot,
-                outcome.value.snapshot,
-                context.logical_time,
-            )
             timestamp = context.logical_time.isoformat()
             uow.insert_transaction(
                 settlement.id,
@@ -234,6 +259,13 @@ class PersistedRewardSettlementService:
                 settlement.claim_scope_id,
                 self.snapshots.codec.dumps(outcome.value.receipt),
                 timestamp,
+            )
+            self._save_changed(
+                uow,
+                keys,
+                snapshot,
+                outcome.value.snapshot,
+                context.logical_time,
             )
             for sequence, event in enumerate(outcome.value.events):
                 uow.append_fact(
@@ -243,7 +275,14 @@ class PersistedRewardSettlementService:
                     self.snapshots.codec.dumps(event),
                     timestamp,
                 )
-            return outcome
+            compacted = RewardSettlementSnapshot(
+                outcome.value.snapshot.inventory,
+                self.snapshots.compact(outcome.value.snapshot.ledger),
+                outcome.value.snapshot.characters,
+                outcome.value.snapshot.weapons,
+                self.snapshots.compact(outcome.value.snapshot.claims),
+            )
+            return RuleOutcome.success(replace(outcome.value, snapshot=compacted))
         except Exception:
             context.random.restore(checkpoint)
             raise

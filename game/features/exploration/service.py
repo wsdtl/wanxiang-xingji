@@ -28,6 +28,7 @@ from .models import (
     ExplorationOperationResult,
     ExplorationStorageKinds,
 )
+from .recovery import ExplorationRestCoordinator
 from .settlement import ExplorationSettlementService
 
 
@@ -47,12 +48,14 @@ class ExplorationFeature:
         storage: ExplorationStorageKinds,
         reward_keys_factory,
         companion_growth,
+        rest,
         settlement_observer=None,
     ) -> None:
         self.database = database
         self.content = content
         self.snapshots = snapshots
         self.storage = storage
+        self.rest = ExplorationRestCoordinator(database, snapshots, rest)
         self.settlement = ExplorationSettlementService(
             database,
             content,
@@ -65,6 +68,7 @@ class ExplorationFeature:
             storage,
             reward_keys_factory,
             companion_growth,
+            self.rest,
             settlement_observer,
         )
 
@@ -78,7 +82,7 @@ class ExplorationFeature:
             previous = self.snapshots.load(
                 uow, EXPLORATION_AGGREGATE, character_id, ExplorationState
             )
-            if previous is not None and previous.status is ExplorationStatus.RUNNING:
+            if previous is not None and previous.active:
                 return ExplorationOperationResult("already_running", previous)
             character = self.snapshots.require(
                 uow, self.storage.character, character_id, CharacterState
@@ -143,6 +147,7 @@ class ExplorationFeature:
                 return ExplorationOperationResult("not_started", batches=settled.batches)
             if current.status is ExplorationStatus.STOPPED:
                 return ExplorationOperationResult("already_stopped", current, settled.batches)
+            self.rest.stop_in_uow(uow, current, logical_time=logical_time)
             stopped = stop_exploration(
                 current,
                 ExplorationStopReason.MANUAL,
@@ -179,10 +184,21 @@ class ExplorationFeature:
         logical_time: datetime,
         limit: int = MAX_CATCH_UP_BATCHES,
     ) -> ExplorationOperationResult:
-        return self.settlement.settle_due(
-            character_id,
-            logical_time=logical_time,
-            limit=limit,
+        completed: list[ExplorationBatchResult] = []
+        for _ in range(limit):
+            self.rest.resume_due(character_id, logical_time=logical_time)
+            result = self.settlement.settle_due(
+                character_id,
+                logical_time=logical_time,
+                limit=1,
+            )
+            if not result.batches:
+                break
+            completed.extend(result.batches)
+        return ExplorationOperationResult(
+            "settled",
+            self.settlement.load_state(character_id),
+            tuple(completed),
         )
 
     def settle_all_due(
@@ -191,7 +207,43 @@ class ExplorationFeature:
         logical_time: datetime,
         limit: int = MAX_DISCOVERABLE_EXPLORATIONS,
     ) -> int:
-        return self.settlement.settle_all_due(logical_time=logical_time, limit=limit)
+        settled = 0
+        after_id: str | None = None
+        while True:
+            with self.database.unit_of_work(write=False) as uow:
+                states = self.snapshots.list(
+                    uow,
+                    EXPLORATION_AGGREGATE,
+                    ExplorationState,
+                    limit=limit,
+                    after_id=after_id,
+                )
+            if not states:
+                break
+            for state in states:
+                if state.status is ExplorationStatus.STOPPED:
+                    continue
+                if (
+                    state.status is ExplorationStatus.RUNNING
+                    and state.next_batch_at > logical_time
+                ):
+                    continue
+                if (
+                    state.status is ExplorationStatus.RESTING
+                    and state.rest_completes_at is not None
+                    and state.rest_completes_at > logical_time
+                ):
+                    continue
+                result = self.settle_due(
+                    state.character_id,
+                    logical_time=logical_time,
+                    limit=MAX_CATCH_UP_BATCHES,
+                )
+                settled += len(result.batches)
+            after_id = states[-1].character_id
+            if len(states) < limit:
+                break
+        return settled
 
 
 def _presence(world: WorldState, character_id: str):

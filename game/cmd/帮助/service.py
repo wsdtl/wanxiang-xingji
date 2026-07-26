@@ -103,13 +103,13 @@ def _detail_message(entry: CommandHelpEntry) -> DocumentMessage:
                 "help.execute",
                 "发送命令",
                 entry.command,
-                behavior="send",
+                behavior="callback",
             ),
             Action(
                 "help.category",
                 "返回分类",
                 f"帮助 {entry.spec.category}",
-                behavior="send",
+                behavior="callback",
                 style="secondary",
             ),
         )
@@ -134,7 +134,7 @@ def _home_action() -> Action:
         "help.home",
         "帮助首页",
         "帮助",
-        behavior="send",
+        behavior="callback",
         style="secondary",
     )
 

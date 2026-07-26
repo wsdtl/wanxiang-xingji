@@ -19,8 +19,8 @@ from game.rules.battle_report import (
 from .assembly import BattleReportBuilder
 
 
-DETAIL_RETENTION = timedelta(hours=6)
-SUMMARY_RETENTION = timedelta(hours=24)
+DETAIL_RETENTION = timedelta(hours=3)
+SUMMARY_RETENTION = timedelta(hours=12)
 
 
 @dataclass(frozen=True)
@@ -147,6 +147,8 @@ class BattleReportService:
         stored = self.store.load_public(
             str(share_id or "").strip(),
             logical_time=logical_time.isoformat(),
+            detail_finished_after=(logical_time - DETAIL_RETENTION).isoformat(),
+            summary_finished_after=(logical_time - SUMMARY_RETENTION).isoformat(),
         )
         if stored is None:
             return None
@@ -167,7 +169,11 @@ class BattleReportService:
         """删除超过短期保留期的明细与摘要。"""
 
         _aware(logical_time)
-        return self.store.cleanup(logical_time=logical_time.isoformat())
+        return self.store.cleanup(
+            logical_time=logical_time.isoformat(),
+            detail_finished_cutoff=(logical_time - DETAIL_RETENTION).isoformat(),
+            summary_finished_cutoff=(logical_time - SUMMARY_RETENTION).isoformat(),
+        )
 
     @staticmethod
     def _validate_identity(row, draft: BattleReportDraft) -> None:

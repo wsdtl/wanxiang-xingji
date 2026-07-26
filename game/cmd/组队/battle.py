@@ -169,8 +169,7 @@ async def start(current: CurrentCharacterResult) -> None:
             )
             builder.field("战斗行动", result.turns)
             for character_id, lines in result.reward_summaries.items():
-                builder.item(
-                    character_id,
+                builder.line(
                     shared.character_name(character_id),
                     "：",
                     "；".join(lines),
@@ -258,7 +257,7 @@ def _challenge_message(
                     "party-battle.start",
                     "发起挑战",
                     "开始组队挑战",
-                    behavior="send",
+                    behavior="callback",
                 )
             )
         actions.append(
@@ -266,7 +265,7 @@ def _challenge_message(
                 "party-battle.unready" if ready else "party-battle.ready",
                 "取消准备" if ready else "准备",
                 "取消准备" if ready else "准备",
-                behavior="send",
+                behavior="callback",
                 style="secondary" if ready else "primary",
             )
         )
@@ -281,7 +280,23 @@ def _challenge_message(
                 "战报",
                 M.link("查看完整战报", public_url("battle", report.share_id)),
             )
-    return builder.build()
+    return builder.actions(
+        (
+            Action(
+                "party-battle.select.next",
+                "选择下一场",
+                "选择组队挑战 ",
+                behavior="fill",
+            ),
+            Action(
+                "party-battle.party",
+                "返回队伍",
+                "队伍",
+                behavior="callback",
+                style="secondary",
+            ),
+        )
+    ).build()
 
 
 __all__ = ["select", "set_ready", "start", "view"]

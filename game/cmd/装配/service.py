@@ -226,7 +226,6 @@ def _loadout_message(
                 M.command(
                     _name(instance, preference, view),
                     f"装备 {reference}",
-                    submit=False,
                 ),
                 FieldSeparator(),
                 reference,
@@ -251,7 +250,7 @@ def _preset_message(loadout: LoadoutState, view) -> DocumentMessage:
         if preset_id == loadout.active_preset_id:
             label += "（当前）"
         builder.line(
-            M.command(label, f"配装 {index}", submit=False),
+            M.command(label, f"配装 {index}"),
             FieldSeparator(),
             f"{len(preset.slots)}/7",
         )

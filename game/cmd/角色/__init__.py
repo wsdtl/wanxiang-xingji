@@ -97,4 +97,23 @@ async def auto_medicine(
     await service.auto_medicine(message, current)
 
 
+@GameCommand.handler(
+    cmd="自动休整",
+    help=HelpSpec(
+        category="角色",
+        summary="查看或切换探险战败及低资源时的自动休整",
+        usage=("自动休整", "自动休整 开启", "自动休整 关闭"),
+        side_effect="关闭后，探险战败会直接结束当前会话",
+        order=60,
+    ),
+)
+async def auto_rest(
+    message: str = "",
+    current=Depends(current_character),
+) -> None:
+    """查看或修改探险自动休整开关。"""
+
+    await service.auto_rest(message, current)
+
+
 __all__ = []

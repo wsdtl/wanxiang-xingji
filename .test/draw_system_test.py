@@ -16,6 +16,7 @@ from game.app import build_game_services  # noqa: E402
 from game.content import (  # noqa: E402
     BREAKTHROUGH_TOKEN_ITEM_ID,
     DRAW_CATALOG_CONTENT,
+    DRAW_CURRENCY_COST_PER_ROLL,
     DRAW_REWARD_LOW_CURRENCY_ID,
     DRAW_REWARD_MID_CURRENCY_ID,
     DRAW_TICKET_ITEM_ID,
@@ -35,14 +36,21 @@ from game.core.gameplay import (  # noqa: E402
     GrantStack,
     InventoryState,
     InventoryTransaction,
+    IssueFunds,
+    LedgerTransaction,
     LedgerState,
+    RuleFailure,
     RuleContext,
+    RuleOutcome,
     Ruleset,
     SeededRandomSource,
     SourceReceipt,
 )
 from game.core.persistence import INVENTORY_AGGREGATE, LEDGER_AGGREGATE  # noqa: E402
-from game.rules.character import PRIMARY_LEDGER_ID  # noqa: E402
+from game.rules.character import (  # noqa: E402
+    PRIMARY_ISSUER_ACCOUNT_ID,
+    PRIMARY_LEDGER_ID,
+)
 
 
 TIME = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
@@ -81,6 +89,8 @@ def main() -> None:
             COMPANION_EXPERIENCE_ITEM_ID,
         }
     )
+    assert 10 * DRAW_CURRENCY_COST_PER_ROLL == 2_500
+    assert 50 * DRAW_CURRENCY_COST_PER_ROLL == 12_500
     with TemporaryDirectory() as directory:
         services = build_game_services(
             database_path=Path(directory) / "draw.db",
@@ -88,7 +98,25 @@ def main() -> None:
         )
         services.database.initialize()
         character = _create_character(services)
-        _grant_tickets(services, character.id, 20)
+
+        initial_balance = _wallet_balance(services, character.id)
+        initial_inventory_revision = _inventory(services, character.id).revision
+        initial_status = services.draw.status(character.id)
+        insufficient = services.draw.draw(
+            character.id,
+            "draw-insufficient",
+            1,
+            logical_time=TIME,
+        )
+        assert insufficient.status == "insufficient"
+        assert insufficient.ticket_count == 0
+        assert insufficient.currency_available == initial_balance == 100
+        assert insufficient.currency_required == DRAW_CURRENCY_COST_PER_ROLL
+        assert _wallet_balance(services, character.id) == initial_balance
+        assert _inventory(services, character.id).revision == initial_inventory_revision
+        assert services.draw.status(character.id) == initial_status
+
+        _grant_tickets(services, character.id, 10)
 
         balance_before = _wallet_balance(services, character.id)
         first = services.draw.draw(
@@ -98,7 +126,9 @@ def main() -> None:
             logical_time=TIME,
         )
         assert first.status == "drawn" and first.record is not None
-        assert first.ticket_count == 10
+        assert first.ticket_count == 0
+        assert first.record.tickets_spent == 10
+        assert first.record.currency_spent == 0
         assert len(first.record.receipt.awards) == 10
         currency = sum(
             value.quantity
@@ -120,23 +150,80 @@ def main() -> None:
         assert _inventory(services, character.id).revision == inventory_revision
         assert _wallet_balance(services, character.id) == balance_after
 
-        second = services.draw.draw(
+        _grant_tickets(services, character.id, 3)
+        _grant_currency(services, character.id, 5_000, "mixed-funds")
+        mixed_balance = _wallet_balance(services, character.id)
+        mixed = services.draw.draw(
             character.id,
-            "draw-operation-2",
+            "draw-mixed-ten",
             10,
             logical_time=TIME,
         )
-        assert second.status == "drawn" and second.ticket_count == 0
-        insufficient = services.draw.draw(
+        assert mixed.status == "drawn" and mixed.record is not None
+        assert mixed.ticket_count == 0
+        assert mixed.record.tickets_spent == 3
+        assert mixed.record.currency_spent == 7 * DRAW_CURRENCY_COST_PER_ROLL == 1_750
+        assert _wallet_balance(services, character.id) == (
+            mixed_balance
+            - mixed.record.currency_spent
+            + _currency_awards(mixed.record.receipt.awards)
+        )
+
+        single_balance = _wallet_balance(services, character.id)
+        single = services.draw.draw(
             character.id,
-            "draw-operation-3",
+            "draw-currency-single",
             1,
             logical_time=TIME,
         )
-        assert insufficient.status == "insufficient" and insufficient.ticket_count == 0
+        assert single.status == "drawn" and single.record is not None
+        assert single.record.tickets_spent == 0
+        assert single.record.currency_spent == DRAW_CURRENCY_COST_PER_ROLL
+        assert _wallet_balance(services, character.id) == (
+            single_balance
+            - DRAW_CURRENCY_COST_PER_ROLL
+            + _currency_awards(single.record.receipt.awards)
+        )
+
+        ten_balance = _wallet_balance(services, character.id)
+        ten = services.draw.draw(
+            character.id,
+            "draw-currency-ten",
+            10,
+            logical_time=TIME,
+        )
+        assert ten.status == "drawn" and ten.record is not None
+        assert ten.record.tickets_spent == 0
+        assert ten.record.currency_spent == 10 * DRAW_CURRENCY_COST_PER_ROLL == 2_500
+        assert _wallet_balance(services, character.id) == (
+            ten_balance
+            - ten.record.currency_spent
+            + _currency_awards(ten.record.receipt.awards)
+        )
+
+        failure_balance = _wallet_balance(services, character.id)
+        failure_inventory = _inventory(services, character.id)
+        failure_status = services.draw.status(character.id)
+        reward_settlement = services.draw.reward_settlement
+        services.draw.reward_settlement = _FailingRewardSettlement()
+        try:
+            failed = services.draw.draw(
+                character.id,
+                "draw-rollback",
+                1,
+                logical_time=TIME,
+            )
+        finally:
+            services.draw.reward_settlement = reward_settlement
+        assert failed.status == "rejected"
+        assert _wallet_balance(services, character.id) == failure_balance
+        assert _inventory(services, character.id) == failure_inventory
+        assert services.draw.status(character.id) == failure_status
+
         status = services.draw.status(character.id)
-        assert len(status.records) == 2
-        assert status.records[0].operation_id == "draw-operation-2"
+        assert len(status.records) == 4
+        assert status.records[0].operation_id == "draw-currency-ten"
+        assert status.currency_balance == _wallet_balance(services, character.id)
         assert 0 <= status.pity_count < 10
         assert 0 <= status.guarantee_counts[DRAW_BREAKTHROUGH_GUARANTEE_SLOT_ID] < 50
 
@@ -224,6 +311,62 @@ def _assert_item_awards(services, character_id: str, awards) -> None:
         )
         initial = 2 if "small_" in definition_id else 0
         assert stack.quantity >= initial + quantity
+
+
+def _currency_awards(awards) -> int:
+    return sum(
+        value.quantity
+        for value in awards
+        if value.award_id in CURRENCY_AWARD_IDS
+    )
+
+
+def _grant_currency(services, character_id: str, amount: int, trace_id: str) -> None:
+    with services.database.unit_of_work() as uow:
+        ledger = services.draw.snapshots.require(
+            uow,
+            LEDGER_AGGREGATE,
+            PRIMARY_LEDGER_ID,
+            LedgerState,
+        )
+        issuer = ledger.accounts[PRIMARY_ISSUER_ACCOUNT_ID]
+        wallet = next(
+            value
+            for value in ledger.accounts.values()
+            if value.owner_kind == "owner.character" and value.owner_id == character_id
+        )
+        outcome = services.draw.ledger_engine.execute(
+            LedgerTransaction(
+                f"grant-currency:{trace_id}",
+                character_id,
+                "economy.test_issue",
+                (IssueFunds(issuer.id, wallet.id, amount),),
+                expected_revisions={
+                    issuer.id: issuer.revision,
+                    wallet.id: wallet.revision,
+                },
+            ),
+            state=ledger,
+            context=_context(f"grant-currency:{trace_id}"),
+        )
+        assert outcome.ok and outcome.value is not None, outcome.failure
+        services.draw.snapshots.update(
+            uow,
+            LEDGER_AGGREGATE,
+            PRIMARY_LEDGER_ID,
+            ledger,
+            outcome.value.state,
+            TIME,
+        )
+        uow.commit()
+
+
+class _FailingRewardSettlement:
+    @staticmethod
+    def settle_in_uow(*_args, **_kwargs):
+        return RuleOutcome.failed(
+            RuleFailure("reward.test_failure", "测试奖励结算失败")
+        )
 
 
 def _inventory(services, character_id: str) -> InventoryState:

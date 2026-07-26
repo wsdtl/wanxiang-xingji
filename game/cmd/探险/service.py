@@ -17,6 +17,7 @@ from game.features.world_travel import WorldLocationIntent, WorldTravelResult
 from game.core.gameplay import equipment_state_from_instance, weapon_state_from_instance
 from game.rules.exploration import (
     ExplorationEncounterKind,
+    ExplorationRestReason,
     ExplorationRewardKind,
     ExplorationStatus,
     ExplorationStopReason,
@@ -38,14 +39,13 @@ async def view_exploration(current: CurrentCharacterResult) -> None:
         return
     try:
         services = current_game_services()
-        state, overview = await asyncio.gather(
-            asyncio.to_thread(
-                services.exploration.load,
-                character.id,
-                logical_time=command_time(),
-            ),
-            asyncio.to_thread(services.load_character_overview, character),
+        logical_time = command_time()
+        state = await asyncio.to_thread(
+            services.exploration.load,
+            character.id,
+            logical_time=logical_time,
         )
+        overview = await asyncio.to_thread(services.load_character_overview, character)
         view = services.world_view(current.character_world)
         await send_game_reply(_exploration_message(state, overview.overview, view))
     except Exception as exc:
@@ -101,13 +101,15 @@ async def summary(current: CurrentCharacterResult) -> None:
         return
     try:
         services = current_game_services()
-        result, overview_result = await asyncio.gather(
-            asyncio.to_thread(
-                services.exploration.load,
-                character.id,
-                logical_time=command_time(),
-            ),
-            asyncio.to_thread(services.load_character_overview, character),
+        logical_time = command_time()
+        result = await asyncio.to_thread(
+            services.exploration.load,
+            character.id,
+            logical_time=logical_time,
+        )
+        overview_result = await asyncio.to_thread(
+            services.load_character_overview,
+            character,
         )
         if overview_result.status != "ok" or overview_result.overview is None:
             await send_game_reply(_unavailable())
@@ -183,6 +185,11 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
     )
     if result.state is not None and result.state.status is ExplorationStatus.RUNNING:
         builder.field("下次结算", _time(result.state.next_batch_at))
+    elif result.state is not None and result.state.status is ExplorationStatus.RESTING:
+        builder.field("休整原因", _rest_reason_text(result.state.rest_reason))
+        if result.state.rest_completes_at is not None:
+            builder.field("休整完成", _time(result.state.rest_completes_at))
+        builder.field("下次结算", _time(result.state.next_batch_at))
     builder.section("常规区域", icon="combat")
     bindings = (
         services.content.worlds.bindings_for_world(
@@ -240,14 +247,14 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
             f" | {_focus(region.kind.value)} | {_levels(region.minimum_enemy_level, region.maximum_enemy_level)}",
         )
     actions = []
-    if result.state is not None and result.state.status is ExplorationStatus.RUNNING:
-        actions.append(Action("exploration.stop", "停止", "停止探险", behavior="send"))
+    if result.state is not None and result.state.active:
+        actions.append(Action("exploration.stop", "停止", "停止探险", behavior="callback"))
         actions.append(
             Action(
                 "exploration.summary",
                 "查看总结",
                 "探险总结",
-                behavior="send",
+                behavior="callback",
                 style="secondary",
             )
         )
@@ -261,7 +268,7 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
         except KeyError:
             resolved = None
         if resolved is not None and resolved.binding.content_ref is not None:
-            actions.append(Action("exploration.start", "开始", "开始探险", behavior="send"))
+            actions.append(Action("exploration.start", "开始", "开始探险", behavior="callback"))
     actions.append(Action("exploration.move", "前往", "前往 ", behavior="fill", style="secondary"))
     return builder.actions(tuple(actions)).build()
 
@@ -304,15 +311,15 @@ def _start_message(result: ExplorationOperationResult, view) -> DocumentMessage:
         return (
             builder.field("区域", _name(result.state.location_id, view))
             .field("首次结算", _time(result.state.next_batch_at))
-            .line(f"之后每 10 分钟自动结算，最多 {MAX_EXPLORATION_BATCHES} 批，或直到停止、战败、容量已满。")
+            .line(f"之后每 10 分钟自动结算，最多 {MAX_EXPLORATION_BATCHES} 批；自动休整开启时，战败或资源过低会在完全恢复后续行。")
             .actions(
                 (
-                    Action("exploration.stop", "停止", "停止探险", behavior="send"),
+                    Action("exploration.stop", "停止", "停止探险", behavior="callback"),
                     Action(
                         "exploration.summary",
                         "查看总结",
                         "探险总结",
-                        behavior="send",
+                        behavior="callback",
                         style="secondary",
                     ),
                 )
@@ -410,9 +417,15 @@ def _summary_message(
         .field("伙伴经验", f"+{state.companion_experience}")
         .row(("武器", state.weapon_drops), ("装备", state.equipment_drops))
         .row(("战利品", state.trophy_drops), ("药物掉落", state.medicine_drops))
+        .row(("休整次数", state.rest_count), ("累计休整", _duration(_rest_seconds(state))))
         .field("抽奖签", state.draw_ticket_drops)
         .field("战利品估价", f"{state.trophy_value} {_name(PRIMARY_CURRENCY_ID, view)}")
     )
+    if state.status is ExplorationStatus.RESTING:
+        builder.field("休整原因", _rest_reason_text(state.rest_reason))
+        if state.rest_completes_at is not None:
+            builder.field("休整完成", _time(state.rest_completes_at))
+        builder.field("下次结算", _time(state.next_batch_at))
     if battle_report is not None:
         builder.field(
             "战报",
@@ -453,7 +466,7 @@ def _summary_message(
     if state.medicine_drops:
         builder.note("药物数量为累计掉落；开启自动用药时，批次间消耗后可能不再留存在纳戒。")
     actions = []
-    if state.status is ExplorationStatus.RUNNING:
+    if state.active:
         actions.append(Action("exploration.stop", "停止探险", "停止探险"))
     else:
         actions.extend(
@@ -462,7 +475,7 @@ def _summary_message(
                     "exploration.recycle_trophies",
                     "回收",
                     "回收战利品",
-                    behavior="send",
+                    behavior="callback",
                 ),
                 Action(
                     "exploration.regions",
@@ -481,6 +494,8 @@ def _status_text(result: ExplorationOperationResult) -> str:
         return "未开始"
     if state.status is ExplorationStatus.RUNNING:
         return "进行中"
+    if state.status is ExplorationStatus.RESTING:
+        return "休整中"
     return {
         ExplorationStopReason.MANUAL: "已停止",
         ExplorationStopReason.DEFEATED: "战败停止",
@@ -488,6 +503,36 @@ def _status_text(result: ExplorationOperationResult) -> str:
         ExplorationStopReason.BATCH_LIMIT: f"达到 {MAX_EXPLORATION_BATCHES} 批上限",
         ExplorationStopReason.INVALID_LOCATION: "位置失效",
     }.get(state.stop_reason, "已停止")
+
+
+def _rest_reason_text(reason: ExplorationRestReason | None) -> str:
+    return {
+        ExplorationRestReason.DEFEATED: "本批战败",
+        ExplorationRestReason.LOW_RESOURCES: "资源过低",
+    }.get(reason, "等待恢复")
+
+
+def _rest_seconds(state) -> float:
+    seconds = state.rest_seconds
+    if (
+        state.status is ExplorationStatus.RESTING
+        and state.rest_started_at is not None
+        and state.rest_completes_at is not None
+    ):
+        current = command_time()
+        effective = min(max(current, state.rest_started_at), state.rest_completes_at)
+        seconds += (effective - state.rest_started_at).total_seconds()
+    return seconds
+
+
+def _duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, remainder = divmod(total, 60)
+    if minutes and remainder:
+        return f"{minutes}分{remainder}秒"
+    if minutes:
+        return f"{minutes}分钟"
+    return f"{remainder}秒"
 
 
 def _resolve_location(value: str, view) -> tuple[str | None, WorldLocationIntent | None]:

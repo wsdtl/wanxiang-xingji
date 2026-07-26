@@ -36,6 +36,7 @@ DRAW_REWARD_LOW_CURRENCY_ID = "draw_reward.currency.low"
 DRAW_REWARD_MID_CURRENCY_ID = "draw_reward.currency.mid"
 DRAW_BREAKTHROUGH_GUARANTEE_SLOT_ID = "draw_guarantee.breakthrough"
 DRAW_BREAKTHROUGH_GUARANTEE_ENTRY_ID = "draw_guarantee_entry.breakthrough_token"
+DRAW_CURRENCY_COST_PER_ROLL = 250
 
 DRAW_TIER_LOW = "low"
 DRAW_TIER_MID = "mid"

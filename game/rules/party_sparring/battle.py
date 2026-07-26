@@ -1,4 +1,4 @@
-"""Project two current parties into one lossless automatic battle."""
+"""将两个当前队伍按满资源状态投影为一次无损自动战斗。"""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from game.core.gameplay import (
     RuleContext,
     TagSet,
 )
+from game.rules.combat import fully_restored_entity
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ class PartySparringBattleOutcome:
 
 
 class PartySparringBattleSimulator:
-    """Read party lineups and run combat without persisting combat resources."""
+    """读取双方当前阵容，以满资源模拟且不持久化战斗资源。"""
 
     def __init__(self, content, player_lineup) -> None:
         self.content = content
@@ -136,7 +137,13 @@ class PartySparringBattleSimulator:
                 context_tags=TagSet.of("scene.party_sparring", f"side.{side}"),
             )
             lineups[character.id] = lineup
-            entities.update(lineup.entities)
+            projected_entities = lineup.entities
+            projected_entities[character.id] = fully_restored_entity(
+                projected_entities[character.id],
+                self.content.resources,
+                self.content.enemy_projector.attributes,
+            )
+            entities.update(projected_entities)
             rules.update(self.player_lineup.ai_rules(lineup))
             for offset, entity_id in enumerate(lineup.participant_ids):
                 participants.append(

@@ -100,7 +100,7 @@ class Party:
 
 @dataclass(frozen=True)
 class PartyState:
-    """一个分片内的全部队伍，用于保证成员不能同时加入多支活跃队伍。"""
+    """一个队伍分片的不可变状态；跨分片成员排他由持久化唯一索引保证。"""
 
     scope_id: str
     parties: Mapping[str, Party] = field(default_factory=dict)

@@ -32,10 +32,10 @@ from game.core.gameplay import (
     TransferPartyLeadership,
     party_invitation_metadata,
 )
-
 from .models import PartyOperationResult, PartyView
 
 
+# 仅供 v6 数据识别；v7 起每支队伍使用自己的 party_id 作为聚合分片。
 PARTY_SCOPE_ID = "party.global"
 PARTY_SOCIAL_SCOPE_ID = "social.party.global"
 
@@ -50,15 +50,8 @@ class PartyFeature:
         self.catalog = catalog
 
     def view(self, character_id: str, *, logical_time: datetime) -> PartyView:
-        party_state = self._party_state(logical_time)
-        party = next(
-            (
-                value
-                for value in party_state.parties.values()
-                if value.status is PartyStatus.ACTIVE and character_id in value.members
-            ),
-            None,
-        )
+        party_state = self.parties.find_by_member(character_id)
+        party = self._member_party(party_state, character_id) if party_state else None
         social_state = self._social_state(logical_time)
         requests = tuple(
             value
@@ -68,7 +61,7 @@ class PartyFeature:
             and value.status is SocialRequestStatus.PENDING
             and logical_time < value.expires_at
         )
-        return PartyView(party, requests, party_state.revision)
+        return PartyView(party, requests, party_state.revision if party_state else 0)
 
     def create(
         self,
@@ -77,20 +70,26 @@ class PartyFeature:
         *,
         logical_time: datetime,
     ) -> PartyOperationResult:
-        state = self._party_state(logical_time)
-        if self._member_party(state, character_id) is not None:
+        state = self.parties.find_by_member(character_id)
+        if state is not None:
             return PartyOperationResult("already_member", self._member_party(state, character_id))
         party_id = _party_id(operation_id, character_id)
         outcome = self.parties.execute(
-            PARTY_SCOPE_ID,
+            party_id,
             PartyCommand(
                 operation_id,
                 character_id,
-                state.revision,
+                0,
                 CreateParty(party_id, PARTY_TYPE_TRIO_ID),
             ),
             context=_context(operation_id, logical_time, "create"),
         )
+        if outcome.failure and outcome.failure.code == "party.exclusive_membership":
+            current = self.parties.find_by_member(character_id)
+            return PartyOperationResult(
+                "already_member",
+                self._member_party(current, character_id) if current else None,
+            )
         if outcome.failure or outcome.value is None:
             return _failure_result(outcome.failure)
         return PartyOperationResult("created", outcome.value.execution.party)
@@ -103,8 +102,8 @@ class PartyFeature:
         *,
         logical_time: datetime,
     ) -> PartyOperationResult:
-        state = self._party_state(logical_time)
-        party = self._member_party(state, leader_id)
+        state = self.parties.find_by_member(leader_id)
+        party = self._member_party(state, leader_id) if state else None
         if party is None:
             return PartyOperationResult("not_member", failure_message="请先创建或加入队伍")
         if party.leader_id != leader_id:
@@ -114,7 +113,7 @@ class PartyFeature:
         capacity = self.catalog.require(party.definition_id).capacity
         if len(party.members) >= capacity:
             return PartyOperationResult("full", party, failure_message="队伍人数已经达到上限")
-        if self._member_party(state, target_id) is not None:
+        if self.parties.find_by_member(target_id) is not None:
             return PartyOperationResult("target_busy", party, failure_message="对方已经加入其他队伍")
         social_state = self._social_state(logical_time)
         existing = next(
@@ -163,7 +162,6 @@ class PartyFeature:
         *,
         logical_time: datetime,
     ) -> PartyOperationResult:
-        party_state = self._party_state(logical_time)
         social_state = self._social_state(logical_time)
         request = social_state.requests.get(request_id)
         if request is None:
@@ -171,12 +169,17 @@ class PartyFeature:
         party_id = request.metadata.get("party_id", "")
         if not party_id:
             return PartyOperationResult("invalid", failure_message="队伍邀请缺少目标队伍")
+        party_state = self.parties.load(party_id)
+        if party_state is None:
+            return PartyOperationResult("invalid", failure_message="队伍已经不存在")
+        if self.parties.find_by_member(member_id) is not None:
+            return PartyOperationResult("target_busy", failure_message="当前已经加入其他队伍")
         outcome = self.admissions.execute(
             PartyAdmissionCommand(
                 operation_id,
                 member_id,
                 PARTY_SOCIAL_SCOPE_ID,
-                PARTY_SCOPE_ID,
+                party_id,
                 request_id,
                 PARTY_INVITATION_REQUEST_ID,
                 party_id,
@@ -277,15 +280,15 @@ class PartyFeature:
         expected_revision: int | None = None,
         logical_time: datetime,
     ) -> PartyOperationResult:
-        state = self._party_state(logical_time)
-        party = self._member_party(state, leader_id)
+        state = self.parties.find_by_member(leader_id)
+        party = self._member_party(state, leader_id) if state else None
         if party is None:
             return PartyOperationResult("not_member", failure_message="当前没有队伍")
         if expected_revision is not None and state.revision != expected_revision:
             return PartyOperationResult(
                 "stale",
                 party,
-                failure_message="队伍状态已经变化，请重新确认解散",
+                failure_message="队伍状态已经变化，请重新打开队伍",
             )
         return self._party_operation(
             operation_id,
@@ -332,12 +335,12 @@ class PartyFeature:
         )
 
     def _party_operation(self, operation_id, actor_id, operation, logical_time):
-        state = self._party_state(logical_time)
-        party = self._member_party(state, actor_id)
+        state = self.parties.find_by_member(actor_id)
+        party = self._member_party(state, actor_id) if state else None
         if party is None:
             return PartyOperationResult("not_member", failure_message="当前没有队伍")
         outcome = self.parties.execute(
-            PARTY_SCOPE_ID,
+            party.id,
             PartyCommand(operation_id, actor_id, state.revision, operation),
             context=_context(operation_id, logical_time, "party"),
         )
@@ -345,16 +348,13 @@ class PartyFeature:
             return _failure_result(outcome.failure, party=party)
         return PartyOperationResult(outcome.value.execution.events[0].kind.removeprefix("party."), outcome.value.execution.party)
 
-    def _party_state(self, logical_time):
-        value = self.parties.load(PARTY_SCOPE_ID)
-        return value or self.parties.initialize(PARTY_SCOPE_ID, logical_time=logical_time)
-
     def _social_state(self, logical_time):
         value = self.social.load(PARTY_SOCIAL_SCOPE_ID)
         return value or self.social.initialize(PARTY_SOCIAL_SCOPE_ID, logical_time=logical_time)
 
     def _party_for(self, character_id, logical_time):
-        return self._member_party(self._party_state(logical_time), character_id)
+        state = self.parties.find_by_member(character_id)
+        return self._member_party(state, character_id) if state else None
 
     @staticmethod
     def _member_party(state: PartyState, character_id: str):

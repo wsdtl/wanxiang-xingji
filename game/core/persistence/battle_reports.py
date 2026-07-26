@@ -165,7 +165,14 @@ class BattleReportStore:
             ).fetchone()
         return (str(row["report_id"]), str(row["share_id"])) if row else None
 
-    def load_public(self, share_id: str, *, logical_time: str) -> PublicBattleReportRow | None:
+    def load_public(
+        self,
+        share_id: str,
+        *,
+        logical_time: str,
+        detail_finished_after: str,
+        summary_finished_after: str,
+    ) -> PublicBattleReportRow | None:
         with self.database.unit_of_work(write=False) as uow:
             row = uow.connection.execute(
                 """
@@ -173,14 +180,19 @@ class BattleReportStore:
                        summary_payload, started_at, finished_at,
                        detail_expires_at, summary_expires_at
                 FROM battle_report
-                WHERE share_id = ? AND summary_expires_at > ?
+                WHERE share_id = ?
+                  AND summary_expires_at > ?
+                  AND finished_at > ?
                 """,
-                (share_id, logical_time),
+                (share_id, logical_time, summary_finished_after),
             ).fetchone()
             if row is None:
                 return None
             header = _header(row)
-            detail_available = header.detail_expires_at > logical_time
+            detail_available = (
+                header.detail_expires_at > logical_time
+                and header.finished_at > detail_finished_after
+            )
             payloads = ()
             if detail_available:
                 segment_rows = uow.connection.execute(
@@ -193,20 +205,30 @@ class BattleReportStore:
                 payloads = tuple(bytes(item[0]) for item in segment_rows)
         return PublicBattleReportRow(header, detail_available, payloads)
 
-    def cleanup(self, *, logical_time: str) -> tuple[int, int]:
+    def cleanup(
+        self,
+        *,
+        logical_time: str,
+        detail_finished_cutoff: str,
+        summary_finished_cutoff: str,
+    ) -> tuple[int, int]:
         with self.database.unit_of_work() as uow:
             detail = uow.connection.execute(
                 """
                 DELETE FROM battle_report_segment
                 WHERE report_id IN (
-                    SELECT report_id FROM battle_report WHERE detail_expires_at <= ?
+                    SELECT report_id FROM battle_report
+                    WHERE detail_expires_at <= ? OR finished_at <= ?
                 )
                 """,
-                (logical_time,),
+                (logical_time, detail_finished_cutoff),
             ).rowcount
             summaries = uow.connection.execute(
-                "DELETE FROM battle_report WHERE summary_expires_at <= ?",
-                (logical_time,),
+                """
+                DELETE FROM battle_report
+                WHERE summary_expires_at <= ? OR finished_at <= ?
+                """,
+                (logical_time, summary_finished_cutoff),
             ).rowcount
             uow.commit()
         return int(detail), int(summaries)

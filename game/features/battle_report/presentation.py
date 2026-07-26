@@ -317,7 +317,7 @@ class BattleReportPresenter:
             "detail": {
                 "available": report.detail_available,
                 "retention_notice": (
-                    "完整行动保留 6 小时；当前仅保留本场结算摘要。"
+                    "完整行动保留 3 小时；当前仅保留本场结算摘要。"
                     if not report.detail_available
                     else ""
                 ),

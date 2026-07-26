@@ -104,9 +104,11 @@ class DocumentBuilder:
         self._append_section_line(tuple(parts))
         return self
 
-    def item(self, index: object, *parts: TextPart) -> "DocumentBuilder":
+    def item(self, index: int, *parts: TextPart) -> "DocumentBuilder":
         """添加带稳定编号的列表项。"""
 
+        if isinstance(index, bool) or not isinstance(index, int) or index < 1:
+            raise ValueError("消息列表编号必须是正整数，不能使用内部业务标识")
         self._append_section_line(rich(f"[{index}] ", *parts))
         return self
 

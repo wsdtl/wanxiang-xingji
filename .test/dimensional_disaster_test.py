@@ -68,6 +68,7 @@ from game.cmd import 角色 as character_component  # noqa: E402,F401
 from game.cmd import 铭刻 as inscription_component  # noqa: E402,F401
 from game.cmd.跨界灾厄 import service as disaster_command_service  # noqa: E402
 from game.features.dimensional_disaster import service as disaster_feature_service  # noqa: E402
+from game.features.battle_report import build_public_battle_report  # noqa: E402
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
 
@@ -232,6 +233,37 @@ async def _main() -> None:
             )
             assert character_manifest.projection_id == str(target_world)
             assert disaster_manifest.projection_id == str(event.source_world_id)
+            disaster_projector = services.world_views.require(
+                event.source_world_id
+            ).projector
+            expected_permanent_terms = (
+                f"{event.narrative.name}·固有能力",
+                disaster_projector.name(event.combat.rank_id),
+                *(
+                    disaster_projector.name(behavior_id)
+                    for behavior_id in event.combat.behavior_ids
+                ),
+            )
+            assert tuple(
+                disaster_manifest.terms[f"enemy.source_{index}"].name
+                for index in range(len(expected_permanent_terms))
+            ) == expected_permanent_terms
+            public_segment = build_public_battle_report(battle_report)["detail"][
+                "segments"
+            ][0]
+            public_disaster = next(
+                value
+                for value in public_segment["initial_participants"]
+                if value["unit_kind"] == "dimensional_disaster"
+            )
+            permanent_group = next(
+                value
+                for value in public_disaster["detail_groups"]
+                if value["id"] == "permanent_effects"
+            )
+            assert tuple(
+                value["label"] for value in permanent_group["items"]
+            ) == expected_permanent_terms
             assert first_segment.transitions
             assert first_segment.final_participants
             assert all(value.after.participants for value in first_segment.transitions)

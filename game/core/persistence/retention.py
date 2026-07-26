@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 from .sqlite import SqliteDatabase
 
 
-FACT_RETENTION = timedelta(days=7)
-READ_NOTIFICATION_RETENTION = timedelta(days=3)
-UNREAD_NOTIFICATION_RETENTION = timedelta(days=14)
-PUBLISHED_DELIVERY_RETENTION = timedelta(days=1)
+FACT_RETENTION = timedelta(hours=6)
+READ_NOTIFICATION_RETENTION = timedelta(hours=24)
+UNREAD_NOTIFICATION_RETENTION = timedelta(days=7)
+PUBLISHED_DELIVERY_RETENTION = timedelta(hours=1)
 RETENTION_BATCH_SIZE = 5_000
 
 

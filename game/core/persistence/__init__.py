@@ -1,6 +1,6 @@
 """协议和具体玩法无关的持久化联合事务基础设施。"""
 
-PERSISTENCE_FOUNDATION_VERSION = "persistence.foundation.v9"
+PERSISTENCE_FOUNDATION_VERSION = "persistence.foundation.v10"
 
 from .codec import StructuredJsonCodec
 from .actions import (

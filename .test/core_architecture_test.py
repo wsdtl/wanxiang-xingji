@@ -176,6 +176,7 @@ def _assert_physical_layout() -> None:
             "policy.py",
         },
         "draw": {"__init__.py", "definitions.py"},
+        "redemption_code": {"__init__.py", "definitions.py"},
         "enemy": {
             "__init__.py",
             "behaviors.py",

@@ -11,7 +11,7 @@ from game.core.gameplay import (
     WorldTransaction,
 )
 from game.rules.character import CharacterWorldState, MULTIVERSE_WORLD_STATE_ID
-from game.rules.exploration import ExplorationState, ExplorationStatus
+from game.rules.exploration import ExplorationState
 
 from .models import WorldLocationIntent, WorldTravelResult, WorldTravelStorageKinds
 
@@ -51,7 +51,7 @@ class WorldTravelFeature:
                 and action.running(ActionSlotKind.MAIN)
             ) or (
                 exploration is not None
-                and exploration.status is ExplorationStatus.RUNNING
+                and exploration.active
             ):
                 return WorldTravelResult("main_action_occupied")
 

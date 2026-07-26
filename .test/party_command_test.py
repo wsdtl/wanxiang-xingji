@@ -17,6 +17,7 @@ from game.cmd import 组队 as party_component  # noqa: E402,F401
 from game.cmd import 角色 as character_component  # noqa: E402,F401
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
+from launch.message_events import subscribe_message_events, unsubscribe_message_events  # noqa: E402
 
 
 def main() -> None:
@@ -55,6 +56,8 @@ async def _main() -> None:
         )
         services.database.initialize()
         previous = install_game_services(services)
+        message_events = []
+        subscribe_message_events(message_events.append)
         try:
             await LocalEventHandler.run()
             for client, name in (
@@ -74,21 +77,26 @@ async def _main() -> None:
             invited = await _dispatch("party-a", "邀请组队 party-b", "party-invite-b")
             assert "已经向对方发出队伍邀请" in invited.replies[0].message.content
             incoming = await _dispatch("party-b", "组队", "party-view-b")
-            accept_action = next(
-                value for value in incoming.replies[0].message.actions if value.label == "接受"
+            assert "领队 邀请你加入队伍" in incoming.replies[0].message.content
+            assert "party-invite:" not in incoming.replies[0].message.content
+            assert not any(
+                value.label in {"接受", "拒绝"}
+                for value in incoming.replies[0].message.actions
             )
-            forbidden = await _dispatch("party-c", accept_action.data, "party-forbidden-c")
+            accept_link = _interaction(message_events, "party-view-b", "接受")
+            assert accept_link.kind == "command_link"
+            assert accept_link.behavior == "send"
+            forbidden = await _dispatch("party-c", accept_link.data, "party-forbidden-c")
             assert "队伍邀请不属于当前主体" in forbidden.replies[0].message.content
-            accepted = await _dispatch("party-b", accept_action.data, "party-accept-b")
+            accepted = await _dispatch("party-b", accept_link.data, "party-accept-b")
             assert "已经加入队伍" in accepted.replies[0].message.content
 
             nonleader = await _dispatch("party-b", "邀请组队 party-c", "party-nonleader")
             assert "只有队长可以邀请成员" in nonleader.replies[0].message.content
             await _dispatch("party-a", "邀请组队 party-c", "party-invite-c")
             incoming_c = await _dispatch("party-c", "组队", "party-view-c")
-            accept_c = next(
-                value.data for value in incoming_c.replies[0].message.actions if value.label == "接受"
-            )
+            assert "party-invite:" not in incoming_c.replies[0].message.content
+            accept_c = _interaction(message_events, "party-view-c", "接受").data
             await _dispatch("party-c", accept_c, "party-accept-c")
             full = await _dispatch("party-a", "邀请组队 party-d", "party-full")
             assert "队伍人数已经达到上限" in full.replies[0].message.content
@@ -164,6 +172,7 @@ async def _main() -> None:
             final = await _dispatch("party-b", "组队", "party-final")
             assert "当前没有加入队伍" in final.replies[0].message.content
         finally:
+            unsubscribe_message_events(message_events.append)
             restore_game_services(previous)
 
 
@@ -174,6 +183,15 @@ async def _dispatch(client_id: str, command: str, event_id: str):
         sender_name=client_id,
         event_id=event_id,
     )
+
+
+def _interaction(events, request_id: str, label: str):
+    event = next(
+        value
+        for value in reversed(events)
+        if value.direction == "outgoing" and value.request_id == request_id
+    )
+    return next(value for value in event.interactions if value.label == label)
 
 
 if __name__ == "__main__":

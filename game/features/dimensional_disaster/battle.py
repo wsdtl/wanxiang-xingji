@@ -66,7 +66,7 @@ class DimensionalDisasterBattleSimulator:
 
     def enemy_maximum_health(self, combat: DisasterCombatSnapshot, event_id: str) -> float:
         projection = self.content.enemy_projector.project(
-            self._enemy(combat, event_id)
+            self.enemy_instance(combat, event_id)
         )
         return projection.entity.snapshot(
             self.content.enemy_projector.attributes
@@ -90,7 +90,7 @@ class DimensionalDisasterBattleSimulator:
             roster,
             context_tags=TagSet.of("scene.dimensional_disaster"),
         )
-        enemy_instance = self._enemy(combat, event_id)
+        enemy_instance = self.enemy_instance(combat, event_id)
         enemy = self.content.enemy_projector.project(enemy_instance)
         enemy_maximum = enemy.entity.snapshot(
             self.content.enemy_projector.attributes
@@ -222,7 +222,10 @@ class DimensionalDisasterBattleSimulator:
         )
 
     @staticmethod
-    def _enemy(combat: DisasterCombatSnapshot, event_id: str) -> EnemyInstance:
+    def enemy_instance(
+        combat: DisasterCombatSnapshot,
+        event_id: str,
+    ) -> EnemyInstance:
         return EnemyInstance(
             f"enemy:{event_id}",
             combat.enemy_definition_id,

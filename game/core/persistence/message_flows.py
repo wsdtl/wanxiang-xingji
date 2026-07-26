@@ -40,6 +40,12 @@ class MessageFlowStore:
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
+            tables = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
+            ).fetchone()
+            if tables is None:
+                connection.execute("PRAGMA auto_vacuum = INCREMENTAL")
+                connection.execute("VACUUM")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS message_console_flows (
@@ -160,6 +166,9 @@ class MessageFlowStore:
                 """,
                 (max(1, int(max_rows)),),
             )
+            connection.execute("PRAGMA optimize")
+            if int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 2:
+                connection.execute("PRAGMA incremental_vacuum(128)")
 
     def referenced_images(self) -> set[str]:
         with self._lock, self._connect() as connection:

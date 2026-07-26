@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -30,6 +30,10 @@ from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.features.exploration import ExplorationOperationResult  # noqa: E402
 from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules.battle_report import BattleReportReference  # noqa: E402
+from game.rules.exploration import (  # noqa: E402
+    ExplorationRestReason,
+    ExplorationStatus,
+)
 from launch import config  # noqa: E402
 from game.cmd import 探险 as exploration_component  # noqa: E402,F401
 from game.cmd import 回收 as recycle_component  # noqa: E402,F401
@@ -212,6 +216,28 @@ async def _main() -> None:
             assert "药物数量为累计掉落" in rendered_regression.content
             assert "查看完整战报" in rendered_regression.content
             assert rendered_regression.actions[0].data == "停止探险"
+
+            resting_state = replace(
+                state,
+                status=ExplorationStatus.RESTING,
+                next_batch_at=logical_time + timedelta(minutes=20),
+                rest_count=1,
+                rest_reason=ExplorationRestReason.LOW_RESOURCES,
+                rest_started_at=logical_time,
+                rest_completes_at=logical_time + timedelta(minutes=10),
+                revision=state.revision + 1,
+            )
+            resting_message = render_local_message(
+                _summary_message(
+                    ExplorationOperationResult("ok", resting_state),
+                    overview,
+                    services.world_view(overview.character_world),
+                )
+            )
+            assert "状态: _休整中_" in resting_message.content
+            assert "休整原因: _资源过低_" in resting_message.content
+            assert "休整次数: _1_" in resting_message.content
+            assert resting_message.actions[0].data == "停止探险"
 
             stopped = await dispatch(
                 client_id="exploration-player",

@@ -131,9 +131,15 @@ ACTIVE_FEATURE_MANIFESTS = (
     FeatureManifest(
         "draw",
         "draw",
-        "扣除抽奖签、推进保底并原子发放奖项",
+        "优先扣除抽奖签、按缺口回收主货币、推进保底并原子发放奖项",
         ("抽奖",),
         snapshot_codecs=draw_codec_registrations(),
+    ),
+    FeatureManifest(
+        "redemption_code",
+        "redemption_code",
+        "核验公开兑换码并原子发放账号限定的货币与随机装备",
+        ("兑换码",),
     ),
     FeatureManifest(
         "economy",
@@ -146,7 +152,7 @@ ACTIVE_FEATURE_MANIFESTS = (
     FeatureManifest(
         "exploration",
         "exploration",
-        "协调持续探险、战斗、掉落与奖励联合结算",
+        "协调持续探险、自动休整续行、战斗、掉落与奖励联合结算",
         ("探险",),
         ("game_exploration_settlement",),
         snapshot_codecs=exploration_codec_registrations(),

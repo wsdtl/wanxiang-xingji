@@ -31,10 +31,11 @@ from ..gameplay.grants import (
     grant_proof_digest,
     verify_grant_proof,
 )
+from ..gameplay.rewards import RewardClaimState, RewardReceipt
 
 from .errors import ConcurrencyConflict, CorruptPersistenceData, TransactionMismatch
 from .rewards import PersistedRewardSettlementService, RewardSettlementStorageKeys
-from .snapshots import gameplay_snapshot_codec
+from .snapshots import REWARD_CLAIM_AGGREGATE, gameplay_snapshot_codec
 from .sqlite import SqliteDatabase, SqliteUnitOfWork
 
 
@@ -354,8 +355,8 @@ class GrantRepository:
                 INSERT INTO grant_redemption(
                     redemption_id, entitlement_id, campaign_id, credential_id,
                     account_id, settlement_id, request_fingerprint,
-                    receipt_payload, redeemed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    redeemed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     receipt.redemption_id,
@@ -365,7 +366,6 @@ class GrantRepository:
                     receipt.account_id,
                     receipt.settlement_id,
                     receipt.request_fingerprint,
-                    self.codec.dumps(receipt),
                     receipt.redeemed_at.isoformat(),
                 ),
             )
@@ -384,10 +384,62 @@ class GrantRepository:
         field = "redemption_id" if redemption_id else "entitlement_id"
         value = redemption_id or entitlement_id
         row = uow.connection.execute(
-            f"SELECT receipt_payload FROM grant_redemption WHERE {field} = ?",
+            f"""
+            SELECT redemption_id, entitlement_id, campaign_id, credential_id,
+                   account_id, settlement_id, request_fingerprint, redeemed_at
+            FROM grant_redemption WHERE {field} = ?
+            """,
             (value,),
         ).fetchone()
-        return self.codec.loads(str(row["receipt_payload"]), GrantRedemptionReceipt) if row else None
+        return self._redemption_from_row(uow, row) if row else None
+
+    def find_account_redemption(
+        self,
+        uow: SqliteUnitOfWork,
+        campaign_id: str,
+        account_id: str,
+    ) -> GrantRedemptionReceipt | None:
+        row = uow.connection.execute(
+            """
+            SELECT redemption_id, entitlement_id, campaign_id, credential_id,
+                   account_id, settlement_id, request_fingerprint, redeemed_at
+            FROM grant_redemption
+            WHERE campaign_id = ? AND account_id = ?
+            ORDER BY redeemed_at, redemption_id
+            LIMIT 1
+            """,
+            (campaign_id, account_id),
+        ).fetchone()
+        return self._redemption_from_row(uow, row) if row else None
+
+    def _redemption_from_row(
+        self,
+        uow: SqliteUnitOfWork,
+        row: sqlite3.Row,
+    ) -> GrantRedemptionReceipt:
+        settlement_id = str(row["settlement_id"])
+        account_id = str(row["account_id"])
+        committed = uow.load_transaction(settlement_id)
+        if committed is None:
+            raise CorruptPersistenceData("权益兑付记录缺少奖励提交事务")
+        reward_receipt = self.codec.loads(committed.receipt_payload, RewardReceipt)
+        if (
+            committed.scope_id != account_id
+            or reward_receipt.settlement_id != settlement_id
+            or reward_receipt.fingerprint != committed.fingerprint
+        ):
+            raise CorruptPersistenceData("权益兑付记录与奖励提交事务不一致")
+        return GrantRedemptionReceipt(
+            str(row["redemption_id"]),
+            str(row["entitlement_id"]),
+            str(row["campaign_id"]),
+            account_id,
+            settlement_id,
+            str(row["request_fingerprint"]),
+            datetime.fromisoformat(str(row["redeemed_at"])),
+            reward_receipt,
+            str(row["credential_id"]) if row["credential_id"] is not None else None,
+        )
 
     def insert_migration_manifest(
         self,
@@ -522,6 +574,22 @@ class PersistedGrantService:
             self.repository.insert_credential(uow, credential)
             uow.commit()
         return credential
+
+    def find_account_redemption(
+        self,
+        campaign_id: str,
+        account_id: str,
+    ) -> GrantRedemptionReceipt | None:
+        campaign_id = str(campaign_id or "").strip()
+        account_id = str(account_id or "").strip()
+        if not campaign_id or not account_id:
+            raise ValueError("查询权益兑付记录缺少活动或账号身份")
+        with self.database.unit_of_work(write=False) as uow:
+            return self.repository.find_account_redemption(
+                uow,
+                campaign_id,
+                account_id,
+            )
 
     def issue_entitlements(
         self,
@@ -824,6 +892,11 @@ class PersistedGrantService:
         )
         if authorization.failure:
             return RuleOutcome.failed(authorization.failure)
+        self._ensure_reward_claim_scope(
+            uow,
+            command.account_id,
+            logical_time=context.logical_time,
+        )
         reward = self.rewards.settle_in_uow(uow, settlement, keys, context=context)
         if reward.failure:
             return RuleOutcome.failed(reward.failure)
@@ -857,6 +930,28 @@ class PersistedGrantService:
         )
         self.repository.insert_redemption(uow, receipt)
         return RuleOutcome.success(GrantRedemptionExecution(receipt, reward.value, False))
+
+    def _ensure_reward_claim_scope(
+        self,
+        uow: SqliteUnitOfWork,
+        account_id: str,
+        *,
+        logical_time: datetime,
+    ) -> None:
+        existing = self.rewards.snapshots.load(
+            uow,
+            REWARD_CLAIM_AGGREGATE,
+            account_id,
+            RewardClaimState,
+        )
+        if existing is None:
+            self.rewards.snapshots.insert(
+                uow,
+                REWARD_CLAIM_AGGREGATE,
+                account_id,
+                RewardClaimState(account_id),
+                logical_time,
+            )
 
     def _require_campaign(self, uow: SqliteUnitOfWork, campaign_id: str) -> GrantCampaign:
         campaign = self.repository.load_campaign(uow, campaign_id)

@@ -117,6 +117,8 @@ class EconomyFeature:
                     current,
                     logical_time,
                 )
+            else:
+                current = self._hydrate_market(uow, current)
             uow.commit()
         return current
 
@@ -456,7 +458,7 @@ class EconomyFeature:
             except (KeyError, TypeError, ValueError) as exc:
                 return MarketListingResult("stale", failure_message=str(exc))
             if current != quote:
-                return MarketListingResult("stale", failure_message="上架报价已经过期，请重新确认")
+                return MarketListingResult("stale", failure_message="上架报价已经过期，请重新查看物品")
             inventory, _loadout = self._inventory_loadout(uow, seller_id)
             market = self._market(uow)
             if any(value.asset.id == quote.asset_id for value in market.listings.values()):
@@ -581,7 +583,7 @@ class EconomyFeature:
             except (KeyError, TypeError, ValueError) as exc:
                 return MarketPurchaseResult("stale", failure_message=str(exc))
             if current != quote:
-                return MarketPurchaseResult("stale", failure_message="购买报价已经变化，请重新确认")
+                return MarketPurchaseResult("stale", failure_message="购买报价已经变化，请重新查看挂单")
             listing = quote.listing
             market = self._market(uow)
             seller_inventory = self.snapshots.require(
@@ -1124,12 +1126,13 @@ class EconomyFeature:
         )
 
     def _market(self, uow):
-        return self.snapshots.load(
+        state = self.snapshots.load(
             uow,
             self.storage.market,
             MARKET_SCOPE_ID,
             MarketState,
         ) or MarketState()
+        return self._hydrate_market(uow, state)
 
     def _write_market(self, uow, previous, current, logical_time):
         stored = self.snapshots.load(
@@ -1139,22 +1142,65 @@ class EconomyFeature:
             MarketState,
         )
         if stored is None:
+            self._sync_market_listings(uow, MarketState(), current, logical_time)
             self.snapshots.insert(
                 uow,
                 self.storage.market,
                 MARKET_SCOPE_ID,
-                current,
+                replace(current, listings={}),
                 logical_time,
             )
         else:
+            self._sync_market_listings(uow, previous, current, logical_time)
             self.snapshots.update(
                 uow,
                 self.storage.market,
                 MARKET_SCOPE_ID,
-                previous,
-                current,
+                replace(previous, listings={}),
+                replace(current, listings={}),
                 logical_time,
             )
+
+    def _hydrate_market(self, uow, state: MarketState) -> MarketState:
+        listings = {}
+        for row in uow.list_market_listings(state.scope_id):
+            listing = self.snapshots.codec.loads(row.payload, MarketListing)
+            if (
+                listing.id != row.listing_id
+                or listing.number != row.number
+                or listing.seller_id != row.seller_id
+            ):
+                raise RuntimeError(f"二手挂单关系行与负载不一致：{row.listing_id}")
+            listings[listing.id] = listing
+        return replace(state, listings=listings)
+
+    def _sync_market_listings(self, uow, previous, current, logical_time) -> None:
+        for listing_id in previous.listings:
+            if listing_id not in current.listings:
+                uow.delete_market_listing(MARKET_SCOPE_ID, listing_id)
+        for listing_id, listing in current.listings.items():
+            prior = previous.listings.get(listing_id)
+            payload = self.snapshots.codec.dumps(listing)
+            if prior is None:
+                uow.insert_market_listing(
+                    MARKET_SCOPE_ID,
+                    listing.id,
+                    listing.number,
+                    listing.seller_id,
+                    listing.expires_at.isoformat(),
+                    payload,
+                    logical_time.isoformat(),
+                )
+            elif prior != listing:
+                uow.update_market_listing(
+                    MARKET_SCOPE_ID,
+                    listing.id,
+                    listing.number,
+                    listing.seller_id,
+                    listing.expires_at.isoformat(),
+                    payload,
+                    logical_time.isoformat(),
+                )
 
     @staticmethod
     def _wallet(ledger, owner_id):

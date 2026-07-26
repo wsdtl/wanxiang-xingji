@@ -9,6 +9,7 @@ class CharacterSettingsState:
 
     character_id: str
     auto_use_medicine: bool = True
+    auto_rest: bool = True
     mood_header_enabled: bool = False
     revision: int = 0
 
@@ -17,6 +18,8 @@ class CharacterSettingsState:
             raise ValueError("CharacterSettingsState 缺少 character_id")
         if not isinstance(self.auto_use_medicine, bool):
             raise TypeError("auto_use_medicine 必须是布尔值")
+        if not isinstance(self.auto_rest, bool):
+            raise TypeError("auto_rest 必须是布尔值")
         if not isinstance(self.mood_header_enabled, bool):
             raise TypeError("mood_header_enabled 必须是布尔值")
         if self.revision < 0:

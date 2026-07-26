@@ -287,9 +287,18 @@ def _assert_complete_creation(database, ids: SequentialIds, account_id: str) -> 
             character.id,
             CharacterWorldState,
         ) == receipt.character_world
-        assert service.snapshots.require(
+        persisted_ledger = service.snapshots.require(
             uow, LEDGER_AGGREGATE, PRIMARY_LEDGER_ID, LedgerState
-        ) == receipt.ledger
+        )
+        assert persisted_ledger == service.snapshots.compact(receipt.ledger)
+        assert uow.connection.execute(
+            "SELECT COUNT(*) FROM ledger_transaction WHERE ledger_id = ?",
+            (PRIMARY_LEDGER_ID,),
+        ).fetchone()[0] == len(receipt.ledger.applied_transactions)
+        assert uow.connection.execute(
+            "SELECT COUNT(*) FROM ledger_journal_entry WHERE ledger_id = ?",
+            (PRIMARY_LEDGER_ID,),
+        ).fetchone()[0] == len(receipt.ledger.journal)
         assert service.snapshots.require(
             uow, WORLD_AGGREGATE, MULTIVERSE_WORLD_STATE_ID, WorldState
         ) == receipt.world

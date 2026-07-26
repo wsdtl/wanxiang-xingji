@@ -206,6 +206,41 @@ async def auto_medicine(message: str, current: CurrentCharacterResult) -> None:
     await send_game_reply(_auto_medicine_message(settings))
 
 
+async def auto_rest(message: str, current: CurrentCharacterResult) -> None:
+    """查看或修改当前角色的探险自动休整开关。"""
+
+    if current.status != "ok" or current.character is None:
+        await send_game_reply(_setting_unavailable_message("自动休整"))
+        return
+    services = current_game_services()
+    try:
+        settings = await asyncio.to_thread(
+            services.load_character_settings,
+            current.character.id,
+        )
+        requested = _parse_switch(message)
+        if requested is None and str(message or "").strip():
+            await send_game_reply(_auto_rest_message(settings, invalid=True))
+            return
+        if requested is not None:
+            settings = await asyncio.to_thread(
+                services.set_auto_rest,
+                current.character.id,
+                requested,
+                logical_time=command_time(),
+            )
+    except Exception as exc:
+        logger.opt(colors=True, exception=exc).error(
+            C.join(
+                C.fail("自动休整设置执行失败"),
+                C.kv("character", current.character.id),
+            )
+        )
+        await send_game_reply(_setting_unavailable_message("自动休整"))
+        return
+    await send_game_reply(_auto_rest_message(settings))
+
+
 async def _execute(
     *,
     evidence: IdentityEvidence,
@@ -250,7 +285,7 @@ def _result_message(result: CharacterCreationCommandResult) -> DocumentMessage:
                     Action(
                         "character.create.fill_name",
                         "填写名称",
-                        "创建角色 青衫客",
+                        "创建角色 ",
                         behavior="fill",
                         style="secondary",
                     ),
@@ -403,7 +438,7 @@ def _mood_message(
             "character.mood.disable" if enabled else "character.mood.enable",
             "关闭" if enabled else "开启",
             "心情 关闭" if enabled else "心情 开启",
-            behavior="send",
+            behavior="callback",
         )
     ).build()
 
@@ -438,7 +473,32 @@ def _auto_medicine_message(
             "character.auto_medicine.disable" if enabled else "character.auto_medicine.enable",
             "关闭" if enabled else "开启",
             "自动用药 关闭" if enabled else "自动用药 开启",
-            behavior="send",
+            behavior="callback",
+        )
+    ).build()
+
+
+def _auto_rest_message(
+    settings: CharacterSettingsState,
+    *,
+    invalid: bool = False,
+) -> DocumentMessage:
+    builder = (
+        M.document()
+        .section("自动休整", icon="recovery")
+        .field("当前状态", "开启" if settings.auto_rest else "关闭")
+    )
+    if invalid:
+        builder.line("自动休整只支持 开启 或 关闭。")
+    else:
+        builder.line("开启后，探险会在战败或资源过低时休整，完全恢复后续行。")
+    enabled = settings.auto_rest
+    return builder.action(
+        Action(
+            "character.auto_rest.disable" if enabled else "character.auto_rest.enable",
+            "关闭" if enabled else "开启",
+            "自动休整 关闭" if enabled else "自动休整 开启",
+            behavior="callback",
         )
     ).build()
 
@@ -566,7 +626,7 @@ def _character_overview_message(overview: CharacterOverview) -> DocumentMessage:
                     "character.combat_panel",
                     "战斗面板",
                     "战斗面板",
-                    behavior="send",
+                    behavior="callback",
                 ),
             )
         )
@@ -816,6 +876,7 @@ def _resource_name(projector, resource_id: str) -> str:
 __all__ = [
     "create_character",
     "auto_medicine",
+    "auto_rest",
     "mood",
     "view_character",
 ]

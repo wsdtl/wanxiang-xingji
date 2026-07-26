@@ -43,7 +43,7 @@ from game.rules.companion import (
     CompanionRuleError,
     CompanionSanctuaryState,
 )
-from game.rules.exploration import ExplorationState, ExplorationStatus
+from game.rules.exploration import ExplorationState
 
 from .battle import CompanionSanctuaryBattleSimulator
 from .models import (
@@ -992,7 +992,7 @@ class CompanionFeature:
                 return CompanionOperationResult(
                     "stale",
                     roster,
-                    failure_message="伙伴名册已经变化，请重新确认告别",
+                    failure_message="伙伴名册已经变化，请重新打开伙伴列表",
                 )
             companion = roster.by_reference(reference)
             if companion is None:
@@ -1170,7 +1170,7 @@ class CompanionFeature:
             (action is not None and action.running(ActionSlotKind.MAIN))
             or (
                 exploration is not None
-                and exploration.status is ExplorationStatus.RUNNING
+                and exploration.active
             )
         )
 
