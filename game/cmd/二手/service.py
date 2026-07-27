@@ -48,7 +48,7 @@ _MARKET_CATEGORY_LABELS = (
 async def market(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     parts = str(message or "").strip().split()
     if parts and _looks_like_listing(parts[0]):
@@ -89,13 +89,13 @@ async def market(message: str, result: CharacterOverviewResult) -> None:
             )
         )
     except ValueError as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _market_action()))
 
 
 async def my_listings(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     try:
         page = _page(message or "1")
@@ -114,17 +114,22 @@ async def my_listings(message: str, result: CharacterOverviewResult) -> None:
             )
         )
     except ValueError as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _my_listings_action()))
 
 
 async def list_item(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     parts = str(message or "").strip().split()
     if len(parts) not in {2, 3}:
-        await send_game_reply(_failure("上架格式：上架 物品编号 价格，堆叠物品可填写数量"))
+        await send_game_reply(
+            _failure(
+                "上架格式：上架 物品编号 价格，堆叠物品可填写数量",
+                _list_item_action(),
+            )
+        )
         return
     try:
         asset = resolve_asset_reference(
@@ -146,7 +151,10 @@ async def list_item(message: str, result: CharacterOverviewResult) -> None:
         )
         if quoted.quote is None:
             await send_game_reply(
-                _failure(quoted.failure_message or "本次上架没有完成")
+                _failure(
+                    quoted.failure_message or "本次上架没有完成",
+                    _list_item_action("重新填写"),
+                )
             )
             return
         opened = await asyncio.to_thread(
@@ -157,7 +165,7 @@ async def list_item(message: str, result: CharacterOverviewResult) -> None:
         )
         await send_game_reply(_listing_result_message(opened, overview))
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _list_item_action("重新填写")))
     except Exception as exc:
         await _failed("二手上架失败", overview.character.id, exc)
 
@@ -165,7 +173,7 @@ async def list_item(message: str, result: CharacterOverviewResult) -> None:
 async def confirm_listing(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     parts = str(message or "").strip().split()
     if len(parts) not in {3, 4}:
@@ -211,7 +219,7 @@ async def confirm_listing(message: str, result: CharacterOverviewResult) -> None
         )
         await send_game_reply(_listing_result_message(opened, overview))
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _list_item_action("重新填写")))
     except Exception as exc:
         await _failed("二手上架失败", overview.character.id, exc)
 
@@ -219,7 +227,7 @@ async def confirm_listing(message: str, result: CharacterOverviewResult) -> None
 async def cancel_listing(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     listing_id = str(message or "").strip()
     try:
@@ -234,9 +242,9 @@ async def cancel_listing(message: str, result: CharacterOverviewResult) -> None:
             builder.line(f"{closed.listing.id} 已下架")
         else:
             builder.line(closed.failure_message or "本次下架没有完成")
-        await send_game_reply(builder.build())
+        await send_game_reply(builder.action(_my_listings_action()).build())
     except ValueError as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _my_listings_action()))
     except Exception as exc:
         await _failed("二手下架失败", overview.character.id, exc)
 
@@ -244,7 +252,7 @@ async def cancel_listing(message: str, result: CharacterOverviewResult) -> None:
 async def buy(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     listing_id = str(message or "").strip()
     try:
@@ -256,7 +264,10 @@ async def buy(message: str, result: CharacterOverviewResult) -> None:
         )
         if quoted.quote is None:
             await send_game_reply(
-                _failure(quoted.failure_message or "本次购买没有完成")
+                _failure(
+                    quoted.failure_message or "本次购买没有完成",
+                    _market_action(),
+                )
             )
             return
         purchased = await asyncio.to_thread(
@@ -267,7 +278,7 @@ async def buy(message: str, result: CharacterOverviewResult) -> None:
         )
         await send_game_reply(_purchase_result_message(purchased, overview))
     except ValueError as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _market_action()))
     except Exception as exc:
         await _failed("二手购买失败", overview.character.id, exc)
 
@@ -275,7 +286,7 @@ async def buy(message: str, result: CharacterOverviewResult) -> None:
 async def confirm_purchase(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     parts = str(message or "").strip().split()
     if len(parts) != 2:
@@ -310,7 +321,7 @@ async def confirm_purchase(message: str, result: CharacterOverviewResult) -> Non
         )
         await send_game_reply(_purchase_result_message(purchased, overview))
     except ValueError as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _market_action()))
     except Exception as exc:
         await _failed("二手购买失败", overview.character.id, exc)
 
@@ -318,7 +329,7 @@ async def confirm_purchase(message: str, result: CharacterOverviewResult) -> Non
 async def tax(result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     summary = await asyncio.to_thread(
         current_game_services().economy.tax_summary,
@@ -331,6 +342,7 @@ async def tax(result: CharacterOverviewResult) -> None:
         .field("税务主体", COVENANT_NAME)
         .field(COVENANT_TREASURY_NAME, f"{summary.balance} {currency}")
         .row(("近七日税收", summary.recent_tax), ("成交", summary.recent_trades))
+        .action(_market_action())
         .build()
     )
 
@@ -342,7 +354,7 @@ async def _listing_detail(listing_id: str, overview: CharacterOverview) -> None:
     )
     listing = next((value for value in listings if value.id == listing_id.upper()), None)
     if listing is None:
-        await send_game_reply(_failure("找不到这份归航挂单"))
+        await send_game_reply(_failure("找不到这份归航挂单", _market_action()))
         return
     builder = (
         M.document()
@@ -443,9 +455,10 @@ def _listing_page(
             ),
             f" x{_listing_quantity(listing)} | {listing.list_price}",
         )
-    builder.row(("页码", window.label), ("总计", window.total)).actions(
-        pagination_actions(page_command, window)
-    )
+    actions = list(pagination_actions(page_command, window))
+    if page_command != "二手":
+        actions.append(_market_action())
+    builder.row(("页码", window.label), ("总计", window.total)).actions(actions)
     return builder.build()
 
 
@@ -536,15 +549,34 @@ async def _failed(title: str, character_id: str, exc: Exception) -> None:
         title,
         character_id,
         exc,
-        _failure("当前操作没有完成，请稍后重试"),
+        _failure("当前操作没有完成，请稍后重试", _market_action("重试")),
     )
 
 
-def _failure(message: str, recovery: Action | None = None) -> DocumentMessage:
-    builder = M.document().section(COVENANT_MARKET_NAME, icon="notice").line(message)
-    if recovery is not None:
-        builder.action(recovery)
-    return builder.build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section(COVENANT_MARKET_NAME, icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
+
+
+def _character_action() -> Action:
+    return Action("market.character", "查看角色", "我的角色", style="secondary")
+
+
+def _market_action(label: str = "返回市场") -> Action:
+    return Action("market.back", label, "二手", style="secondary")
+
+
+def _my_listings_action() -> Action:
+    return Action("market.mine", "我的上架", "我的上架", style="secondary")
+
+
+def _list_item_action(label: str = "填写上架") -> Action:
+    return Action("market.list.fill", label, "上架 ", behavior="fill")
 
 
 __all__ = [

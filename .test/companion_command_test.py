@@ -38,7 +38,6 @@ from game.core.gameplay import (  # noqa: E402
     WorldState,
 )
 from game.core.persistence import CHARACTER_AGGREGATE, INVENTORY_AGGREGATE  # noqa: E402
-from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules.item import asset_reference  # noqa: E402
 from game.rules.character import (  # noqa: E402
     MULTIVERSE_WORLD_STATE_ID,
@@ -170,14 +169,18 @@ async def _main() -> None:
             await _dispatch("配装 1", "companion-preset-one")
             transferred = await _dispatch("伙伴出战 C1", "companion-transfer-direct")
             assert "随当前配装出战" in transferred.replies[0].message.content
-            assert not transferred.replies[0].message.actions
+            assert tuple(
+                action.data for action in transferred.replies[0].message.actions
+            ) == ("伙伴",)
 
             unbound = await _dispatch("伙伴休战", "companion-unbind")
             assert "已离开当前配装" in unbound.replies[0].message.content
 
             released = await _dispatch("告别 C1", "companion-farewell-direct")
             assert "已离开名册" in released.replies[0].message.content
-            assert not released.replies[0].message.actions
+            assert tuple(
+                action.data for action in released.replies[0].message.actions
+            ) == ("伙伴",)
             final_roster = services.companions.view(character.id, logical_time=_now()).roster
             assert not final_roster.instances
             assert final_roster.captured_definition_ids
@@ -196,12 +199,15 @@ async def _main() -> None:
                 overview.character_world.world_id,
                 person.location_id,
             )
-            move_command = WorldLocationIntent(
+            world_view = services.world_view(overview.character_world)
+            location = services.content.worlds.resolve(
                 overview.character_world.world_id,
                 binding.anchor_id,
-                binding.function_id,
-                binding.version,
-            ).command()
+            )
+            move_command = f"前往 {world_view.projector.name(location.display_id)}"
+            assert "@world_location" not in move_command
+            assert binding.anchor_id not in move_command
+            assert binding.function_id not in move_command
             moved = await _dispatch(
                 move_command,
                 "companion-person-move",
@@ -229,7 +235,9 @@ async def _main() -> None:
             person_farewell = await _dispatch("告别 C2", "companion-person-farewell")
             assert "成长记录会保留" in person_farewell.replies[0].message.content
             assert "已离开名册" in person_farewell.replies[0].message.content
-            assert not person_farewell.replies[0].message.actions
+            assert tuple(
+                action.data for action in person_farewell.replies[0].message.actions
+            ) == ("伙伴",)
             rejoined = await _dispatch("结交", "companion-person-rejoin")
             assert "重新回到了你的名册" in rejoined.replies[0].message.content
         finally:

@@ -122,12 +122,6 @@ def confirmation_actions(
     )
 
 
-def retry_action(command: str) -> Action:
-    """为未知异常提供一次原命令重试。"""
-
-    return Action("game.retry", "重试", str(command or "").strip())
-
-
 def ordered_actions(actions: Sequence[Action]) -> tuple[Action, ...]:
     """主操作优先，辅助、返回与危险入口置后。"""
 
@@ -145,5 +139,4 @@ __all__ = [
     "paginate",
     "pagination_actions",
     "parse_page_number",
-    "retry_action",
 ]

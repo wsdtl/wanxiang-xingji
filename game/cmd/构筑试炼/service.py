@@ -27,7 +27,12 @@ async def view_trials() -> None:
 async def start_trial(message: str, current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("build-trial.character", "查看角色", "我的角色"),
+            )
+        )
         return
     services = current_game_services()
     modes = services.content.build_trials.definitions()
@@ -58,7 +63,10 @@ async def start_trial(message: str, current: CurrentCharacterResult) -> None:
             "构筑试炼执行失败",
             character.id,
             exc,
-            _failure("试炼执行失败，请稍后重试"),
+            _failure(
+                "试炼执行失败，请稍后重试",
+                Action("build-trial.retry", "查看试炼", "构筑试炼"),
+            ),
         )
         return
     await send_game_reply(_result_message(result))
@@ -124,8 +132,14 @@ def _outcome_text(mode_id, outcome) -> str:
     return "阵容在目标清除前倒下"
 
 
-def _failure(message: str):
-    return M.document().section("构筑试炼", icon="combat").line(message).build()
+def _failure(message: str, recovery: Action):
+    return (
+        M.document()
+        .section("构筑试炼", icon="combat")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 def _number(value: float) -> str:

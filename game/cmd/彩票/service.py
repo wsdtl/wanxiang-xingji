@@ -17,7 +17,12 @@ from ..reply import send_command_failure, send_game_reply
 async def lottery(current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("lottery.character", "查看角色", "我的角色"),
+            )
+        )
         return
     services = current_game_services()
     logical_time = command_time()
@@ -75,21 +80,32 @@ async def lottery(current: CurrentCharacterResult) -> None:
         await send_game_reply(builder.build())
     except (KeyError, TypeError, ValueError) as exc:
         await send_game_reply(
-            _failure(str(exc))
+            _failure(
+                str(exc),
+                Action("lottery.retry", "重试", "彩票"),
+            )
         )
     except Exception as exc:
         await send_command_failure(
             "彩票命令失败",
             character.id,
             exc,
-            _failure("当前操作没有完成，请稍后重试"),
+            _failure(
+                "当前操作没有完成，请稍后重试",
+                Action("lottery.retry", "重试", "彩票"),
+            ),
         )
 
 
 async def purchase(message: str, current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("lottery.character", "查看角色", "我的角色"),
+            )
+        )
         return
     parts = str(message or "").strip().split()
     if not parts:
@@ -101,7 +117,12 @@ async def purchase(message: str, current: CurrentCharacterResult) -> None:
         )
         return
     if len(parts) != 1:
-        await send_game_reply(_failure("每人每期只能购买一张彩票，请只填写一个号码"))
+        await send_game_reply(
+            _failure(
+                "每人每期只能购买一张彩票，请只填写一个号码",
+                Action("lottery.number", "重新填写", "购票 ", behavior="fill"),
+            )
+        )
         return
     try:
         result = await asyncio.to_thread(
@@ -112,23 +133,40 @@ async def purchase(message: str, current: CurrentCharacterResult) -> None:
             logical_time=command_time(),
         )
         await send_game_reply(
-            M.document().section("购票完成", icon="trade").line(result).build()
+            M.document()
+            .section("购票完成", icon="trade")
+            .line(result)
+            .action(Action("lottery.view", "查看彩票", "彩票"))
+            .build()
         )
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(
+            _failure(
+                str(exc),
+                Action("lottery.number", "重新填写", "购票 ", behavior="fill"),
+            )
+        )
     except Exception as exc:
         await send_command_failure(
             "购票失败",
             character.id,
             exc,
-            _failure("当前操作没有完成，请稍后重试"),
+            _failure(
+                "当前操作没有完成，请稍后重试",
+                Action("lottery.number", "重新填写", "购票 ", behavior="fill"),
+            ),
         )
 
 
 async def winner_history(current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("lottery.character", "查看角色", "我的角色"),
+            )
+        )
         return
     try:
         values = await asyncio.to_thread(
@@ -143,13 +181,18 @@ async def winner_history(current: CurrentCharacterResult) -> None:
                 index,
                 f"{round_day} | {winner.tier} | {winner.number} | {winner.amount}",
             )
-        await send_game_reply(builder.build())
+        await send_game_reply(
+            builder.action(Action("lottery.view", "返回彩票", "彩票")).build()
+        )
     except Exception as exc:
         await send_command_failure(
             "中奖记录读取失败",
             character.id,
             exc,
-            _failure("当前操作没有完成，请稍后重试"),
+            _failure(
+                "当前操作没有完成，请稍后重试",
+                Action("lottery.history", "重试", "中奖记录"),
+            ),
         )
 
 
@@ -186,11 +229,14 @@ def _append_due_result(builder, view) -> None:
         )
 
 
-def _failure(message: str, recovery: Action | None = None):
-    builder = M.document().section("彩票系统", icon="notice").line(message)
-    if recovery is not None:
-        builder.action(recovery)
-    return builder.build()
+def _failure(message: str, recovery: Action):
+    return (
+        M.document()
+        .section("彩票系统", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = ["lottery", "purchase", "winner_history"]

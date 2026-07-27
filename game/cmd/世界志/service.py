@@ -19,7 +19,17 @@ from ..reply import send_command_failure, send_game_reply
 async def view_world_lore(message: str, result: CharacterOverviewResult) -> None:
     overview = result.overview if result.status == "ok" else None
     if overview is None:
-        await send_game_reply(world_lore_failure_message("当前没有读取到角色状态，请稍后重试"))
+        await send_game_reply(
+            world_lore_failure_message(
+                "当前没有读取到角色状态，请稍后重试",
+                Action(
+                    "world-lore.character",
+                    "查看角色",
+                    "我的角色",
+                    style="secondary",
+                ),
+            )
+        )
         return
     services = current_game_services()
     world_view = None
@@ -82,7 +92,15 @@ async def view_world_lore(message: str, result: CharacterOverviewResult) -> None
             "世界志查询失败",
             overview.character.id,
             exc,
-            world_lore_failure_message("当前没有读取到世界志，请稍后重试"),
+            world_lore_failure_message(
+                "当前没有读取到世界志，请稍后重试",
+                Action(
+                    "world-lore.retry",
+                    "重试",
+                    "世界志",
+                    style="secondary",
+                ),
+            ),
         )
 
 

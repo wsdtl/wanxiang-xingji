@@ -31,11 +31,11 @@ from ..reply import send_command_failure, send_game_reply
 async def recycle_one(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     token = str(message or "").strip()
     if not token:
-        await send_game_reply(_failure("请选择一件武器或装备"))
+        await send_game_reply(_failure("请选择一件武器或装备", _armory_action()))
         return
     try:
         asset = resolve_asset_reference(
@@ -58,13 +58,13 @@ async def recycle_one(message: str, result: CharacterOverviewResult) -> None:
             )
         )
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _armory_action()))
 
 
 async def recycle_batch(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     parts = str(message or "").strip().split()
     if not parts:
@@ -72,7 +72,7 @@ async def recycle_batch(message: str, result: CharacterOverviewResult) -> None:
         return
     slot_id = _slot_id(parts[0], overview)
     if slot_id is None:
-        await send_game_reply(_failure("没有找到这个武库部位"))
+        await send_game_reply(_failure("没有找到这个武库部位", _batch_action()))
         return
     if len(parts) == 1:
         await send_game_reply(_batch_qualities(slot_id, overview))
@@ -119,13 +119,13 @@ async def recycle_batch(message: str, result: CharacterOverviewResult) -> None:
             )
         )
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _batch_action()))
 
 
 async def confirm_recycle(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     parts = str(message or "").strip().split()
     if len(parts) == 2 and parts[0] == "trophies":
@@ -186,7 +186,7 @@ async def confirm_recycle(message: str, result: CharacterOverviewResult) -> None
         )
         await send_game_reply(_result_message(executed, overview))
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _batch_action()))
     except Exception as exc:
         await _failed("回收确认失败", overview.character.id, exc)
 
@@ -194,7 +194,7 @@ async def confirm_recycle(message: str, result: CharacterOverviewResult) -> None
 async def recycle_trophies(message: str, current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(_failure("当前没有可用角色", _character_action()))
         return
     try:
         page = parse_page_number(message)
@@ -205,7 +205,7 @@ async def recycle_trophies(message: str, current: CurrentCharacterResult) -> Non
         view = current_game_services().world_view(current.character_world)
         await send_game_reply(_trophy_quote_message(result, view, page))
     except ValueError as exc:
-        await send_game_reply(_failure(str(exc)))
+        await send_game_reply(_failure(str(exc), _backpack_action()))
     except Exception as exc:
         await _failed("战利品回收报价失败", character.id, exc)
 
@@ -270,13 +270,17 @@ def _trophy_quote_message(result, view, page: int) -> DocumentMessage:
                 confirmation[1],
             )
         )
+    else:
+        builder.action(_backpack_action())
     return builder.note("确认后一次回收报价中的全部战利品。").build()
 
 
 def _trophy_result_message(result, view) -> DocumentMessage:
     builder = M.document().section(f"{COVENANT_RECYCLING_NAME}·战利品", icon="trade")
     if result.status == "empty":
-        return builder.line("背包中没有可回收的战利品").build()
+        return builder.line("背包中没有可回收的战利品").action(
+            _backpack_action()
+        ).build()
     for index, line in enumerate(result.quote.lines[:DEFAULT_PAGE_SIZE], start=1):
         builder.item(
             index,
@@ -293,14 +297,22 @@ def _trophy_result_message(result, view) -> DocumentMessage:
         )
     for definition_id, quantity in result.quote.stack_item_totals.items():
         builder.field("材料", f"{quantity} {view.projector.name(definition_id)}")
-    return builder.note("按名录类型化产出结算，不动用归航库，也不收交易税。").build()
+    return (
+        builder.note("按名录类型化产出结算，不动用归航库，也不收交易税。")
+        .action(_backpack_action())
+        .build()
+    )
 
 
 def _quote_message(result, overview: CharacterOverview, command_prefix: str) -> DocumentMessage:
     builder = M.document().section(f"{COVENANT_RECYCLING_NAME}·报价", icon="trade")
     quote = result.quote
     if result.status != "quoted" or quote is None:
-        return builder.line(result.failure_message or "没有符合条件的可回收物品").build()
+        return (
+            builder.line(result.failure_message or "没有符合条件的可回收物品")
+            .action(_batch_action())
+            .build()
+        )
     for index, line in enumerate(quote.lines[:DEFAULT_PAGE_SIZE], start=1):
         asset = overview.inventory.instances[line.asset_id]
         builder.item(
@@ -338,14 +350,18 @@ def _quote_message(result, overview: CharacterOverview, command_prefix: str) -> 
 def _result_message(result, overview: CharacterOverview) -> DocumentMessage:
     builder = M.document().section(f"{COVENANT_RECYCLING_NAME}·完成", icon="trade")
     if result.status != "recycled" or result.quote is None:
-        return builder.line(result.failure_message or "本次回收没有完成").build()
+        return (
+            builder.line(result.failure_message or "本次回收没有完成")
+            .action(_batch_action())
+            .build()
+        )
     return builder.row(
         ("回收", f"{len(result.quote.lines)} 件"),
         (
             "收入",
             f"{result.quote.total_amount} {_view(overview).projector.name(PRIMARY_CURRENCY_ID)}",
         ),
-    ).build()
+    ).action(_armory_action()).build()
 
 
 def _batch_slots(overview: CharacterOverview) -> DocumentMessage:
@@ -478,15 +494,34 @@ async def _failed(title: str, character_id: str, exc: Exception) -> None:
         title,
         character_id,
         exc,
-        _failure("当前操作没有完成，请稍后重试"),
+        _failure("当前操作没有完成，请稍后重试", _batch_action("重试")),
     )
 
 
-def _failure(message: str, recovery: Action | None = None) -> DocumentMessage:
-    builder = M.document().section(COVENANT_RECYCLING_NAME, icon="notice").line(message)
-    if recovery is not None:
-        builder.action(recovery)
-    return builder.build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section(COVENANT_RECYCLING_NAME, icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
+
+
+def _character_action() -> Action:
+    return Action("recycle.character", "查看角色", "我的角色", style="secondary")
+
+
+def _armory_action() -> Action:
+    return Action("recycle.armory", "返回武库", "武库", style="secondary")
+
+
+def _batch_action(label: str = "重新选择") -> Action:
+    return Action("recycle.batch", label, "批量回收", style="secondary")
+
+
+def _backpack_action() -> Action:
+    return Action("recycle.backpack", "返回背包", "背包", style="secondary")
 
 
 __all__ = [

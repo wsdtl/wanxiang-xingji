@@ -4,9 +4,11 @@ from game.core.gameplay import SkinEntry
 from game.content.covenant import COVENANT_ITEM_ENTRIES
 
 from ...catalog import (
+    BACKPACK_CAPACITY_INCREMENT,
     BREAKTHROUGH_TOKEN_ITEM_ID,
     DRAW_TICKET_ITEM_ID,
     BACKPACK_CAPACITY_ITEM_ID,
+    BACKPACK_CAPACITY_MAXIMUM,
     COMPANION_SANCTUARY_ITEM_ID,
     DIMENSION_SHIFT_ITEM_ID,
     INSCRIPTION_FEATHER_ITEM_ID,
@@ -48,7 +50,10 @@ MAGIC_ITEM_ENTRIES = {
     ),
     BACKPACK_CAPACITY_ITEM_ID: SkinEntry(
         name="折叠空间晶砂",
-        description="融入背包后永久增加 5 格空间；背包最多扩展至 140 格。",
+        description=(
+            f"融入背包后永久增加 {BACKPACK_CAPACITY_INCREMENT} 格空间；"
+            f"背包最多扩展至 {BACKPACK_CAPACITY_MAXIMUM} 格。"
+        ),
         icon="⌛",
     ),
     COMPANION_SANCTUARY_ITEM_ID: SkinEntry(
@@ -81,40 +86,58 @@ MAGIC_ITEM_ENTRIES = {
         description="为指定伙伴补充成长经验，单次最多增加 30,000 点。",
         icon="🪶",
     ),
-    SMALL_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="饮用小型生命药剂"),
-    MEDIUM_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="饮用中型生命药剂"),
-    LARGE_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="饮用大型生命药剂"),
-    SMALL_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(name="饮用小型魔力药剂"),
-    MEDIUM_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(name="饮用中型魔力药剂"),
-    LARGE_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(name="饮用大型魔力药剂"),
+    SMALL_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(
+        name="饮用小型生命药剂",
+        description="恢复自身生命上限的 12%。",
+    ),
+    MEDIUM_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(
+        name="饮用中型生命药剂",
+        description="恢复自身生命上限的 25%。",
+    ),
+    LARGE_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(
+        name="饮用大型生命药剂",
+        description="恢复自身生命上限的 50%。",
+    ),
+    SMALL_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(
+        name="饮用小型魔力药剂",
+        description="恢复自身魔力上限的 12%。",
+    ),
+    MEDIUM_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(
+        name="饮用中型魔力药剂",
+        description="恢复自身魔力上限的 25%。",
+    ),
+    LARGE_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(
+        name="饮用大型魔力药剂",
+        description="恢复自身魔力上限的 50%。",
+    ),
     SMALL_HEALTH_MEDICINE_ITEM_ID: SkinEntry(
         name="小型生命药剂",
-        description="恢复最大生命的 12%。",
+        description="恢复生命上限的 12%。",
         icon="🧪",
     ),
     MEDIUM_HEALTH_MEDICINE_ITEM_ID: SkinEntry(
         name="中型生命药剂",
-        description="恢复最大生命的 25%。",
+        description="恢复生命上限的 25%。",
         icon="🧪",
     ),
     LARGE_HEALTH_MEDICINE_ITEM_ID: SkinEntry(
         name="大型生命药剂",
-        description="恢复最大生命的 50%。",
+        description="恢复生命上限的 50%。",
         icon="🧪",
     ),
     SMALL_SPIRIT_MEDICINE_ITEM_ID: SkinEntry(
         name="小型魔力药剂",
-        description="恢复最大魔力的 12%。",
+        description="恢复魔力上限的 12%。",
         icon="💧",
     ),
     MEDIUM_SPIRIT_MEDICINE_ITEM_ID: SkinEntry(
         name="中型魔力药剂",
-        description="恢复最大魔力的 25%。",
+        description="恢复魔力上限的 25%。",
         icon="💧",
     ),
     LARGE_SPIRIT_MEDICINE_ITEM_ID: SkinEntry(
         name="大型魔力药剂",
-        description="恢复最大魔力的 50%。",
+        description="恢复魔力上限的 50%。",
         icon="💧",
     ),
 }

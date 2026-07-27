@@ -18,7 +18,12 @@ from ..reply import send_command_failure, send_game_reply
 async def view_world_progress(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有读取到角色状态，请稍后重试"))
+        await send_game_reply(
+            _failure(
+                "当前没有读取到角色状态，请稍后重试",
+                Action("progress.character", "查看角色", "我的角色"),
+            )
+        )
         return
     try:
         services = current_game_services()
@@ -44,7 +49,10 @@ async def view_world_progress(message: str, result: CharacterOverviewResult) -> 
             "行纪查询失败",
             overview.character.id,
             exc,
-            _failure("当前没有读取到行纪，请稍后重试"),
+            _failure(
+                "当前没有读取到行纪，请稍后重试",
+                Action("progress.retry", "重试", "行纪"),
+            ),
         )
         return
     await send_game_reply(reply)
@@ -56,7 +64,12 @@ async def view_world_progress_ranking(
 ) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_failure("当前没有读取到角色状态，请稍后重试"))
+        await send_game_reply(
+            _failure(
+                "当前没有读取到角色状态，请稍后重试",
+                Action("progress-ranking.character", "查看角色", "我的角色"),
+            )
+        )
         return
     try:
         services = current_game_services()
@@ -82,7 +95,10 @@ async def view_world_progress_ranking(
             "行纪排行查询失败",
             overview.character.id,
             exc,
-            _failure("当前没有读取到行纪排行，请稍后重试"),
+            _failure(
+                "当前没有读取到行纪排行，请稍后重试",
+                Action("progress-ranking.retry", "重试", "行纪排行"),
+            ),
         )
         return
     await send_game_reply(reply)
@@ -119,7 +135,11 @@ def _world_overview(progress, view) -> DocumentMessage:
         "世界圆满",
         world_reward_status,
     )
-    return builder.note("发送：行纪 地点名称，可查看详细记载").build()
+    return (
+        builder.note("发送：行纪 地点名称，可查看详细记载")
+        .action(Action("progress.ranking", "查看排行", "行纪排行"))
+        .build()
+    )
 
 
 def _region_detail(requested: str, progress, view) -> DocumentMessage:
@@ -131,7 +151,10 @@ def _region_detail(requested: str, progress, view) -> DocumentMessage:
         else None
     )
     if binding is None or binding.function_id != LOCATION_FUNCTION_EXPLORATION:
-        return _failure("当前世界没有这处行纪区域")
+        return _failure(
+            "当前世界没有这处行纪区域",
+            Action("progress.region.back", "返回行纪", "行纪", style="secondary"),
+        )
     region = progress.require_region(binding.content_ref)
     next_stage = next(
         (value for value in (25, 50, 75, 100) if value > region.percent),
@@ -169,7 +192,11 @@ def _ranking(ranking, view) -> DocumentMessage:
     title = f"{view.skin.name}行纪排行" if view is not None else "诸界行纪排行"
     builder = M.document().section(title, icon="world")
     if not ranking.entries:
-        return builder.line("尚无人留下行纪。").build()
+        return (
+            builder.line("尚无人留下行纪。")
+            .action(Action("progress-ranking.back", "返回行纪", "行纪", style="secondary"))
+            .build()
+        )
     for entry in ranking.entries:
         builder.line(
             f"{entry.rank}. ",
@@ -189,7 +216,11 @@ def _ranking(ranking, view) -> DocumentMessage:
             FieldSeparator(),
             f"圆满{entry.completed_regions}",
         )
-    return builder.note("排行永久累计，只记录共同历史，不发放名次奖励").build()
+    return (
+        builder.note("排行永久累计，只记录共同历史，不发放名次奖励")
+        .action(Action("progress-ranking.back", "返回行纪", "行纪", style="secondary"))
+        .build()
+    )
 
 
 def _region_name(services, view, region_id: str) -> str:
@@ -226,11 +257,14 @@ def _overview(result: CharacterOverviewResult) -> CharacterOverview | None:
     return result.overview if result.status == "ok" else None
 
 
-def _failure(message: str, recovery: Action | None = None) -> DocumentMessage:
-    builder = M.document().section("行纪", icon="notice").line(message)
-    if recovery is not None:
-        builder.action(recovery)
-    return builder.build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("行纪", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = ["view_world_progress", "view_world_progress_ranking"]

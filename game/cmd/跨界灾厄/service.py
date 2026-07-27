@@ -48,7 +48,9 @@ register_global_activity(
 async def view_disaster(current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("disaster.character", "查看角色", "我的角色"))
+        )
         return
     try:
         logical_time = command_time()
@@ -58,13 +60,20 @@ async def view_disaster(current: CurrentCharacterResult) -> None:
         )
         await send_game_reply(_status_message(result, character, logical_time))
     except Exception as exc:
-        await _failed("跨界灾厄查询失败", character.id, exc)
+        await _failed(
+            "跨界灾厄查询失败",
+            character.id,
+            exc,
+            Action("disaster.retry", "重试", "跨界灾厄"),
+        )
 
 
 async def challenge_disaster(current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("disaster-challenge.character", "查看角色", "我的角色"))
+        )
         return
     context = current_message_context()
     if context is None:
@@ -80,13 +89,20 @@ async def challenge_disaster(current: CurrentCharacterResult) -> None:
         view = current_game_services().world_view(current.character_world)
         await send_game_reply(_challenge_message(result, view.projector))
     except Exception as exc:
-        await _failed("讨伐灾厄失败", character.id, exc)
+        await _failed(
+            "讨伐灾厄失败",
+            character.id,
+            exc,
+            Action("disaster-challenge.back", "查看灾厄", "跨界灾厄"),
+        )
 
 
 async def disaster_ranking(current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("disaster-ranking.character", "查看角色", "我的角色"))
+        )
         return
     try:
         result = await asyncio.to_thread(
@@ -100,7 +116,12 @@ async def disaster_ranking(current: CurrentCharacterResult) -> None:
         )
         await send_game_reply(message)
     except Exception as exc:
-        await _failed("灾厄排行查询失败", character.id, exc)
+        await _failed(
+            "灾厄排行查询失败",
+            character.id,
+            exc,
+            Action("disaster-ranking.retry", "重试", "灾厄排行"),
+        )
 
 
 def _status_message(
@@ -114,6 +135,14 @@ def _status_message(
             .section("跨界灾厄", icon="combat")
             .line("当前没有灾厄降临")
             .note("灾厄每周降临两次，每次持续 48 小时。")
+            .action(
+                Action(
+                    "disaster.activities",
+                    "查看活动",
+                    "活动",
+                    style="secondary",
+                )
+            )
             .build()
         )
     event = result.event
@@ -233,19 +262,70 @@ def _challenge_message(result: DimensionalDisasterChallengeResult, projector) ->
                 ),
             )
         return builder.actions(tuple(actions)).build()
-    messages = {
-        "no_active": "当前没有灾厄降临",
-        "ended": "本期灾厄已经产生结局",
-        "content_changed": "内容已经更新，本期灾厄不能继续讨伐，请联系维护者处理",
-        "attempt_limit": "今日讨伐次数已经用完",
-        "main_action_occupied": "当前正在进行其他主要行动",
-        "exploring": "当前正在探险，停止后才能讨伐灾厄",
-    }
     if result.status == "health_depleted":
         feedback = health_depleted_feedback("讨伐灾厄")
         return builder.line(feedback.text).actions(feedback.recoveries).build()
-    builder.line(messages.get(result.status, "本次讨伐没有完成"))
-    return builder.build()
+    if result.status == "no_active":
+        return (
+            builder.line("当前没有灾厄降临")
+            .action(Action("disaster-challenge.no-active", "查看活动", "活动"))
+            .build()
+        )
+    if result.status == "ended":
+        return (
+            builder.line("本期灾厄已经产生结局")
+            .action(Action("disaster-challenge.ended", "查看灾厄", "跨界灾厄"))
+            .build()
+        )
+    if result.status == "content_changed":
+        return (
+            builder.line("内容已经更新，本期灾厄不能继续讨伐，请联系维护者处理")
+            .action(
+                Action(
+                    "disaster-challenge.content-changed",
+                    "查看灾厄",
+                    "跨界灾厄",
+                )
+            )
+            .build()
+        )
+    if result.status == "attempt_limit":
+        return (
+            builder.line("今日讨伐次数已经用完")
+            .action(Action("disaster-challenge.limit", "查看排行", "灾厄排行"))
+            .build()
+        )
+    if result.status == "main_action_occupied":
+        return (
+            builder.line("当前正在进行其他主要行动")
+            .action(
+                Action(
+                    "disaster-challenge.activity",
+                    "查看角色",
+                    "我的角色",
+                    style="secondary",
+                )
+            )
+            .build()
+        )
+    if result.status == "exploring":
+        return (
+            builder.line("当前正在探险，停止后才能讨伐灾厄")
+            .action(
+                Action(
+                    "disaster-challenge.exploration",
+                    "查看探险",
+                    "探险",
+                    style="secondary",
+                )
+            )
+            .build()
+        )
+    return (
+        builder.line("本次讨伐没有完成")
+        .action(Action("disaster-challenge.back", "查看灾厄", "跨界灾厄"))
+        .build()
+    )
 
 
 def _ranking_message(
@@ -253,7 +333,13 @@ def _ranking_message(
     current_character_id: str,
 ) -> DocumentMessage:
     if result.event is None or result.activity is None:
-        return M.document().section("灾厄排行", icon="combat").line("暂无灾厄记录").build()
+        return (
+            M.document()
+            .section("灾厄排行", icon="combat")
+            .line("暂无灾厄记录")
+            .action(Action("disaster-ranking.back", "查看灾厄", "跨界灾厄"))
+            .build()
+        )
     event = result.event
     activity = result.activity
     ranked = _ranked(activity)
@@ -262,7 +348,11 @@ def _ranking_message(
         icon="combat",
     )
     if not ranked:
-        return builder.line("当前还没有有效伤痕").build()
+        return (
+            builder.line("当前还没有有效伤痕")
+            .action(Action("disaster-ranking.back", "查看灾厄", "跨界灾厄"))
+            .build()
+        )
     services = current_game_services()
     for rank, character_id, contribution, attempts in ranked[:10]:
         character = services.characters.load_character(character_id)
@@ -278,7 +368,14 @@ def _ranking_message(
             f"我的排名: {mine[0]} | 伤痕: {mine[2]} | "
             f"贡献: {mine[2] / event.maximum_health:.1%}"
         )
-    return builder.build()
+    return builder.action(
+        Action(
+            "disaster-ranking.back",
+            "返回灾厄",
+            "跨界灾厄",
+            style="secondary",
+        )
+    ).build()
 
 
 def _ranked(activity):
@@ -317,7 +414,12 @@ def _number(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
 
 
-async def _failed(message: str, character_id: str, exc: Exception) -> None:
+async def _failed(
+    message: str,
+    character_id: str,
+    exc: Exception,
+    recovery: Action,
+) -> None:
     await send_command_failure(
         message,
         character_id,
@@ -325,12 +427,19 @@ async def _failed(message: str, character_id: str, exc: Exception) -> None:
         M.document()
         .section("跨界灾厄", icon="combat")
         .line("当前操作没有完成，请稍后重试")
+        .action(recovery)
         .build()
     )
 
 
-def _unavailable() -> DocumentMessage:
-    return M.document().section("跨界灾厄", icon="combat").line("当前没有可用角色").build()
+def _unavailable(recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("跨界灾厄", icon="combat")
+        .line("当前没有可用角色")
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = ["challenge_disaster", "disaster_ranking", "view_disaster"]

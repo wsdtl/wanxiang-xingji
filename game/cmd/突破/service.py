@@ -26,7 +26,12 @@ async def breakthrough(
     character = current.character if current.status == "ok" else None
     dimension = current.character_world if current.status == "ok" else None
     if character is None or dimension is None or context is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("breakthrough.character", "查看角色", "我的角色"),
+            )
+        )
         return
     services = current_game_services()
     operation_id = f"{context.identity.evidence_id}:breakthrough"
@@ -42,7 +47,10 @@ async def breakthrough(
             "境界突破失败",
             character.id,
             exc,
-            _failure("当前突破没有完成，请稍后重试"),
+            _failure(
+                "当前突破没有完成，请稍后重试",
+                Action("breakthrough.retry", "重试", "突破"),
+            ),
         )
         return
     view = services.world_view(dimension).projector
@@ -53,7 +61,10 @@ def _result_message(result: BreakthroughResult, projector) -> DocumentMessage:
     character = result.character
     progression = character.progressions.get(CHARACTER_LEVEL_PROGRESSION_ID)
     if progression is None:
-        return _failure("角色缺少人物成长轨道")
+        return _failure(
+            "角色缺少人物成长轨道",
+            Action("breakthrough.invalid_character", "查看角色", "我的角色"),
+        )
     realm = character_realm_for_level(progression.level)
     realm_name = projector.name(realm.id)
     if result.status == "broken_through" and result.receipt is not None:
@@ -65,6 +76,7 @@ def _result_message(result: BreakthroughResult, projector) -> DocumentMessage:
             .row(("境界", f"{old_realm} → {new_realm}"), ("等级", f"Lv{result.receipt.level_after}"))
             .field("消耗", f"{projector.name(BREAKTHROUGH_TOKEN_ITEM_ID)} x1")
             .line("血气与灵力已恢复")
+            .action(Action("breakthrough.result.character", "查看角色", "我的角色"))
             .build()
         )
     if result.status == "replayed" and result.receipt is not None:
@@ -72,10 +84,17 @@ def _result_message(result: BreakthroughResult, projector) -> DocumentMessage:
             M.document()
             .section("境界突破", icon="reward")
             .line(f"已完成：{realm_name} Lv{progression.level}")
+            .action(Action("breakthrough.replayed.character", "查看角色", "我的角色"))
             .build()
         )
     if result.status == "maximum":
-        return M.document().section("境界", icon="notice").line("已经达到最终境界").build()
+        return (
+            M.document()
+            .section("境界", icon="notice")
+            .line("已经达到最终境界")
+            .action(Action("breakthrough.maximum.character", "查看角色", "我的角色"))
+            .build()
+        )
     if result.status == "item_missing":
         return (
             M.document()
@@ -110,7 +129,10 @@ def _result_message(result: BreakthroughResult, projector) -> DocumentMessage:
             .action(Action("breakthrough.explore", "前往探险", "探险", style="secondary"))
             .build()
         )
-    return _failure(result.failure_message or "当前不能突破")
+    return _failure(
+        result.failure_message or "当前不能突破",
+        Action("breakthrough.result.retry", "重试", "突破"),
+    )
 
 
 def _required_experience(character: CharacterState) -> int:
@@ -120,8 +142,14 @@ def _required_experience(character: CharacterState) -> int:
     ).required_for_next_level(progression.level) or 0
 
 
-def _failure(message: str) -> DocumentMessage:
-    return M.document().section("境界突破", icon="notice").line(message).build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("境界突破", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = ["breakthrough"]

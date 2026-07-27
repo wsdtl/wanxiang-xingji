@@ -92,25 +92,32 @@ _GEAR_SOURCE_NAMES = {
 async def nacre(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_unavailable("纳戒"))
+        await send_game_reply(_unavailable("纳戒", _nacre_action()))
         return
     try:
         page = _page_number(message)
     except ValueError as exc:
-        await send_game_reply(_invalid("纳戒", str(exc)))
+        await send_game_reply(_invalid("纳戒", str(exc), _nacre_action()))
         return
     assets = _container_assets(overview.inventory, "container.special")
     try:
-        reply = _asset_page("纳戒", "inventory", assets, page, overview)
+        reply = _asset_page(
+            "纳戒",
+            "inventory",
+            assets,
+            page,
+            overview,
+            empty_action=_backpack_action(),
+        )
     except ValueError as exc:
-        reply = _invalid("纳戒", str(exc))
+        reply = _invalid("纳戒", str(exc), _nacre_action())
     await send_game_reply(reply)
 
 
 async def armory(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_unavailable("武库"))
+        await send_game_reply(_unavailable("武库", _armory_action()))
         return
     requested = str(message or "").strip()
     if not requested:
@@ -124,12 +131,14 @@ async def armory(message: str, result: CharacterOverviewResult) -> None:
         else view.projector.resolve_alias(parts[0])
     )
     if slot_id not in STANDARD_LOADOUT_SLOT_ORDER:
-        await send_game_reply(_invalid("武库", "请通过武库中的部位按钮查看"))
+        await send_game_reply(
+            _invalid("武库", "请通过武库中的部位按钮查看", _armory_action())
+        )
         return
     try:
         page = _page_number(parts[1] if len(parts) > 1 else "")
     except ValueError as exc:
-        await send_game_reply(_invalid("武库", str(exc)))
+        await send_game_reply(_invalid("武库", str(exc), _armory_action()))
         return
     assets = _armory_assets(overview, slot_id)
     title = f"武库·{view.projector.name(slot_id)}"
@@ -141,38 +150,41 @@ async def armory(message: str, result: CharacterOverviewResult) -> None:
             page,
             overview,
             page_command=f"武库 {slot_id}",
+            empty_action=_armory_action(),
         )
     except ValueError as exc:
-        reply = _invalid("武库", str(exc))
+        reply = _invalid("武库", str(exc), _armory_action())
     await send_game_reply(reply)
 
 
 async def backpack(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_unavailable("背包"))
+        await send_game_reply(_unavailable("背包", _backpack_action()))
         return
     try:
         page = _page_number(message)
     except ValueError as exc:
-        await send_game_reply(_invalid("背包", str(exc)))
+        await send_game_reply(_invalid("背包", str(exc), _backpack_action()))
         return
     assets = _container_assets(overview.inventory, "container.backpack")
     try:
         reply = _backpack_page(assets, page, overview)
     except ValueError as exc:
-        reply = _invalid("背包", str(exc))
+        reply = _invalid("背包", str(exc), _backpack_action())
     await send_game_reply(reply)
 
 
 async def inspect(message: str, result: CharacterOverviewResult) -> None:
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_unavailable("查看"))
+        await send_game_reply(_unavailable("查看", _inspect_action()))
         return
     token = str(message or "").strip()
     if not token:
-        await send_game_reply(_invalid("查看", "发送: 查看 物品编号"))
+        await send_game_reply(
+            _invalid("查看", "发送: 查看 物品编号", _inspect_action())
+        )
         return
     try:
         asset = resolve_asset_reference(
@@ -182,7 +194,7 @@ async def inspect(message: str, result: CharacterOverviewResult) -> None:
         )
         message_value = _asset_detail(asset, overview)
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid("查看", str(exc)))
+        await send_game_reply(_invalid("查看", str(exc), _inspect_action()))
         return
     await send_game_reply(message_value)
 
@@ -204,11 +216,13 @@ async def _set_asset_protection(
     title = "珍藏" if protected else "取消珍藏"
     overview = _overview(result)
     if overview is None:
-        await send_game_reply(_unavailable(title))
+        await send_game_reply(_unavailable(title, _protection_action(title)))
         return
     token = str(message or "").strip()
     if not token:
-        await send_game_reply(_invalid(title, f"发送: {title} 物品编号"))
+        await send_game_reply(
+            _invalid(title, f"发送: {title} 物品编号", _protection_action(title))
+        )
         return
     services = current_game_services()
     try:
@@ -226,7 +240,7 @@ async def _set_asset_protection(
         ):
             raise ValueError("只有武器和装备可以加入珍藏")
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid(title, str(exc)))
+        await send_game_reply(_invalid(title, str(exc), _protection_action(title)))
         return
 
     transaction_id = f"inventory-protection:{_evidence_id()}:{int(protected)}"
@@ -242,10 +256,18 @@ async def _set_asset_protection(
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("珍藏状态更新失败"), C.kv("character", overview.character.id))
         )
-        await send_game_reply(_invalid(title, "珍藏状态没有更新，请稍后重试"))
+        await send_game_reply(
+            _invalid(
+                title,
+                "珍藏状态没有更新，请稍后重试",
+                _protection_action(title),
+            )
+        )
         return
     if outcome.failure:
-        await send_game_reply(_invalid(title, outcome.failure.message))
+        await send_game_reply(
+            _invalid(title, outcome.failure.message, _protection_action(title))
+        )
         return
     assert outcome.value is not None
     state_text = "已加入珍藏" if protected else "已取消珍藏"
@@ -256,6 +278,7 @@ async def _set_asset_protection(
         .section(title, icon="item")
         .field("物品", _asset_name(asset, overview))
         .field("状态", state_text)
+        .action(_inspect_action(_reference(overview.inventory, asset)))
         .build()
     )
 
@@ -289,6 +312,7 @@ def _asset_page(
     overview: CharacterOverview,
     *,
     page_command: str | None = None,
+    empty_action: Action,
 ) -> DocumentMessage:
     window = paginate(assets, page, page_size=PAGE_SIZE)
     builder = M.document().section(title, icon=icon)
@@ -315,6 +339,8 @@ def _asset_page(
     actions = pagination_actions(command, window, back=back)
     if actions:
         builder.actions(actions)
+    elif not window.values:
+        builder.action(empty_action)
     return builder.build()
 
 
@@ -359,6 +385,8 @@ def _backpack_page(assets, page: int, overview: CharacterOverview) -> DocumentMe
     builder.row(("页码", window.label), ("总计", window.total)).actions(
         pagination_actions("背包", window)
     )
+    if not window.values:
+        builder.action(_nacre_action())
     return builder.build()
 
 
@@ -491,6 +519,8 @@ def _asset_detail(asset, overview: CharacterOverview) -> DocumentMessage:
     availability = inventory.availability(asset.id)
     if availability is not AssetAvailability.AVAILABLE:
         builder.field("状态", _availability_name(availability))
+    if not actions:
+        actions.append(_asset_back_action(asset, overview))
     return builder.actions(actions).build()
 
 
@@ -916,14 +946,60 @@ def _number(value: float, *, signed: bool = False) -> str:
     return text.rstrip("0").rstrip(".")
 
 
-def _invalid(title: str, message: str) -> DocumentMessage:
-    return M.document().section(title, icon="notice").line(message).build()
+def _invalid(title: str, message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section(title, icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
-def _unavailable(title: str) -> DocumentMessage:
-    return M.document().section(title, icon="notice").line(
-        "当前没有读取到角色或物品状态，请稍后重试"
-    ).build()
+def _unavailable(title: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section(title, icon="notice")
+        .line("当前没有读取到角色或物品状态，请稍后重试")
+        .action(recovery)
+        .build()
+    )
+
+
+def _nacre_action() -> Action:
+    return Action("item.nacre", "返回纳戒", "纳戒", style="secondary")
+
+
+def _armory_action() -> Action:
+    return Action("item.armory", "返回武库", "武库", style="secondary")
+
+
+def _backpack_action() -> Action:
+    return Action("item.backpack", "返回背包", "背包", style="secondary")
+
+
+def _inspect_action(reference: str = "") -> Action:
+    if reference:
+        return Action("item.inspect", "查看物品", f"查看 {reference}")
+    return Action("item.inspect", "填写编号", "查看 ", behavior="fill")
+
+
+def _protection_action(title: str) -> Action:
+    return Action(
+        "item.protection.fill",
+        "填写物品",
+        f"{title} ",
+        behavior="fill",
+    )
+
+
+def _asset_back_action(asset, overview: CharacterOverview) -> Action:
+    container = overview.inventory.containers.get(asset.container_id)
+    if container is not None and container.kind == "container.special":
+        return _nacre_action()
+    if container is not None and container.kind == "container.backpack":
+        return _backpack_action()
+    return _armory_action()
 
 
 __all__ = [

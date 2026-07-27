@@ -198,7 +198,9 @@ async def _main() -> None:
             )
             assert "太玄界" in worlds.replies[0].message.content
             assert "魔法世界" in worlds.replies[0].message.content
-            assert not worlds.replies[0].message.actions
+            assert tuple(
+                action.data for action in worlds.replies[0].message.actions
+            ) == ("地图",)
             target_command = f"跃迁 {target_world_id}"
             missing_shift = await dispatch(
                 client_id="small-command-player",
@@ -291,6 +293,9 @@ async def _main() -> None:
             assert "跃迁" in shifted_world.replies[0].message.content
             assert "消耗" in shifted_world.replies[0].message.content
             assert target_view.skin.name in shifted_world.replies[0].message.content
+            assert tuple(
+                action.data for action in shifted_world.replies[0].message.actions
+            ) == ("地图", "跃迁")
             shifted_overview = services.load_character_overview(character).overview
             assert shifted_overview is not None
             assert shifted_overview.inventory.containers == initial_inventory.containers
@@ -631,7 +636,9 @@ async def _main() -> None:
             assert "铭刻完成" in completed.replies[0].message.content
             assert "照夜" in completed.replies[0].message.content
             assert "世界:" in completed.replies[0].message.content
-            assert not completed.replies[0].message.actions
+            assert tuple(
+                action.data for action in completed.replies[0].message.actions
+            ) == ("铭刻",)
 
             overview = services.load_character_overview(character).overview
             assert overview is not None

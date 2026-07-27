@@ -27,7 +27,12 @@ PAGE_SIZE = DEFAULT_PAGE_SIZE
 async def covenant_exchange(message: str, current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("exchange.character", "查看角色", "我的角色"),
+            )
+        )
         return
     services = current_game_services()
     view = services.world_view(current.character_world)
@@ -39,6 +44,14 @@ async def covenant_exchange(message: str, current: CurrentCharacterResult) -> No
             .section("归航兑换", icon="trade")
             .field(view.projector.name(EXCHANGE_MATERIAL_ITEM_ID), balance)
             .line(M.command("套装图纸", "归航兑换 套装"))
+            .action(
+                Action(
+                    "exchange.history",
+                    "兑换记录",
+                    "归航兑换记录",
+                    style="secondary",
+                )
+            )
             .build()
         )
         return
@@ -49,7 +62,12 @@ async def covenant_exchange(message: str, current: CurrentCharacterResult) -> No
                 raise ValueError("套装图纸页码必须是正整数")
             page = parse_page_number(parts[1] if len(parts) == 2 else "")
         except ValueError:
-            await send_game_reply(_failure("套装图纸页码必须是正整数"))
+            await send_game_reply(
+                _failure(
+                    "套装图纸页码必须是正整数",
+                    Action("exchange.sets.back", "返回套装", "归航兑换 套装"),
+                )
+            )
             return
         try:
             await send_game_reply(await _set_page(character.id, page, view))
@@ -76,14 +94,22 @@ async def covenant_exchange(message: str, current: CurrentCharacterResult) -> No
             "归航兑换失败",
             character.id,
             exc,
-            _failure("兑换没有完成，请稍后重试"),
+            _failure(
+                "兑换没有完成，请稍后重试",
+                Action("exchange.retry", "返回兑换", "归航兑换"),
+            ),
         )
 
 
 async def confirm_covenant_exchange(message: str, current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("exchange-confirm.character", "查看角色", "我的角色"),
+            )
+        )
         return
     parts = str(message or "").strip().split()
     if len(parts) != 2:
@@ -122,21 +148,40 @@ async def confirm_covenant_exchange(message: str, current: CurrentCharacterResul
             "归航兑换失败",
             character.id,
             exc,
-            _failure("兑换没有完成，请稍后重试"),
+            _failure(
+                "兑换没有完成，请稍后重试",
+                Action("exchange-confirm.back", "返回套装", "归航兑换 套装"),
+            ),
         )
 
 
 async def covenant_exchange_history(current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("exchange-history.character", "查看角色", "我的角色"),
+            )
+        )
         return
     services = current_game_services()
     history = await asyncio.to_thread(services.covenant_exchange.history, character.id)
     view = services.world_view(current.character_world)
     builder = M.document().section("归航兑换记录", icon="history")
     if not history.records:
-        await send_game_reply(builder.line("暂无兑换记录").build())
+        await send_game_reply(
+            builder.line("暂无兑换记录")
+            .action(
+                Action(
+                    "exchange-history.back",
+                    "返回兑换",
+                    "归航兑换",
+                    style="secondary",
+                )
+            )
+            .build()
+        )
         return
     for index, record in enumerate(reversed(history.records), start=1):
         set_name = view.projector.name(record.set_id)
@@ -146,7 +191,16 @@ async def covenant_exchange_history(current: CurrentCharacterResult) -> None:
             FieldSeparator(),
             f"{record.material_quantity} {view.projector.name(record.material_definition_id)}",
         )
-    await send_game_reply(builder.build())
+    await send_game_reply(
+        builder.action(
+            Action(
+                "exchange-history.back",
+                "返回兑换",
+                "归航兑换",
+                style="secondary",
+            )
+        ).build()
+    )
 
 
 async def _set_page(actor_id: str, page: int, view) -> DocumentMessage:
@@ -170,7 +224,11 @@ async def _set_page(actor_id: str, page: int, view) -> DocumentMessage:
             f"{EQUIPMENT_SET_BLUEPRINT_PRICE} 定相尘",
         )
     builder.row(("页码", window.label), ("总计", window.total)).actions(
-        pagination_actions("归航兑换 套装", window)
+        pagination_actions(
+            "归航兑换 套装",
+            window,
+            back=Action("exchange.sets.back", "返回兑换", "归航兑换"),
+        )
     )
     return builder.build()
 
@@ -233,11 +291,14 @@ def _resolve_set_id(value: str, view) -> str:
     raise ValueError("没有找到这个套装")
 
 
-def _failure(message: str, recovery: Action | None = None) -> DocumentMessage:
-    builder = M.document().section("归航兑换", icon="notice").line(message)
-    if recovery is not None:
-        builder.action(recovery)
-    return builder.build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("归航兑换", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = [

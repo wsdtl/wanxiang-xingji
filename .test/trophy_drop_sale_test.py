@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from game.app import build_game_services  # noqa: E402
+from game.content import INITIAL_BACKPACK_CAPACITY  # noqa: E402
 from game.content.catalog.item import REGION_TROPHY_ITEM_IDS  # noqa: E402
 from game.content.catalog.world import GREEN_CLOUD_PLAIN_ID  # noqa: E402
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
@@ -119,7 +120,11 @@ def main() -> None:
             character_id,
             logical_time=TIME + timedelta(minutes=12),
         )
-        _fill_backpack(services, character_id, quantity=40)
+        _fill_backpack(
+            services,
+            character_id,
+            quantity=INITIAL_BACKPACK_CAPACITY,
+        )
         restarted = services.exploration.start(
             character_id,
             logical_time=TIME + timedelta(minutes=13),
@@ -134,7 +139,10 @@ def main() -> None:
                 break
         assert full.state is not None
         assert full.state.stop_reason is ExplorationStopReason.CAPACITY_FULL
-        assert sum(stack.quantity for stack in _trophy_stacks(services, character_id)) == 40
+        assert (
+            sum(stack.quantity for stack in _trophy_stacks(services, character_id))
+            == INITIAL_BACKPACK_CAPACITY
+        )
 
     print("trophy drop and sale tests passed")
 

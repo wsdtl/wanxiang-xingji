@@ -12,8 +12,10 @@ if str(ROOT) not in sys.path:
 
 from game.app import build_game_services  # noqa: E402
 from game.content import (  # noqa: E402
+    BACKPACK_CAPACITY_INCREMENT,
     BACKPACK_CAPACITY_ITEM_ID,
     BACKPACK_CAPACITY_MAXIMUM,
+    INITIAL_BACKPACK_CAPACITY,
 )
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.core.gameplay import (  # noqa: E402
@@ -42,7 +44,12 @@ def main() -> None:
         character = _create_character(services)
         _grant_special_items(services, character.id)
 
-        for index in range(20):
+        expansion_count, remainder = divmod(
+            BACKPACK_CAPACITY_MAXIMUM - INITIAL_BACKPACK_CAPACITY,
+            BACKPACK_CAPACITY_INCREMENT,
+        )
+        assert remainder == 0
+        for index in range(expansion_count):
             outcome = services.special_item_use.use(
                 SpecialItemUseCommand(
                     f"capacity-use:{index}",
@@ -57,7 +64,7 @@ def main() -> None:
         backpack = next(
             value for value in inventory.containers.values() if value.kind == "container.backpack"
         )
-        assert backpack.maximum_space == BACKPACK_CAPACITY_MAXIMUM == 140
+        assert backpack.maximum_space == BACKPACK_CAPACITY_MAXIMUM == 500
         assert inventory.stacks["stack:backpack-capacity"].quantity == 1
 
         rejected = services.special_item_use.use(
@@ -119,7 +126,11 @@ def _grant_special_items(services, character_id: str) -> None:
                         "stack:backpack-capacity",
                         BACKPACK_CAPACITY_ITEM_ID,
                         special.id,
-                        21,
+                        (
+                            BACKPACK_CAPACITY_MAXIMUM - INITIAL_BACKPACK_CAPACITY
+                        )
+                        // BACKPACK_CAPACITY_INCREMENT
+                        + 1,
                         SourceReceipt(
                             "receipt:backpack-capacity",
                             "source.test",

@@ -1,4 +1,4 @@
-"""地图命令与三世界地点意图的本地驱动器巡检。"""
+"""地图命令与三世界地点名称入口的本地驱动器巡检。"""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from game.content import (  # noqa: E402
     TAIXUAN_WORLD_ID,
 )
 from game.content.catalog.world import (  # noqa: E402
+    LOCATION_FUNCTION_CITY,
     LOCATION_FUNCTION_COMPANION_PERSON,
     LOCATION_FUNCTION_EXPLORATION,
 )
@@ -33,7 +34,6 @@ from game.core.gameplay import (  # noqa: E402
     SourceReceipt,
 )
 from game.core.persistence import CHARACTER_AGGREGATE, INVENTORY_AGGREGATE  # noqa: E402
-from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules import game_operation_context  # noqa: E402
 from game.cmd import 地图 as map_component  # noqa: E402,F401
 from game.cmd.地图 import service as map_service  # noqa: E402
@@ -81,8 +81,7 @@ async def _main() -> None:
                     assert "目标世界已完成化身重构" in _content(shifted)
                     if old_action is not None:
                         stale = await _dispatch(old_action.data, f"map-stale-{index}")
-                        assert "地点入口已经失效" in _content(stale)
-                        assert stale.replies[0].message.actions[0].data == "探险"
+                        assert "没有找到这个地点" in _content(stale)
 
                 overview = services.load_character_overview(character).overview
                 assert overview is not None
@@ -157,15 +156,16 @@ async def _main() -> None:
                     value for value in detail_message.actions
                     if value.label == "前往"
                 )
-                intent = WorldLocationIntent.parse(action.data.removeprefix("前往 "))
-                assert intent is not None
-                assert intent.world_id == world_id
-                assert intent.anchor_id == exploration_binding.anchor_id
-                assert intent.function_id == LOCATION_FUNCTION_EXPLORATION
+                assert action.data == f"前往 {location_name}"
+                assert "@world_location" not in action.data
+                assert world_id not in action.data
+                assert exploration_binding.anchor_id not in action.data
+                assert exploration_binding.function_id not in action.data
                 old_action = action
 
                 moved = await _dispatch(action.data, f"map-move-{index}")
                 assert "抵达" in _content(moved) or "已经在这里" in _content(moved)
+                assert moved.replies[0].message.actions[0].data == "开始探险"
 
                 person_binding = services.content.worlds.bindings_for_world(
                     world_id,
@@ -184,9 +184,51 @@ async def _main() -> None:
                 )
                 assert person.name in _content(person_detail)
                 assert "关系 0/" in _content(person_detail)
+                person_action = next(
+                    value
+                    for value in person_detail.replies[0].message.actions
+                    if value.label == "前往"
+                )
+                person_moved = await _dispatch(
+                    person_action.data,
+                    f"map-person-move-{index}",
+                )
+                assert person_moved.replies[0].message.actions[0].data == "人物"
+
+                current_person = await _dispatch(
+                    f"地图 {view.projector.name(person_location.display_id)}",
+                    f"map-person-current-{index}",
+                )
+                assert "你当前就在这里" in _content(current_person)
+                assert current_person.replies[0].message.actions[0].data == "人物"
+
+                city_binding = services.content.worlds.bindings_for_world(
+                    world_id,
+                    function_id=LOCATION_FUNCTION_CITY,
+                )[0]
+                city_location = services.content.worlds.resolve(
+                    world_id,
+                    city_binding.anchor_id,
+                )
+                city_name = view.projector.name(city_location.display_id)
+                city_detail = await _dispatch(
+                    f"地图 {city_name}",
+                    f"map-city-{index}",
+                )
+                city_action = next(
+                    value
+                    for value in city_detail.replies[0].message.actions
+                    if value.label == "前往"
+                )
+                city_moved = await _dispatch(
+                    city_action.data,
+                    f"map-city-move-{index}",
+                )
+                assert city_moved.replies[0].message.actions[0].data == "地图"
 
             missing = await _dispatch("地图 不存在的地点", "map-missing")
             assert "当前世界没有这个地点" in _content(missing)
+            assert missing.replies[0].message.actions[0].data == "地图"
         finally:
             restore_game_services(previous)
 

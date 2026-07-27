@@ -24,7 +24,7 @@ from game.rules import game_operation_context
 from game.rules.item import asset_reference, resolve_asset_reference
 from launch import C, logger
 from launch.adapter import current_message_context
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
@@ -50,7 +50,7 @@ async def equip(message: str, current: CurrentCharacterResult) -> None:
     character, loadout, inventory, preference, view = state
     token = str(message or "").strip()
     if not token:
-        await send_game_reply(_usage("装备", "装备 物品编号"))
+        await send_game_reply(_usage("装备", "装备 物品编号", "装备 "))
         return
     try:
         instance = _instance(inventory, token)
@@ -65,7 +65,7 @@ async def equip(message: str, current: CurrentCharacterResult) -> None:
             raise ValueError("物品没有唯一装配槽位")
         operation = EquipAsset(next(iter(component.allowed_slot_ids)), instance.id)
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_rejected(str(exc)))
+        await send_game_reply(_rejected(str(exc), "装备 "))
         return
     await _execute(character, loadout, inventory, preference, view, operation, "装备")
 
@@ -79,7 +79,13 @@ async def unequip(message: str, current: CurrentCharacterResult) -> None:
     requested = str(message or "").strip()
     slot_id = _slot_id(requested, view)
     if slot_id is None:
-        await send_game_reply(_usage("卸下", "卸下 武器/冠首/法衣/护手/腰佩/履靴/饰品"))
+        await send_game_reply(
+            _usage(
+                "卸下",
+                "卸下 武器/冠首/法衣/护手/腰佩/履靴/饰品",
+                "卸下 ",
+            )
+        )
         return
     await _execute(
         character,
@@ -106,7 +112,7 @@ async def presets(message: str, current: CurrentCharacterResult) -> None:
         index = int(requested)
         preset_id = LOADOUT_PRESET_IDS[index]
     except (ValueError, IndexError):
-        await send_game_reply(_usage("配装", "配装只支持 0 至 5"))
+        await send_game_reply(_usage("配装", "配装只支持 0 至 5", "配装 "))
         return
     await _execute(
         character,
@@ -154,7 +160,7 @@ async def _execute(
         await send_game_reply(_unavailable())
         return
     if outcome.failure:
-        await send_game_reply(_rejected(outcome.failure.message))
+        await send_game_reply(_rejected(outcome.failure.message, "装配"))
         return
     assert outcome.value is not None
     execution = outcome.value.execution
@@ -235,7 +241,12 @@ def _loadout_message(
                 f"另有 {len(candidates) - _CANDIDATE_LIMIT} 件，",
                 M.command("查看完整武库", "武库"),
             )
-    return builder.build()
+    return builder.actions(
+        (
+            Action("loadout.presets", "切换配装", "配装", style="secondary"),
+            Action("loadout.armory", "查看武库", "武库", style="secondary"),
+        )
+    ).build()
 
 
 def _preset_message(loadout: LoadoutState, view) -> DocumentMessage:
@@ -403,18 +414,35 @@ def _transaction_id(prefix: str) -> str:
     return f"{prefix}:{context.identity.evidence_id}"
 
 
-def _usage(title: str, text: str) -> DocumentMessage:
-    return M.document().section(title, icon="equipment").line(text).build()
+def _usage(title: str, text: str, command: str) -> DocumentMessage:
+    return (
+        M.document()
+        .section(title, icon="equipment")
+        .line(text)
+        .action(Action("loadout.fill", "填写参数", command, behavior="fill"))
+        .build()
+    )
 
 
-def _rejected(message: str) -> DocumentMessage:
-    return M.document().section("装配未完成", icon="notice").line(message).build()
+def _rejected(message: str, command: str) -> DocumentMessage:
+    behavior = "fill" if command.endswith(" ") else "callback"
+    return (
+        M.document()
+        .section("装配未完成", icon="notice")
+        .line(message)
+        .action(Action("loadout.retry", "重新操作", command, behavior=behavior))
+        .build()
+    )
 
 
 def _unavailable() -> DocumentMessage:
-    return M.document().section("装配", icon="notice").line(
-        "当前没有读取到装配状态，请稍后重试"
-    ).build()
+    return (
+        M.document()
+        .section("装配", icon="notice")
+        .line("当前没有读取到装配状态，请稍后重试")
+        .action(Action("loadout.character", "查看角色", "我的角色"))
+        .build()
+    )
 
 
 __all__ = ["equip", "presets", "unequip", "view_loadout"]

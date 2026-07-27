@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 from game.app import build_game_services, install_game_services, restore_game_services  # noqa: E402
 from game.content import (  # noqa: E402
     COMMON_QUALITY_ID,
+    INITIAL_BACKPACK_CAPACITY,
     SMALL_HEALTH_MEDICINE_ITEM_ID,
     STARTER_WEAPON_ID,
     STARTER_WEAPON_ITEM_ID,
@@ -41,7 +42,11 @@ from game.rules.item import asset_reference  # noqa: E402
 from game.cmd import 休息 as rest_component  # noqa: E402,F401
 from game.cmd import 物品 as item_component  # noqa: E402,F401
 from game.cmd import 角色 as character_component  # noqa: E402,F401
-from game.cmd.物品.service import _armory_assets, _asset_page  # noqa: E402
+from game.cmd.物品.service import (  # noqa: E402
+    _armory_action,
+    _armory_assets,
+    _asset_page,
+)
 from launch.adapter.local import LocalEventHandler, dispatch  # noqa: E402
 from launch.adapter.qq import QqEventHandler  # noqa: E402
 from launch.adapter.qq.render import render_qq_message  # noqa: E402
@@ -185,6 +190,7 @@ async def _main() -> None:
                     1,
                     overview,
                     page_command=f"武库 {slot_name}",
+                    empty_action=_armory_action(),
                 )
             )
             assert qq_payload["markdown"]["content"].count("mqqapi://aio/inlinecmd") == 100
@@ -197,7 +203,10 @@ async def _main() -> None:
             third_page = await _dispatch(f"武库 {slot_name} 3", "item-rest-armory-page-3")
             assert third_page.replies[0].message.content.count(starter_name) == 2
             backpack = await _dispatch("背包", "item-rest-backpack")
-            assert "空间: _0/40_" in backpack.replies[0].message.content
+            assert (
+                f"空间: _0/{INITIAL_BACKPACK_CAPACITY}_"
+                in backpack.replies[0].message.content
+            )
 
             await _assert_rest_window_and_exploration(
                 services,

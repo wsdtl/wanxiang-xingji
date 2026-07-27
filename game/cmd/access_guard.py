@@ -92,6 +92,7 @@ def _blocked_message(status: str) -> DocumentMessage:
             .header(GAME_NAME)
             .section("身份归属冲突", icon="notice")
             .line("当前平台身份对应多个账号，暂时不能执行该命令。")
+            .action(Action("guard.help", "查看帮助", "帮助", behavior="callback"))
             .build()
         )
     return (
@@ -99,6 +100,7 @@ def _blocked_message(status: str) -> DocumentMessage:
         .header(GAME_NAME)
         .section("读取失败", icon="notice")
         .line("当前没有读取到角色状态，请稍后重试。")
+        .action(Action("guard.retry", "重试", "我的角色", behavior="callback"))
         .build()
     )
 

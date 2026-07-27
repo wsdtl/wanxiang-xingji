@@ -40,11 +40,11 @@ from ..reply import send_command_failure, send_game_reply
 async def inscription(message: str, current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable("铭刻"))
+        await send_game_reply(_unavailable("铭刻", _character_action()))
         return
     overview = await _load_overview(character)
     if overview is None:
-        await send_game_reply(_unavailable("铭刻"))
+        await send_game_reply(_unavailable("铭刻", _inscription_action("重试")))
         return
     requested = str(message or "").strip()
     view = current_game_services().world_view(overview.character_world)
@@ -60,7 +60,7 @@ async def inscription(message: str, current: CurrentCharacterResult) -> None:
                 )
             )
         except ValueError as exc:
-            await send_game_reply(_invalid(str(exc)))
+            await send_game_reply(_invalid(str(exc), _inscription_action()))
         return
     parts = requested.split(maxsplit=2)
     if len(parts) != 3:
@@ -72,7 +72,7 @@ async def inscription(message: str, current: CurrentCharacterResult) -> None:
         target = _asset_target(overview.inventory, target_ref)
         custom_name = clean_inscription_name(custom_name)
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid(str(exc)))
+        await send_game_reply(_invalid(str(exc), _inscription_action()))
         return
     try:
         await send_game_reply(
@@ -85,17 +85,22 @@ async def inscription(message: str, current: CurrentCharacterResult) -> None:
             )
         )
     except Exception as exc:
-        await _failed("资产铭刻执行失败", character.id, exc)
+        await _failed(
+            "资产铭刻执行失败",
+            character.id,
+            exc,
+            _inscription_action("重试"),
+        )
 
 
 async def inscription_ability(message: str, current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable("铭刻能力"))
+        await send_game_reply(_unavailable("铭刻能力", _character_action()))
         return
     overview = await _load_overview(character)
     if overview is None:
-        await send_game_reply(_unavailable("铭刻能力"))
+        await send_game_reply(_unavailable("铭刻能力", _ability_action("重试")))
         return
     requested = str(message or "").strip()
     view = current_game_services().world_view(overview.character_world)
@@ -111,7 +116,7 @@ async def inscription_ability(message: str, current: CurrentCharacterResult) -> 
                 )
             )
         except ValueError as exc:
-            await send_game_reply(_invalid(str(exc)))
+            await send_game_reply(_invalid(str(exc), _ability_action()))
         return
     parts = requested.split(maxsplit=3)
     if len(parts) != 4:
@@ -124,7 +129,7 @@ async def inscription_ability(message: str, current: CurrentCharacterResult) -> 
         ability_id, _ = _ability(weapon, ability_token)
         custom_name = clean_inscription_name(custom_name)
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid(str(exc)))
+        await send_game_reply(_invalid(str(exc), _ability_action()))
         return
     try:
         await send_game_reply(
@@ -138,7 +143,12 @@ async def inscription_ability(message: str, current: CurrentCharacterResult) -> 
             )
         )
     except Exception as exc:
-        await _failed("能力铭刻执行失败", character.id, exc)
+        await _failed(
+            "能力铭刻执行失败",
+            character.id,
+            exc,
+            _ability_action("重试"),
+        )
 
 
 async def confirm_asset_inscription(
@@ -147,7 +157,7 @@ async def confirm_asset_inscription(
 ) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable("确认铭刻"))
+        await send_game_reply(_unavailable("确认铭刻", _character_action()))
         return
     parts = str(message or "").strip().split(maxsplit=2)
     if len(parts) != 3:
@@ -160,7 +170,7 @@ async def confirm_asset_inscription(
         return
     overview = await _load_overview(character)
     if overview is None:
-        await send_game_reply(_unavailable("确认铭刻"))
+        await send_game_reply(_unavailable("确认铭刻", _inscription_action()))
         return
     try:
         medium = _medium(overview.inventory, parts[0])
@@ -174,7 +184,12 @@ async def confirm_asset_inscription(
             custom_name,
         )
     except Exception as exc:
-        await _failed("资产铭刻执行失败", character.id, exc)
+        await _failed(
+            "资产铭刻执行失败",
+            character.id,
+            exc,
+            _inscription_action("重试"),
+        )
         return
     await send_game_reply(reply)
 
@@ -185,7 +200,7 @@ async def confirm_ability_inscription(
 ) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable("确认铭刻"))
+        await send_game_reply(_unavailable("确认铭刻", _character_action()))
         return
     parts = str(message or "").strip().split(maxsplit=3)
     if len(parts) != 4:
@@ -203,7 +218,7 @@ async def confirm_ability_inscription(
         return
     overview = await _load_overview(character)
     if overview is None:
-        await send_game_reply(_unavailable("确认铭刻"))
+        await send_game_reply(_unavailable("确认铭刻", _ability_action()))
         return
     try:
         medium = _medium(overview.inventory, parts[0])
@@ -219,7 +234,12 @@ async def confirm_ability_inscription(
             custom_name,
         )
     except Exception as exc:
-        await _failed("能力铭刻执行失败", character.id, exc)
+        await _failed(
+            "能力铭刻执行失败",
+            character.id,
+            exc,
+            _ability_action("重试"),
+        )
         return
     await send_game_reply(reply)
 
@@ -230,7 +250,7 @@ async def inscription_original_name(
 ) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable("铭刻原名"))
+        await send_game_reply(_unavailable("铭刻原名", _character_action()))
         return
     services = current_game_services()
     try:
@@ -251,7 +271,12 @@ async def inscription_original_name(
                 logical_time=command_time(),
             )
     except Exception as exc:
-        await _failed("铭刻原名设置失败", character.id, exc)
+        await _failed(
+            "铭刻原名设置失败",
+            character.id,
+            exc,
+            Action("inscription.original.retry", "重试", "铭刻原名"),
+        )
         return
     await send_game_reply(_preference_message(preference))
 
@@ -287,6 +312,7 @@ async def _apply_asset_inscription(
     return _success(
         outcome.value,
         current_game_services().world_view(overview.character_world),
+        _inscription_action(),
     )
 
 
@@ -327,6 +353,7 @@ async def _apply_ability_inscription(
     return _success(
         outcome.value,
         current_game_services().world_view(overview.character_world),
+        _ability_action(),
     )
 
 
@@ -404,7 +431,7 @@ def _inscription_home(
                 M.command(_asset_name(target, preference, view), f"查看 {reference}"),
             )
     builder.row(("页码", window.label), ("总计", window.total)).actions(
-        pagination_actions("铭刻", window)
+        pagination_actions("铭刻", window, back=_ability_action())
     )
     return builder.note("发送: 铭刻 羽毛编号 目标编号 新名称").build()
 
@@ -465,18 +492,19 @@ def _ability_home(
     if not entries:
         builder.line("当前没有可以铭刻能力的武器")
     builder.row(("页码", window.label), ("总计", window.total)).actions(
-        pagination_actions("铭刻能力", window)
+        pagination_actions("铭刻能力", window, back=_inscription_action())
     )
     return builder.note("发送: 铭刻能力 羽毛编号 武器编号 能力序号 新名称").build()
 
 
-def _success(receipt, view) -> DocumentMessage:
+def _success(receipt, view, recovery: Action) -> DocumentMessage:
     return (
         M.document()
         .section("铭刻完成", icon="item")
         .field("世界", view.skin.name)
         .field("铭刻名", receipt.custom_name)
         .line(receipt.medium_flavor_text)
+        .action(recovery)
         .build()
     )
 
@@ -504,32 +532,88 @@ def _preference_message(preference, *, invalid: bool = False) -> DocumentMessage
 
 
 def _asset_usage() -> DocumentMessage:
-    return M.document().section("铭刻", icon="item").line(
-        "发送: 铭刻 羽毛编号 目标编号 新名称"
-    ).build()
+    return (
+        M.document()
+        .section("铭刻", icon="item")
+        .line("发送: 铭刻 羽毛编号 目标编号 新名称")
+        .action(
+            Action(
+                "inscription.fill",
+                "填写铭刻",
+                "铭刻 ",
+                behavior="fill",
+            )
+        )
+        .build()
+    )
 
 
 def _ability_usage() -> DocumentMessage:
-    return M.document().section("铭刻能力", icon="skill").line(
-        "发送: 铭刻能力 羽毛编号 武器编号 能力序号 新名称"
-    ).build()
+    return (
+        M.document()
+        .section("铭刻能力", icon="skill")
+        .line("发送: 铭刻能力 羽毛编号 武器编号 能力序号 新名称")
+        .action(
+            Action(
+                "inscription.ability.fill",
+                "填写铭刻",
+                "铭刻能力 ",
+                behavior="fill",
+            )
+        )
+        .build()
+    )
 
 
-def _invalid(message: str, recovery: Action | None = None) -> DocumentMessage:
-    builder = M.document().section("铭刻未完成", icon="notice").line(message)
-    if recovery is not None:
-        builder.action(recovery)
-    return builder.build()
+def _invalid(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("铭刻未完成", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
-def _unavailable(title: str) -> DocumentMessage:
-    return M.document().section(title, icon="notice").line(
-        "当前没有读取到角色或物品状态，请稍后重试"
-    ).build()
+def _unavailable(title: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section(title, icon="notice")
+        .line("当前没有读取到角色或物品状态，请稍后重试")
+        .action(recovery)
+        .build()
+    )
 
 
-async def _failed(title: str, character_id: str, exc: Exception) -> None:
-    await send_command_failure(title, character_id, exc, _unavailable(title))
+async def _failed(
+    title: str,
+    character_id: str,
+    exc: Exception,
+    recovery: Action,
+) -> None:
+    await send_command_failure(
+        title,
+        character_id,
+        exc,
+        _unavailable(title, recovery),
+    )
+
+
+def _character_action() -> Action:
+    return Action("inscription.character", "查看角色", "我的角色", style="secondary")
+
+
+def _inscription_action(label: str = "返回铭刻") -> Action:
+    return Action("inscription.back", label, "铭刻", style="secondary")
+
+
+def _ability_action(label: str = "能力铭刻") -> Action:
+    return Action(
+        "inscription.ability.back",
+        label,
+        "铭刻能力",
+        style="secondary",
+    )
 
 
 def _medium(inventory: InventoryState, token: str) -> ItemInstance:

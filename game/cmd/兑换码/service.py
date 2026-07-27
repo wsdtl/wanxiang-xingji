@@ -8,7 +8,7 @@ from game.app import CurrentCharacterResult, current_game_services
 from game.content import PRIMARY_CURRENCY_ID
 from game.features.redemption_code import RedemptionCodeItem, RedemptionCodeResult
 from launch.adapter import current_message_context
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
@@ -18,7 +18,12 @@ from ..reply import send_command_failure, send_game_reply
 async def redeem_code(message: str, current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("redemption.character", "查看角色", "我的角色"),
+            )
+        )
         return
     code = str(message or "").strip()
     if not code:
@@ -50,7 +55,15 @@ async def redeem_code(message: str, current: CurrentCharacterResult) -> None:
             "兑换码领取失败",
             character.id,
             exc,
-            _failure("奖励没有发放，请稍后重试"),
+            _failure(
+                "奖励没有发放，请稍后重试",
+                Action(
+                    "redemption.retry",
+                    "重新填写",
+                    "兑换码 ",
+                    behavior="fill",
+                ),
+            ),
         )
 
 
@@ -68,11 +81,20 @@ def _result_message(result: RedemptionCodeResult, view) -> DocumentMessage:
             .build()
         )
     if result.status == "invalid":
-        return _failure(result.failure_message or "兑换码无效，请检查后重试")
+        return _failure(
+            result.failure_message or "兑换码无效，请检查后重试",
+            Action("redemption.fill", "重新填写", "兑换码 ", behavior="fill"),
+        )
     if result.status == "unavailable":
-        return _failure("该兑换码当前不可领取")
+        return _failure(
+            "该兑换码当前不可领取",
+            Action("redemption.fill", "填写其他兑换码", "兑换码 ", behavior="fill"),
+        )
     if result.status != "redeemed":
-        return _failure(result.failure_message or "兑换没有完成，请稍后重试")
+        return _failure(
+            result.failure_message or "兑换没有完成，请稍后重试",
+            Action("redemption.fill", "重新填写", "兑换码 ", behavior="fill"),
+        )
 
     builder = M.document().section("兑换码·领取成功", icon="reward")
     if result.currency_amount:
@@ -105,7 +127,9 @@ def _result_message(result: RedemptionCodeResult, view) -> DocumentMessage:
             FieldSeparator(),
             M.command("武库", "武库"),
         )
-    return builder.build()
+    return builder.action(
+        Action("redemption.inventory", "查看纳戒", "纳戒")
+    ).build()
 
 
 def _item_reference(item: RedemptionCodeItem) -> str:
@@ -119,8 +143,14 @@ def _item_name(item: RedemptionCodeItem, view) -> str:
     return view.gear_projector.equipment(item.state).name
 
 
-def _failure(message: str) -> DocumentMessage:
-    return M.document().section("兑换码", icon="notice").line(message).build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("兑换码", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = ["redeem_code"]

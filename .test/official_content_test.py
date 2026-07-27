@@ -106,15 +106,15 @@ def main() -> None:
     assert tuple(value.id for value in catalog.report.packages) == tuple(
         value.manifest.id for value in resolve_package_order(OFFICIAL_PACKAGES)
     )
-    assert str(CATALOG_PACKAGE.manifest.version) == "3.32.0"
-    assert str(WORLD_SKIN_PACKAGE.manifest.version) == "3.24.0"
+    assert str(CATALOG_PACKAGE.manifest.version) == "3.32.2"
+    assert str(WORLD_SKIN_PACKAGE.manifest.version) == "3.24.1"
     assert str(WORLD_PACKAGE.manifest.version) == "2.0.0"
     assert {
         world.skin.id: str(world.version) for world in OFFICIAL_WORLD_EXTENSIONS
     } == {
-        CULTIVATION_SKIN_ID: "1.0.0",
-        MAGIC_SKIN_ID: "1.1.0",
-        STELLAR_RING_SKIN_ID: "1.1.0",
+        CULTIVATION_SKIN_ID: "1.0.2",
+        MAGIC_SKIN_ID: "1.1.2",
+        STELLAR_RING_SKIN_ID: "1.1.2",
     }
     assert len(catalog.report.content_fingerprint) == 64
     assert catalog.report.display_content_ids == frozenset(

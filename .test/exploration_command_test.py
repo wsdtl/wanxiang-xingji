@@ -21,6 +21,7 @@ from game.app import (  # noqa: E402
     install_game_services,
     restore_game_services,
 )
+from game.content import INITIAL_BACKPACK_CAPACITY  # noqa: E402
 from game.cmd.探险.service import (  # noqa: E402
     _exploration_message,
     _start_message,
@@ -32,11 +33,11 @@ from game.cmd.角色.service import (  # noqa: E402
 from game.core.account import ExternalIdentity, IdentityEvidence  # noqa: E402
 from game.features.exploration import ExplorationOperationResult  # noqa: E402
 from game.features.player_activity import PlayerActivityBlock  # noqa: E402
-from game.features.world_travel import WorldLocationIntent  # noqa: E402
 from game.rules.battle_report import BattleReportReference  # noqa: E402
 from game.rules.exploration import (  # noqa: E402
     ExplorationRestReason,
     ExplorationStatus,
+    ExplorationStopReason,
 )
 from game.rules.player_activity import (  # noqa: E402
     PlayerActivityKind,
@@ -146,13 +147,11 @@ async def _main() -> None:
                 )
                 == destination
             )
-            destination_command = WorldLocationIntent(
-                view.world.id,
-                destination_binding.anchor_id,
-                destination_binding.function_id,
-                destination_binding.version,
-            ).command()
+            destination_command = f"前往 {destination}"
             assert f"command={quote(destination_command, safe='')}" in qq_content
+            assert "%40world_location" not in qq_content
+            assert destination_binding.anchor_id not in qq_content
+            assert destination_binding.function_id not in qq_content
 
             moved = await dispatch(
                 client_id="exploration-player",
@@ -161,6 +160,7 @@ async def _main() -> None:
                 event_id="exploration-move",
             )
             assert "抵达:" in moved.replies[0].message.content
+            assert moved.replies[0].message.actions[0].data == "开始探险"
 
             disabled_auto_rest = await dispatch(
                 client_id="exploration-player",
@@ -267,6 +267,28 @@ async def _main() -> None:
             assert "药物数量为累计掉落" in rendered_regression.content
             assert "查看完整战报" in rendered_regression.content
             assert rendered_regression.actions[0].data == "停止探险"
+
+            capacity_stopped_state = replace(
+                state,
+                status=ExplorationStatus.STOPPED,
+                stopped_at=logical_time,
+                stop_reason=ExplorationStopReason.CAPACITY_FULL,
+                revision=state.revision + 1,
+            )
+            capacity_stopped_message = render_local_message(
+                _summary_message(
+                    ExplorationOperationResult("ok", capacity_stopped_state),
+                    overview,
+                    services.world_view(overview.character_world),
+                )
+            )
+            assert "状态: _已停止_" in capacity_stopped_message.content
+            assert "停止原因: _背包空间不足_" in capacity_stopped_message.content
+            assert (
+                f"背包空间: _0/{INITIAL_BACKPACK_CAPACITY}_"
+                in capacity_stopped_message.content
+            )
+            assert "状态: _容量已满_" not in capacity_stopped_message.content
 
             resting_state = replace(
                 state,

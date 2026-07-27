@@ -4,9 +4,11 @@ from game.core.gameplay import SkinEntry
 from game.content.covenant import COVENANT_ITEM_ENTRIES
 
 from ...catalog import (
+    BACKPACK_CAPACITY_INCREMENT,
     BREAKTHROUGH_TOKEN_ITEM_ID,
     DRAW_TICKET_ITEM_ID,
     BACKPACK_CAPACITY_ITEM_ID,
+    BACKPACK_CAPACITY_MAXIMUM,
     COMPANION_SANCTUARY_ITEM_ID,
     DIMENSION_SHIFT_ITEM_ID,
     INSCRIPTION_FEATHER_ITEM_ID,
@@ -48,7 +50,10 @@ STELLAR_RING_ITEM_ENTRIES = {
     ),
     BACKPACK_CAPACITY_ITEM_ID: SkinEntry(
         name="折叠仓扩容片",
-        description="融入背包后永久增加 5 格空间；背包最多扩展至 140 格。",
+        description=(
+            f"融入背包后永久增加 {BACKPACK_CAPACITY_INCREMENT} 格空间；"
+            f"背包最多扩展至 {BACKPACK_CAPACITY_MAXIMUM} 格。"
+        ),
         icon="⌛",
     ),
     COMPANION_SANCTUARY_ITEM_ID: SkinEntry(
@@ -81,40 +86,58 @@ STELLAR_RING_ITEM_ENTRIES = {
         description="为指定伙伴补充成长经验，单次最多增加 30,000 点。",
         icon="🪶",
     ),
-    SMALL_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="注入小型生命修复剂"),
-    MEDIUM_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="注入中型生命修复剂"),
-    LARGE_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(name="注入大型生命修复剂"),
-    SMALL_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(name="使用小型同步剂"),
-    MEDIUM_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(name="使用中型同步剂"),
-    LARGE_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(name="使用大型同步剂"),
+    SMALL_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(
+        name="注入小型生命修复剂",
+        description="恢复自身生命上限的 12%。",
+    ),
+    MEDIUM_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(
+        name="注入中型生命修复剂",
+        description="恢复自身生命上限的 25%。",
+    ),
+    LARGE_HEALTH_MEDICINE_ABILITY_ID: SkinEntry(
+        name="注入大型生命修复剂",
+        description="恢复自身生命上限的 50%。",
+    ),
+    SMALL_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(
+        name="使用小型同步剂",
+        description="恢复自身同步上限的 12%。",
+    ),
+    MEDIUM_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(
+        name="使用中型同步剂",
+        description="恢复自身同步上限的 25%。",
+    ),
+    LARGE_SPIRIT_MEDICINE_ABILITY_ID: SkinEntry(
+        name="使用大型同步剂",
+        description="恢复自身同步上限的 50%。",
+    ),
     SMALL_HEALTH_MEDICINE_ITEM_ID: SkinEntry(
         name="小型生命修复剂",
-        description="恢复最大生命的 12%。",
+        description="恢复生命上限的 12%。",
         icon="🧪",
     ),
     MEDIUM_HEALTH_MEDICINE_ITEM_ID: SkinEntry(
         name="中型生命修复剂",
-        description="恢复最大生命的 25%。",
+        description="恢复生命上限的 25%。",
         icon="🧪",
     ),
     LARGE_HEALTH_MEDICINE_ITEM_ID: SkinEntry(
         name="大型生命修复剂",
-        description="恢复最大生命的 50%。",
+        description="恢复生命上限的 50%。",
         icon="🧪",
     ),
     SMALL_SPIRIT_MEDICINE_ITEM_ID: SkinEntry(
         name="小型同步剂",
-        description="恢复最大同步值的 12%。",
+        description="恢复同步上限的 12%。",
         icon="💧",
     ),
     MEDIUM_SPIRIT_MEDICINE_ITEM_ID: SkinEntry(
         name="中型同步剂",
-        description="恢复最大同步值的 25%。",
+        description="恢复同步上限的 25%。",
         icon="💧",
     ),
     LARGE_SPIRIT_MEDICINE_ITEM_ID: SkinEntry(
         name="大型同步剂",
-        description="恢复最大同步值的 50%。",
+        description="恢复同步上限的 50%。",
         icon="💧",
     ),
 }

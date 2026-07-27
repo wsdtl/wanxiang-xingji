@@ -168,7 +168,9 @@ async def _main() -> None:
             assert "已将成员请离队伍" in kicked.replies[0].message.content
             disbanded = await _dispatch("party-b", "解散队伍", "party-disband-direct")
             assert "队伍已经解散" in disbanded.replies[0].message.content
-            assert not disbanded.replies[0].message.actions
+            assert tuple(
+                action.data for action in disbanded.replies[0].message.actions
+            ) == ("创建队伍",)
             final = await _dispatch("party-b", "组队", "party-final")
             assert "当前没有加入队伍" in final.replies[0].message.content
         finally:

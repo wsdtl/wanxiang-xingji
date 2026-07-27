@@ -11,12 +11,16 @@ from game.content.catalog.world import (
     LOCATION_FUNCTION_COMPANION_PERSON,
     LOCATION_FUNCTION_EXPLORATION,
 )
-from game.features.world_travel import WorldLocationIntent
 from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
 from ..reply import send_command_failure, send_game_reply
+from ..world_location import (
+    current_world_location_action,
+    current_world_location_command,
+    resolve_current_world_location,
+)
 
 
 _REGION_KIND_NAMES = {
@@ -157,11 +161,10 @@ def _location_detail(
     progress_by_region,
 ) -> DocumentMessage:
     services = current_game_services()
-    display_id = view.projector.resolve_alias(requested)
-    binding = (
-        services.content.worlds.binding_for_display(view.world.id, display_id)
-        if display_id is not None
-        else None
+    binding = resolve_current_world_location(
+        requested,
+        view,
+        services.content.worlds,
     )
     if binding is None:
         return _failure("当前世界没有这个地点")
@@ -188,20 +191,16 @@ def _location_detail(
 
     current = _current_location(overview)
     if current is not None and current.anchor.id == resolved.anchor.id:
-        builder.note("你当前就在这里。")
-    else:
-        intent = WorldLocationIntent(
-            view.world.id,
-            binding.anchor_id,
-            binding.function_id,
-            binding.version,
+        builder.note("你当前就在这里。").action(
+            current_world_location_action(binding)
         )
+    else:
         builder.actions(
             (
                 Action(
                     f"map.travel.{binding.anchor_id}",
                     "前往",
-                    intent.command(),
+                    current_world_location_command(view, binding),
                     behavior="callback",
                 ),
             )
@@ -275,7 +274,13 @@ def _overview(result: CharacterOverviewResult) -> CharacterOverview | None:
 
 
 def _failure(message: str) -> DocumentMessage:
-    return M.document().section("地图", icon="notice").line(message).build()
+    return (
+        M.document()
+        .section("地图", icon="notice")
+        .line(message)
+        .action(Action("map.back", "查看地图", "地图", behavior="callback"))
+        .build()
+    )
 
 
 def _unavailable() -> DocumentMessage:

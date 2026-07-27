@@ -52,10 +52,14 @@ from ..command_helpers import command_time
 from ..reply import send_game_reply
 from .service import (
     _MEDICINE_RESOURCE,
+    _armory_action,
     _asset_name,
+    _backpack_action,
     _evidence_id,
+    _inspect_action,
     _invalid,
     _load_overview,
+    _nacre_action,
     _number,
     _reference,
     _resource_maximum,
@@ -132,17 +136,23 @@ class ItemUseRoute:
 async def use_item(message: str, current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_unavailable("使用"))
+        await send_game_reply(_unavailable("使用", _nacre_action()))
         return
     parts = tuple(str(message or "").strip().split())
     if not parts or len(parts) > 2:
-        await send_game_reply(_invalid("使用", "发送: 使用 物品编号 [数量或武器编号]"))
+        await send_game_reply(
+            _invalid(
+                "使用",
+                "发送: 使用 物品编号 [数量或武器编号]",
+                _use_action(),
+            )
+        )
         return
 
     services = current_game_services()
     initial = await _load_overview(character)
     if initial is None:
-        await send_game_reply(_unavailable("使用"))
+        await send_game_reply(_unavailable("使用", _nacre_action()))
         return
     try:
         asset = resolve_asset_reference(
@@ -170,7 +180,7 @@ async def use_item(message: str, current: CurrentCharacterResult) -> None:
             item_name=_view(initial).projector.name(definition.id),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid("使用", str(exc)))
+        await send_game_reply(_invalid("使用", str(exc), _use_action()))
         return
 
     await route.handler(
@@ -191,7 +201,9 @@ async def _use_ability(request: ItemUseRequest) -> None:
         if requested_quantity < 1:
             raise ValueError("使用数量必须大于 0")
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid("使用", str(exc)))
+        await send_game_reply(
+            _invalid("使用", str(exc), _use_action(request.parts[0]))
+        )
         return
 
     limit = min(requested_quantity, request.available_quantity)
@@ -264,7 +276,9 @@ async def _use_ability(request: ItemUseRequest) -> None:
             if stopped_full
             else failure_message or "没有使用任何物品"
         )
-        await send_game_reply(_invalid("使用", message_text))
+        await send_game_reply(
+            _invalid("使用", message_text, _use_action(request.parts[0]))
+        )
         return
     await send_game_reply(
         _use_result(
@@ -296,18 +310,34 @@ async def _use_equipment_blueprint(request: ItemUseRequest) -> None:
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("套装图纸使用失败"), C.kv("character", overview.character.id))
         )
-        await send_game_reply(_invalid("套装图纸", "装备没有生成，请稍后重试"))
+        await send_game_reply(
+            _invalid(
+                "套装图纸",
+                "装备没有生成，请稍后重试",
+                _use_action(request.parts[0]),
+            )
+        )
         return
     if result.receipt is None:
-        await send_game_reply(_invalid("套装图纸", result.failure_message or "装备没有生成"))
+        await send_game_reply(
+            _invalid(
+                "套装图纸",
+                result.failure_message or "装备没有生成",
+                _use_action(request.parts[0]),
+            )
+        )
         return
     final = await _load_overview(overview.character)
     if final is None:
-        await send_game_reply(_invalid("套装图纸", "装备已经生成，请稍后查看武库"))
+        await send_game_reply(
+            _invalid("套装图纸", "装备已经生成，请稍后查看武库", _armory_action())
+        )
         return
     asset = final.inventory.instances.get(result.receipt.equipment_asset_id)
     if asset is None:
-        await send_game_reply(_invalid("套装图纸", "装备已经生成，请稍后查看武库"))
+        await send_game_reply(
+            _invalid("套装图纸", "装备已经生成，请稍后查看武库", _armory_action())
+        )
         return
     view = _view(final)
     state = equipment_state_from_instance(asset)
@@ -350,7 +380,9 @@ async def _use_weapon_growth(request: ItemUseRequest) -> None:
         if not target_definition.tags.has("item.weapon"):
             raise ValueError("目标编号不是武器")
     except (KeyError, TypeError, ValueError) as exc:
-        await send_game_reply(_invalid("使用", str(exc)))
+        await send_game_reply(
+            _invalid("使用", str(exc), _use_target_action(request.parts[0]))
+        )
         return
 
     transaction_id = f"weapon-item-use:{_evidence_id()}"
@@ -370,10 +402,14 @@ async def _use_weapon_growth(request: ItemUseRequest) -> None:
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("武器成长道具使用失败"), C.kv("character", overview.character.id))
         )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
+        await send_game_reply(
+            _invalid("使用", "物品使用没有完成", _use_action(request.parts[0]))
+        )
         return
     if outcome.failure:
-        await send_game_reply(_invalid("使用", outcome.failure.message))
+        await send_game_reply(
+            _invalid("使用", outcome.failure.message, _use_action(request.parts[0]))
+        )
         return
     assert outcome.value is not None
     receipt = outcome.value
@@ -397,7 +433,11 @@ async def _use_weapon_growth(request: ItemUseRequest) -> None:
             "当前经验",
             f"{receipt.experience_before} -> {receipt.experience_after}",
         )
-    await send_game_reply(builder.build())
+    await send_game_reply(
+        builder.action(
+            _inspect_action(_reference(overview.inventory, target))
+        ).build()
+    )
 
 
 async def _use_character_experience(request: ItemUseRequest) -> None:
@@ -419,10 +459,14 @@ async def _use_character_experience(request: ItemUseRequest) -> None:
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("人物经验物品使用失败"), C.kv("character", overview.character.id))
         )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
+        await send_game_reply(
+            _invalid("使用", "物品使用没有完成", _use_action(request.parts[0]))
+        )
         return
     if outcome.failure:
-        await send_game_reply(_invalid("使用", outcome.failure.message))
+        await send_game_reply(
+            _invalid("使用", outcome.failure.message, _use_action(request.parts[0]))
+        )
         return
     receipt = outcome.unwrap()
     await send_game_reply(
@@ -432,6 +476,7 @@ async def _use_character_experience(request: ItemUseRequest) -> None:
         .field("人物经验", f"+{receipt.experience_granted}")
         .field("等级", f"Lv{receipt.level_before} -> Lv{receipt.level_after}")
         .field("当前经验", f"{receipt.experience_before} -> {receipt.experience_after}")
+        .action(Action("item.character", "查看角色", "我的角色"))
         .build()
     )
 
@@ -443,7 +488,13 @@ async def _use_companion_experience(request: ItemUseRequest) -> None:
     if reference is not None and (
         not reference.startswith("C") or not reference[1:].isdigit()
     ):
-        await send_game_reply(_invalid("使用", "伙伴编号必须使用 C数字"))
+        await send_game_reply(
+            _invalid(
+                "使用",
+                "伙伴编号必须使用 C数字",
+                _use_target_action(request.parts[0]),
+            )
+        )
         return
     transaction_id = f"companion-item-use:{_evidence_id()}"
     try:
@@ -459,11 +510,17 @@ async def _use_companion_experience(request: ItemUseRequest) -> None:
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("伙伴经验物品使用失败"), C.kv("character", overview.character.id))
         )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
+        await send_game_reply(
+            _invalid("使用", "物品使用没有完成", _use_action(request.parts[0]))
+        )
         return
     if result.status != "used" or result.receipt is None or result.companion is None:
         await send_game_reply(
-            _invalid("使用", result.failure_message or "伙伴经验物品没有生效")
+            _invalid(
+                "使用",
+                result.failure_message or "伙伴经验物品没有生效",
+                _use_target_action(request.parts[0]),
+            )
         )
         return
     receipt = result.receipt
@@ -478,6 +535,13 @@ async def _use_companion_experience(request: ItemUseRequest) -> None:
         .field("伙伴经验", f"+{receipt.experience_granted}")
         .field("等级", f"Lv{receipt.level_before} -> Lv{receipt.level_after}")
         .field("当前经验", f"{receipt.experience_before} -> {receipt.experience_after}")
+        .action(
+            Action(
+                "item.companion",
+                "查看伙伴",
+                f"伙伴 {result.companion.reference}",
+            )
+        )
         .build()
     )
 
@@ -501,10 +565,14 @@ async def _use_specialized(request: ItemUseRequest) -> None:
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("特殊物品使用失败"), C.kv("character", overview.character.id))
         )
-        await send_game_reply(_invalid("使用", "物品使用没有完成"))
+        await send_game_reply(
+            _invalid("使用", "物品使用没有完成", _use_action(request.parts[0]))
+        )
         return
     if outcome.failure:
-        await send_game_reply(_invalid("使用", outcome.failure.message))
+        await send_game_reply(
+            _invalid("使用", outcome.failure.message, _use_action(request.parts[0]))
+        )
         return
     assert outcome.value is not None
     receipt = outcome.value
@@ -515,14 +583,14 @@ async def _use_specialized(request: ItemUseRequest) -> None:
     )
     if receipt.effect_kind == BACKPACK_CAPACITY_EFFECT_KIND:
         builder.field("背包空间", f"{receipt.value_before} -> {receipt.value_after}")
-    await send_game_reply(builder.build())
+    await send_game_reply(builder.action(_backpack_action()).build())
 
 
 async def _use_companion_sanctuary(request: ItemUseRequest) -> None:
     character = request.current.character
     dimension = request.current.character_world
     if character is None or dimension is None:
-        await send_game_reply(_unavailable("使用"))
+        await send_game_reply(_unavailable("使用", _nacre_action()))
         return
     item_name = _view(request.overview).projector.name(request.definition.id)
     services = current_game_services()
@@ -540,7 +608,13 @@ async def _use_companion_sanctuary(request: ItemUseRequest) -> None:
         logger.opt(colors=True, exception=exc).error(
             C.join(C.fail("宠物秘境开启失败"), C.kv("character", character.id))
         )
-        await send_game_reply(_invalid("使用", f"{item_name}没有成功生效"))
+        await send_game_reply(
+            _invalid(
+                "使用",
+                f"{item_name}没有成功生效",
+                _use_action(request.parts[0]),
+            )
+        )
         return
     if result.status != "opened" or result.sanctuary is None:
         failure_message = {
@@ -550,7 +624,7 @@ async def _use_companion_sanctuary(request: ItemUseRequest) -> None:
             "item_consume_failed": f"{item_name}扣除失败",
         }.get(result.status, result.failure_message or "当前不能开启宠物秘境")
         await send_game_reply(
-            _invalid("使用", failure_message)
+            _invalid("使用", failure_message, _use_action(request.parts[0]))
         )
         return
     await send_game_reply(_opened_sanctuary_message(result.sanctuary, dimension))
@@ -559,7 +633,11 @@ async def _use_companion_sanctuary(request: ItemUseRequest) -> None:
 async def _use_delegated_dimension_shift(request: ItemUseRequest) -> None:
     del request
     await send_game_reply(
-        _invalid("使用", "跃迁凭证会在成功跃迁时自动消耗，请发送：跃迁")
+        _invalid(
+            "使用",
+            "跃迁凭证会在成功跃迁时自动消耗，请发送：跃迁",
+            Action("item.dimension-shift", "前往跃迁", "跃迁"),
+        )
     )
 
 
@@ -645,7 +723,22 @@ def _use_result(
         builder.note("持有数量不足，已使用全部可用物品。")
     elif failure:
         builder.note(f"后续使用已停止: {failure}")
-    return builder.build()
+    return builder.action(_nacre_action()).build()
+
+
+def _use_action(reference: str = "") -> Action:
+    if reference:
+        return Action("item.use.retry", "再次使用", f"使用 {reference}")
+    return Action("item.use.fill", "填写物品", "使用 ", behavior="fill")
+
+
+def _use_target_action(reference: str) -> Action:
+    return Action(
+        "item.use.target",
+        "填写目标",
+        f"使用 {reference} ",
+        behavior="fill",
+    )
 
 
 ITEM_USE_ROUTES = (

@@ -13,6 +13,7 @@ from game.features.exploration import (
     ExplorationOperationResult,
     exploration_battle_report_id,
 )
+from game.features.exploration.rewards import available_backpack_space
 from game.features.world_travel import WorldLocationIntent, WorldTravelResult
 from game.core.gameplay import equipment_state_from_instance, weapon_state_from_instance
 from game.rules.exploration import (
@@ -34,12 +35,20 @@ from ..presentation import (
     activity_block_feedback,
     health_depleted_feedback,
 )
+from ..world_location import (
+    current_world_location_action,
+    current_world_location_command,
+    current_world_location_name,
+    resolve_current_world_location,
+)
 
 
 async def view_exploration(current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("exploration.character", "查看角色", "我的角色"))
+        )
         return
     try:
         services = current_game_services()
@@ -53,13 +62,20 @@ async def view_exploration(current: CurrentCharacterResult) -> None:
         view = services.world_view(current.character_world)
         await send_game_reply(_exploration_message(state, overview.overview, view))
     except Exception as exc:
-        await _failed("探险状态查询失败", character.id, exc)
+        await _failed(
+            "探险状态查询失败",
+            character.id,
+            exc,
+            Action("exploration.retry", "重试", "探险"),
+        )
 
 
 async def move(message: str, current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("travel.character", "查看角色", "我的角色"))
+        )
         return
     services = current_game_services()
     view = services.world_view(current.character_world)
@@ -74,6 +90,7 @@ async def move(message: str, current: CurrentCharacterResult) -> None:
             .section("前往", icon="world")
             .line("没有找到这个地点")
             .note("发送：地图 地点名称")
+            .action(Action("travel.map", "查看地图", "地图", behavior="callback"))
             .build()
         )
         return
@@ -87,7 +104,12 @@ async def move(message: str, current: CurrentCharacterResult) -> None:
         )
         await send_game_reply(_movement_message(result, view))
     except Exception as exc:
-        await _failed("探险移动失败", character.id, exc)
+        await _failed(
+            "探险移动失败",
+            character.id,
+            exc,
+            Action("travel.failure.map", "查看地图", "地图"),
+        )
 
 
 async def start(current: CurrentCharacterResult) -> None:
@@ -96,18 +118,27 @@ async def start(current: CurrentCharacterResult) -> None:
         "start",
         _start_message,
         "开始探险失败",
+        Action("exploration.start.failure", "查看探险", "探险"),
         include_settings=True,
     )
 
 
 async def stop(current: CurrentCharacterResult) -> None:
-    await _operate(current, "stop", _stop_message, "停止探险失败")
+    await _operate(
+        current,
+        "stop",
+        _stop_message,
+        "停止探险失败",
+        Action("exploration.stop.failure", "查看探险", "探险"),
+    )
 
 
 async def summary(current: CurrentCharacterResult) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("exploration-summary.character", "查看角色", "我的角色"))
+        )
         return
     try:
         services = current_game_services()
@@ -122,7 +153,15 @@ async def summary(current: CurrentCharacterResult) -> None:
             character,
         )
         if overview_result.status != "ok" or overview_result.overview is None:
-            await send_game_reply(_unavailable())
+            await send_game_reply(
+                _unavailable(
+                    Action(
+                        "exploration-summary.overview",
+                        "查看角色",
+                        "我的角色",
+                    )
+                )
+            )
             return
         view = services.world_view(overview_result.overview.character_world)
         report = (
@@ -139,7 +178,12 @@ async def summary(current: CurrentCharacterResult) -> None:
             _summary_message(result, overview_result.overview, view, report)
         )
     except Exception as exc:
-        await _failed("探险总结查询失败", character.id, exc)
+        await _failed(
+            "探险总结查询失败",
+            character.id,
+            exc,
+            Action("exploration-summary.retry", "重试", "探险总结"),
+        )
 
 
 async def _operate(
@@ -147,12 +191,15 @@ async def _operate(
     method_name,
     presenter,
     log_message,
+    failure_recovery: Action,
     *,
     include_settings: bool = False,
 ) -> None:
     character = current_character_value(current)
     if character is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("exploration-operation.character", "查看角色", "我的角色"))
+        )
         return
     try:
         services = current_game_services()
@@ -176,7 +223,7 @@ async def _operate(
         else:
             await send_game_reply(presenter(result, view))
     except Exception as exc:
-        await _failed(log_message, character.id, exc)
+        await _failed(log_message, character.id, exc, failure_recovery)
 
 
 def _exploration_message(result, overview, view) -> DocumentMessage:
@@ -220,6 +267,8 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
             ("自动用药", _switch_text(overview.settings.auto_use_medicine)),
             ("自动休整", _switch_text(overview.settings.auto_rest)),
         )
+    if result.state is not None:
+        _append_stopped_details(builder, result.state, overview)
     if result.state is not None and result.state.status is ExplorationStatus.RUNNING:
         builder.field("下次结算", _time(result.state.next_batch_at))
     elif result.state is not None and result.state.status is ExplorationStatus.RESTING:
@@ -253,13 +302,8 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
         builder.item(
             index,
             M.command(
-                projector.name(region.location_id),
-                WorldLocationIntent(
-                    view.world.id,
-                    binding.anchor_id,
-                    binding.function_id,
-                    binding.version,
-                ).command(),
+                current_world_location_name(view, binding),
+                current_world_location_command(view, binding),
             ),
             f" | {_levels(region.minimum_enemy_level, region.maximum_enemy_level)}",
         )
@@ -273,13 +317,8 @@ def _exploration_message(result, overview, view) -> DocumentMessage:
         builder.item(
             index,
             M.command(
-                projector.name(region.location_id),
-                WorldLocationIntent(
-                    view.world.id,
-                    binding.anchor_id,
-                    binding.function_id,
-                    binding.version,
-                ).command(),
+                current_world_location_name(view, binding),
+                current_world_location_command(view, binding),
             ),
             f" | {_focus(region.kind.value)} | {_levels(region.minimum_enemy_level, region.maximum_enemy_level)}",
         )
@@ -316,16 +355,24 @@ def _movement_message(result: WorldTravelResult, view) -> DocumentMessage:
         feedback = activity_block_feedback(result.activity_block, "移动")
         return builder.line(feedback.text).action(feedback.recovery).build()
     if result.status == "moved":
+        resolved = current_game_services().content.worlds.resolve(
+            view.world.id,
+            result.anchor_id,
+        )
         return (
             builder.field("抵达", _anchor_name(result.anchor_id, view))
-            .action(Action("exploration.start", "开始探险", "开始探险"))
+            .action(current_world_location_action(resolved.binding))
             .build()
         )
     if result.status == "already_there":
+        resolved = current_game_services().content.worlds.resolve(
+            view.world.id,
+            result.anchor_id,
+        )
         return (
             builder.field("位置", _anchor_name(result.anchor_id, view))
             .line("已经在这里")
-            .action(Action("exploration.start", "开始探险", "开始探险"))
+            .action(current_world_location_action(resolved.binding))
             .build()
         )
     if result.status in {"stale_world", "stale_binding"}:
@@ -335,8 +382,16 @@ def _movement_message(result: WorldTravelResult, view) -> DocumentMessage:
             .build()
         )
     if result.status == "unavailable":
-        return builder.line("当前世界没有这个地点").build()
-    return builder.line("本次移动没有完成").build()
+        return (
+            builder.line("当前世界没有这个地点")
+            .action(Action("travel.map", "查看地图", "地图", behavior="callback"))
+            .build()
+        )
+    return (
+        builder.line("本次移动没有完成")
+        .action(Action("travel.map", "查看地图", "地图", behavior="callback"))
+        .build()
+    )
 
 
 def _start_message(
@@ -407,7 +462,11 @@ def _start_message(
             .action(Action("exploration.regions", "查看区域", "探险", style="secondary"))
             .build()
         )
-    return builder.line("本次探险没有开始").build()
+    return (
+        builder.line("本次探险没有开始")
+        .action(Action("exploration.start.back", "查看探险", "探险"))
+        .build()
+    )
 
 
 def _stop_message(result: ExplorationOperationResult, view) -> DocumentMessage:
@@ -451,7 +510,11 @@ def _stop_message(result: ExplorationOperationResult, view) -> DocumentMessage:
             .action(Action("exploration.regions", "查看区域", "探险"))
             .build()
         )
-    return builder.line("本次停止没有完成").build()
+    return (
+        builder.line("本次停止没有完成")
+        .action(Action("exploration.stop.back", "查看探险", "探险"))
+        .build()
+    )
 
 
 def _summary_message(
@@ -480,6 +543,7 @@ def _summary_message(
             ("自动用药", _switch_text(overview.settings.auto_use_medicine)),
             ("自动休整", _switch_text(overview.settings.auto_rest)),
         )
+    _append_stopped_details(builder, state, overview)
     builder.row(
         ("批次", state.completed_batches),
         ("胜负", f"{state.victories}胜 {state.defeats}负"),
@@ -573,14 +637,43 @@ def _status_text(result: ExplorationOperationResult) -> str:
     active_text = active_exploration_status_text(state)
     if active_text is not None:
         return active_text
+    return "已停止"
+
+
+def _append_stopped_details(builder, state, overview) -> None:
+    if state.status is not ExplorationStatus.STOPPED:
+        return
+    builder.field("停止原因", _stop_reason_text(state.stop_reason))
+    if state.stop_reason is ExplorationStopReason.CAPACITY_FULL and overview is not None:
+        builder.field("背包空间", _backpack_space_text(overview))
+
+
+def _stop_reason_text(reason: ExplorationStopReason | None) -> str:
     return {
-        ExplorationStopReason.MANUAL: "已停止",
-        ExplorationStopReason.DEFEATED: "战败停止",
-        ExplorationStopReason.CAPACITY_FULL: "容量已满",
+        ExplorationStopReason.MANUAL: "主动停止",
+        ExplorationStopReason.DEFEATED: "战败",
+        ExplorationStopReason.CAPACITY_FULL: "背包空间不足",
         ExplorationStopReason.BATCH_LIMIT: f"达到 {MAX_EXPLORATION_BATCHES} 批上限",
         ExplorationStopReason.INVALID_LOCATION: "位置失效",
         ExplorationStopReason.RECOVERY_INVALID: "休整异常",
-    }.get(state.stop_reason, "已停止")
+    }.get(reason, "未知原因")
+
+
+def _backpack_space_text(overview) -> str:
+    remaining = available_backpack_space(
+        overview.inventory,
+        current_game_services().content.catalog.items,
+    )
+    if remaining is None:
+        return "无限"
+    maximum = next(
+        value.maximum_space
+        for value in overview.inventory.containers.values()
+        if value.kind == "container.backpack"
+    )
+    if maximum is None:
+        return "无限"
+    return f"{maximum - remaining}/{maximum}"
 
 
 def _rest_reason_text(reason: ExplorationRestReason | None) -> str:
@@ -622,11 +715,9 @@ def _resolve_location(value: str, view) -> tuple[str | None, WorldLocationIntent
     intent = WorldLocationIntent.parse(value)
     if intent is not None:
         return intent.anchor_id, intent
-    normalized = value.casefold()
-    for binding in services.content.worlds.bindings_for_world(view.world.id):
-        display_id = binding.display_ref or binding.anchor_id
-        if value == binding.anchor_id or view.projector.name(display_id).casefold() == normalized:
-            return binding.anchor_id, None
+    binding = resolve_current_world_location(value, view, services.content.worlds)
+    if binding is not None:
+        return binding.anchor_id, None
     return None, None
 
 
@@ -691,17 +782,32 @@ def _time(value: datetime) -> str:
     return value.astimezone(ZoneInfo(config.project.timezone)).strftime("%m-%d %H:%M")
 
 
-async def _failed(message: str, character_id: str, exc: Exception) -> None:
+async def _failed(
+    message: str,
+    character_id: str,
+    exc: Exception,
+    recovery: Action,
+) -> None:
     await send_command_failure(
         message,
         character_id,
         exc,
-        M.document().section("探险", icon="world").line("当前操作没有完成，请稍后重试").build()
+        M.document()
+        .section("探险", icon="world")
+        .line("当前操作没有完成，请稍后重试")
+        .action(recovery)
+        .build(),
     )
 
 
-def _unavailable() -> DocumentMessage:
-    return M.document().section("探险", icon="world").line("当前没有可用角色").build()
+def _unavailable(recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("探险", icon="world")
+        .line("当前没有可用角色")
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = [

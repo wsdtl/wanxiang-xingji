@@ -21,7 +21,9 @@ async def dimension_shift(
     character = current.character if current.status == "ok" else None
     dimension = current.character_world if current.status == "ok" else None
     if character is None or dimension is None:
-        await send_game_reply(_unavailable())
+        await send_game_reply(
+            _unavailable(Action("dimension.character", "查看角色", "我的角色"))
+        )
         return
     services = current_game_services()
     requested = str(message or "").strip()
@@ -44,7 +46,7 @@ async def dimension_shift(
             "角色跃迁失败",
             character.id,
             exc,
-            _unavailable(),
+            _unavailable(Action("dimension.retry", "重试", "跃迁")),
         )
         return
     await send_game_reply(_result_message(result))
@@ -70,13 +72,21 @@ def _worlds_message(current_world_id: str, *, invalid: bool = False) -> Document
             else label,
             f" | {state}",
         )
-    return builder.build()
+    return builder.action(
+        Action(
+            "dimension.map",
+            "查看地图",
+            "地图",
+            behavior="callback",
+            style="secondary",
+        )
+    ).build()
 
 
 def _result_message(result: DimensionShiftResult) -> DocumentMessage:
     services = current_game_services()
     if result.current is None:
-        return _unavailable()
+        return _unavailable(Action("dimension.result.retry", "重试", "跃迁"))
     current = services.world_view(result.current)
     if result.activity_block is not None:
         feedback = activity_block_feedback(result.activity_block, "跃迁")
@@ -93,6 +103,7 @@ def _result_message(result: DimensionShiftResult) -> DocumentMessage:
             .section("跃迁", icon="world")
             .field("当前世界", f"{current.skin.icon} {current.skin.name}")
             .line("界门已经连接这个世界")
+            .action(Action("dimension.already.map", "查看地图", "地图"))
             .build()
         )
     if result.status == "item_missing":
@@ -123,16 +134,28 @@ def _result_message(result: DimensionShiftResult) -> DocumentMessage:
             .field("消耗", f"{previous.projector.name(DIMENSION_SHIFT_ITEM_ID)} x1")
             .line("目标世界已完成化身重构")
             .note("角色档案、资产与构筑保持不变；地点按目标世界重新解析。")
+            .actions(
+                (
+                    Action("dimension.shifted.map", "查看地图", "地图"),
+                    Action(
+                        "dimension.shifted.worlds",
+                        "返回界门",
+                        "跃迁",
+                        style="secondary",
+                    ),
+                )
+            )
             .build()
         )
-    return _unavailable()
+    return _unavailable(Action("dimension.result.back", "返回界门", "跃迁"))
 
 
-def _unavailable() -> DocumentMessage:
+def _unavailable(recovery: Action) -> DocumentMessage:
     return (
         M.document()
         .section("跃迁", icon="notice")
         .line("当前没有读取到世界连接状态，请稍后重试")
+        .action(recovery)
         .build()
     )
 

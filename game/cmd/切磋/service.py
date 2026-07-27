@@ -17,16 +17,31 @@ from ..reply import send_command_failure, send_game_reply
 async def challenge(message: str, current: CurrentCharacterResult) -> None:
     challenger = current_character_value(current)
     if challenger is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("sparring.character", "查看角色", "我的角色"),
+            )
+        )
         return
     requested = str(message or "").strip()
     if not requested:
-        await send_game_reply(_failure("请指定切磋对象"))
+        await send_game_reply(
+            _failure(
+                "请指定切磋对象",
+                Action("sparring.target", "选择对手", "切磋 ", behavior="fill"),
+            )
+        )
         return
     target_external_id = requested.split(maxsplit=1)[0]
     defender = await asyncio.to_thread(_resolve_target, target_external_id)
     if defender is None:
-        await send_game_reply(_failure("对方尚未创建角色，无法切磋"))
+        await send_game_reply(
+            _failure(
+                "对方尚未创建角色，无法切磋",
+                Action("sparring.target", "重新选择", "切磋 ", behavior="fill"),
+            )
+        )
         return
     context = _message_context()
     try:
@@ -53,11 +68,21 @@ async def challenge(message: str, current: CurrentCharacterResult) -> None:
 async def accept(message: str, current: CurrentCharacterResult) -> None:
     defender = current_character_value(current)
     if defender is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("sparring.character", "查看角色", "我的角色"),
+            )
+        )
         return
     request_id = str(message or "").strip()
     if not request_id:
-        await send_game_reply(_failure("切磋请求编号不能为空"))
+        await send_game_reply(
+            _failure(
+                "切磋请求编号不能为空",
+                Action("sparring.character", "查看角色", "我的角色"),
+            )
+        )
         return
     context = _message_context()
     try:
@@ -77,11 +102,21 @@ async def accept(message: str, current: CurrentCharacterResult) -> None:
 async def reject(message: str, current: CurrentCharacterResult) -> None:
     defender = current_character_value(current)
     if defender is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("sparring.character", "查看角色", "我的角色"),
+            )
+        )
         return
     request_id = str(message or "").strip()
     if not request_id:
-        await send_game_reply(_failure("切磋请求编号不能为空"))
+        await send_game_reply(
+            _failure(
+                "切磋请求编号不能为空",
+                Action("sparring.character", "查看角色", "我的角色"),
+            )
+        )
         return
     context = _message_context()
     try:
@@ -100,7 +135,11 @@ async def reject(message: str, current: CurrentCharacterResult) -> None:
         builder.line("已经拒绝这次切磋")
     else:
         builder.line(result.failure_message or "切磋请求没有处理")
-    await send_game_reply(builder.build())
+    await send_game_reply(
+        builder.action(
+            Action("sparring.new", "发起切磋", "切磋 ", behavior="fill")
+        ).build()
+    )
 
 
 def _request_message(result, challenger_name, defender_name, target_external_id):
@@ -130,7 +169,11 @@ def _request_message(result, challenger_name, defender_name, target_external_id)
                 ),
             )
         ).build()
-    return builder.line(result.failure_message or "切磋请求没有发出").build()
+    return (
+        builder.line(result.failure_message or "切磋请求没有发出")
+        .action(Action("sparring.target", "重新选择", "切磋 ", behavior="fill"))
+        .build()
+    )
 
 
 def _result_message(result) -> DocumentMessage:
@@ -155,8 +198,14 @@ def _result_message(result) -> DocumentMessage:
                 M.link("查看完整战报", public_url("battle", result.report.share_id)),
             )
         builder.note("切磋不会改变双方血气、灵力、装备或成长资源。")
-        return builder.build()
-    return builder.line(result.failure_message or "切磋没有完成").build()
+        return builder.action(
+            Action("sparring.character", "查看角色", "我的角色")
+        ).build()
+    return (
+        builder.line(result.failure_message or "切磋没有完成")
+        .action(Action("sparring.target", "重新发起", "切磋 ", behavior="fill"))
+        .build()
+    )
 
 
 def _resolve_target(target_external_id: str):
@@ -188,12 +237,21 @@ async def _failed(title: str, character_id: str, exc: Exception) -> None:
         title,
         character_id,
         exc,
-        _failure("当前操作没有完成，请稍后重试"),
+        _failure(
+            "当前操作没有完成，请稍后重试",
+            Action("sparring.character", "查看角色", "我的角色"),
+        ),
     )
 
 
-def _failure(message: str) -> DocumentMessage:
-    return M.document().section("切磋", icon="notice").line(message).build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("切磋", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = ["accept", "challenge", "reject"]

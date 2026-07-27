@@ -16,7 +16,7 @@ from . import shared
 async def view(current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         result = await asyncio.to_thread(
@@ -34,7 +34,7 @@ async def view(current: CurrentCharacterResult) -> None:
 async def create(current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         result = await asyncio.to_thread(
@@ -63,9 +63,12 @@ async def create(current: CurrentCharacterResult) -> None:
                 .build()
             )
         elif result.status == "already_member":
-            reply = shared.failure("你已经在一支队伍中")
+            reply = shared.failure("你已经在一支队伍中", shared.party_action())
         else:
-            reply = shared.failure(result.failure_message or "队伍创建没有完成")
+            reply = shared.failure(
+                result.failure_message or "队伍创建没有完成",
+                shared.create_action(),
+            )
         await send_game_reply(reply)
     except Exception as exc:
         await shared.failed("创建队伍失败", character.id, exc)
@@ -75,14 +78,21 @@ async def invite(message: str, current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     target_token = str(message or "").strip().split(maxsplit=1)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     if not target_token:
-        await send_game_reply(shared.failure("发送：邀请组队 玩家"))
+        await send_game_reply(
+            shared.failure("发送：邀请组队 玩家", shared.invite_action())
+        )
         return
     target = await asyncio.to_thread(shared.resolve_target, target_token[0])
     if target is None:
-        await send_game_reply(shared.failure("对方尚未创建角色，无法邀请组队"))
+        await send_game_reply(
+            shared.failure(
+                "对方尚未创建角色，无法邀请组队",
+                shared.invite_action("重新选择"),
+            )
+        )
         return
     try:
         result = await asyncio.to_thread(
@@ -103,10 +113,14 @@ async def invite(message: str, current: CurrentCharacterResult) -> None:
                 .section("队伍邀请", icon="player")
                 .line(text)
                 .field("有效期", "10分钟")
+                .action(shared.party_action())
                 .build()
             )
         else:
-            reply = shared.failure(result.failure_message or "队伍邀请没有发出")
+            reply = shared.failure(
+                result.failure_message or "队伍邀请没有发出",
+                shared.invite_action("重新邀请"),
+            )
         await send_game_reply(reply)
     except Exception as exc:
         await shared.failed("邀请组队失败", character.id, exc)
@@ -124,10 +138,10 @@ async def _resolve_invitation(message, current, *, accepted: bool) -> None:
     character = shared.character(current)
     request_id = str(message or "").strip()
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     if not request_id:
-        await send_game_reply(shared.failure("队伍请求编号不能为空"))
+        await send_game_reply(shared.failure("队伍请求编号不能为空", shared.party_action()))
         return
     try:
         services = current_game_services()
@@ -148,9 +162,12 @@ async def _resolve_invitation(message, current, *, accepted: bool) -> None:
                 .build()
             )
         elif not accepted and result.status == "rejected":
-            reply = shared.success("组队", "已经拒绝这份队伍邀请")
+            reply = shared.success("组队", "已经拒绝这份队伍邀请", shared.party_action())
         else:
-            reply = shared.failure(result.failure_message or "队伍邀请没有处理")
+            reply = shared.failure(
+                result.failure_message or "队伍邀请没有处理",
+                shared.party_action(),
+            )
         await send_game_reply(reply)
     except Exception as exc:
         await shared.failed("处理队伍邀请失败", character.id, exc)
@@ -171,7 +188,7 @@ async def transfer(message: str, current: CurrentCharacterResult) -> None:
 async def disband(current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         result = await asyncio.to_thread(
@@ -181,10 +198,10 @@ async def disband(current: CurrentCharacterResult) -> None:
         )
         party = result.party
         if party is None:
-            await send_game_reply(shared.failure("当前没有队伍"))
+            await send_game_reply(shared.failure("当前没有队伍", shared.create_action()))
             return
         if party.leader_id != character.id:
-            await send_game_reply(shared.failure("只有队长可以解散队伍"))
+            await send_game_reply(shared.failure("只有队长可以解散队伍", shared.party_action()))
             return
         disbanded = await asyncio.to_thread(
             current_game_services().party.disband,
@@ -194,9 +211,12 @@ async def disband(current: CurrentCharacterResult) -> None:
             logical_time=shared.command_time(),
         )
         await send_game_reply(
-            shared.success("组队", "队伍已经解散")
+            shared.success("组队", "队伍已经解散", shared.create_action())
             if disbanded.status == "disbanded"
-            else shared.failure(disbanded.failure_message or "队伍解散没有完成")
+            else shared.failure(
+                disbanded.failure_message or "队伍解散没有完成",
+                shared.party_action(),
+            )
         )
     except Exception as exc:
         await shared.failed("解散队伍失败", character.id, exc)
@@ -205,7 +225,7 @@ async def disband(current: CurrentCharacterResult) -> None:
 async def confirm_disband(message: str, current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         revision = int(str(message or "").strip())
@@ -217,9 +237,12 @@ async def confirm_disband(message: str, current: CurrentCharacterResult) -> None
             logical_time=shared.command_time(),
         )
         await send_game_reply(
-            shared.success("组队", "队伍已经解散")
+            shared.success("组队", "队伍已经解散", shared.create_action())
             if result.status == "disbanded"
-            else shared.failure(result.failure_message or "队伍解散没有完成")
+            else shared.failure(
+                result.failure_message or "队伍解散没有完成",
+                shared.party_action(),
+            )
         )
     except ValueError:
         await send_game_reply(
@@ -235,7 +258,7 @@ async def confirm_disband(message: str, current: CurrentCharacterResult) -> None
 async def _simple_action(current, prefix, method_name, success_text) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         method = getattr(current_game_services().party, method_name)
@@ -246,9 +269,12 @@ async def _simple_action(current, prefix, method_name, success_text) -> None:
             logical_time=shared.command_time(),
         )
         reply = (
-            shared.success("组队", success_text)
+            shared.success("组队", success_text, shared.create_action())
             if result.status in {"member.left", "disbanded"}
-            else shared.failure(result.failure_message or "队伍操作没有完成")
+            else shared.failure(
+                result.failure_message or "队伍操作没有完成",
+                shared.party_action(),
+            )
         )
         await send_game_reply(reply)
     except Exception as exc:
@@ -259,14 +285,24 @@ async def _target_action(current, message, method_name, title, success_text) -> 
     character = shared.character(current)
     token = str(message or "").strip().split(maxsplit=1)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     if not token:
-        await send_game_reply(shared.failure(f"发送：{title} 玩家"))
+        await send_game_reply(
+            shared.failure(
+                f"发送：{title} 玩家",
+                Action("party.target", "填写玩家", f"{title} ", behavior="fill"),
+            )
+        )
         return
     target = await asyncio.to_thread(shared.resolve_target, token[0])
     if target is None:
-        await send_game_reply(shared.failure("对方尚未创建角色"))
+        await send_game_reply(
+            shared.failure(
+                "对方尚未创建角色",
+                Action("party.target", "重新选择", f"{title} ", behavior="fill"),
+            )
+        )
         return
     try:
         method = getattr(current_game_services().party, method_name)
@@ -281,9 +317,12 @@ async def _target_action(current, message, method_name, title, success_text) -> 
             "leadership.transferred" if method_name == "transfer" else "member.removed"
         )
         reply = (
-            shared.success("组队", success_text)
+            shared.success("组队", success_text, shared.party_action())
             if result.status == success_status
-            else shared.failure(result.failure_message or "队伍操作没有完成")
+            else shared.failure(
+                result.failure_message or "队伍操作没有完成",
+                shared.party_action(),
+            )
         )
         await send_game_reply(reply)
     except Exception as exc:

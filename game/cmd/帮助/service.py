@@ -45,6 +45,7 @@ async def show_covenant() -> None:
         .line(f"身份互认 · 资产确权 · {COVENANT_MARKET_NAME}清算")
         .line(f"{COVENANT_RECYCLING_NAME} · 灾厄征召 · 公共行纪")
         .note("建立唯一化身时自动登记；不增加第二套成长，也不占用玩家共同体归属。")
+        .action(_home_action())
         .build()
     )
 

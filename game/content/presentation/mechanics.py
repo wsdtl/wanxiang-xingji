@@ -69,6 +69,7 @@ from game.core.gameplay.itemization.models import (
 from game.core.gameplay.triggers import (
     TriggerDefinition,
     TriggerOwner,
+    TriggerSource,
     TriggerTarget,
 )
 
@@ -114,7 +115,7 @@ _COMPARISONS = {
 
 _TARGETING_LABELS = {
     frozenset({"target.enemy.explicit", "target.enemy.first"}): "单个敌人",
-    frozenset({"target.enemy.lowest_health"}): "当前气血最低的敌人",
+    frozenset({"target.enemy.lowest_health"}): "当前{health}最低的敌人",
     frozenset({"target.enemy.random"}): "随机一个敌人",
     frozenset({"target.enemy.adjacent"}): "选定敌人及其相邻目标，最多 3 个",
     frozenset({"target.enemy.all"}): "全体敌人",
@@ -155,6 +156,13 @@ class MechanicProjector:
         self.catalog = catalog
         self.projector = projector
         self.properties = catalog.itemization_engine.catalog.properties
+        profile = catalog.combat_profiles.require(catalog.report.active_combat_profile_id)
+        self.health_resource_id = profile.combat_stats.health_resource
+        self.shield_resource_id = profile.combat_stats.shield_resource
+        health = catalog.resources[self.health_resource_id]
+        self.health_maximum_attribute_id = health.maximum_attribute
+        if self.health_maximum_attribute_id is None:
+            raise MechanicPresentationError("当前战斗配置缺少生命上限属性")
 
     def catalog_entries(self) -> tuple[MechanicCatalogEntry, ...]:
         entries = [
@@ -234,9 +242,7 @@ class MechanicProjector:
             return ()
         expected = {str(parameter.id) for parameter in tier.parameters}
         if set(normalized) != expected:
-            raise MechanicPresentationError(
-                f"{self._name(definition.id)} 的实际数值与正式档位不一致"
-            )
+            raise MechanicPresentationError(f"{self._name(definition.id)} 的实际数值与正式档位不一致")
         return tuple(
             f"{self._name(parameter.attribute_id)} "
             f"{self._format_value(normalized[str(parameter.id)], parameter, signed=True)}"
@@ -255,9 +261,7 @@ class MechanicProjector:
         category = self._property_category(definition)
         tiers = tuple(
             MechanicTierDetail(
-                "固定机制"
-                if category == "武器核心" and len(definition.tiers) == 1
-                else f"T{tier.tier}",
+                "固定机制" if category == "武器核心" and len(definition.tiers) == 1 else f"T{tier.tier}",
                 self._property_tier_lines(tier),
             )
             for tier in sorted(definition.tiers, key=lambda value: value.tier)
@@ -298,7 +302,12 @@ class MechanicProjector:
             self._name(ability_id),
             "能力",
             self._description(ability_id),
-            (MechanicTierDetail("固定机制", self._ability_lines(ability_id)),),
+            (
+                MechanicTierDetail(
+                    "固定机制",
+                    self._ability_lines(ability_id, include_name=False),
+                ),
+            ),
         )
 
     def _behavior_detail(self, behavior_id: str) -> MechanicDetail:
@@ -339,26 +348,31 @@ class MechanicProjector:
             lines.append(self._constraint_text(constraint_id))
         return tuple(lines)
 
-    def _ability_lines(self, ability_id: object) -> tuple[str, ...]:
+    def _ability_lines(
+        self,
+        ability_id: object,
+        *,
+        include_name: bool = True,
+    ) -> tuple[str, ...]:
         ability = self.catalog.abilities.require(str(ability_id))
-        lines = [f"能力：{self._name(ability.id)}"]
+        lines = [f"能力：{self._name(ability.id)}"] if include_name else []
         for cost in ability.costs:
             lines.append(
-                f"消耗：{self._magnitude(cost.magnitude)} {self._name(cost.resource_id)}"
+                "消耗："
+                + self._amount_text(
+                    cost.magnitude,
+                    self._resource_name(cost.resource_id),
+                )
             )
-        lines.append(
-            "冷却：无"
-            if ability.cooldown_turns == 0
-            else f"冷却：{ability.cooldown_turns} 次自身行动"
-        )
+        lines.append("冷却：无" if ability.cooldown_turns == 0 else f"冷却：自身行动 {ability.cooldown_turns} 次")
         targeting = self.catalog.battle_ability_targeting.get(ability.id)
         if targeting is not None:
             try:
-                target = _TARGETING_LABELS[frozenset(targeting.allowed_selectors)]
+                target = _TARGETING_LABELS[frozenset(targeting.allowed_selectors)].format(
+                    health=self._resource_name(self.health_resource_id)
+                )
             except KeyError as exc:
-                raise MechanicPresentationError(
-                    f"{self._name(ability.id)} 缺少目标规则说明"
-                ) from exc
+                raise MechanicPresentationError(f"{self._name(ability.id)} 缺少目标规则说明") from exc
             lines.append(f"目标：{target}")
         lines.extend(self._condition_lines(ability.conditions))
         lines.extend(self._condition_lines(ability.target_conditions))
@@ -367,6 +381,8 @@ class MechanicProjector:
             for line in self._effect_lines(
                 self.catalog.effects.require(reference.effect_id),
                 visited=frozenset(),
+                source_label="自身",
+                target_label=target,
             ):
                 lines.append(f"{target}效果：{line}")
         return tuple(lines)
@@ -383,25 +399,23 @@ class MechanicProjector:
         try:
             event_label = _EVENT_LABELS[key]
         except KeyError as exc:
-            raise MechanicPresentationError(
-                f"{self._name(trigger.id)} 缺少事件说明"
-            ) from exc
+            raise MechanicPresentationError(f"{self._name(trigger.id)} 缺少事件说明") from exc
         lines = [
-            f"触发：{event_label}",
-            f"对象：{self._trigger_target(trigger)}",
-            f"概率：{self._percent(trigger.chance)}",
+            f"触发时机：{event_label}",
+            f"作用对象：{self._trigger_target(trigger)}",
+            f"触发概率：{self._percent(trigger.chance)}",
         ]
         lines.extend(self._condition_lines(trigger.conditions))
         if trigger.max_activations_per_execution == 1:
-            lines.append("限制：每次规则行动最多触发 1 次")
+            lines.append("触发限制：单次机制结算最多触发 1 次")
         elif trigger.max_activations_per_execution < 64:
-            lines.append(
-                f"限制：每次规则行动最多触发 {trigger.max_activations_per_execution} 次"
-            )
+            lines.append(f"触发限制：单次机制结算最多触发 {trigger.max_activations_per_execution} 次")
         next_visited = visited | {str(trigger.id)}
         for line in self._effect_lines(
             self.catalog.effects.require(trigger.effect_id),
             visited=next_visited,
+            source_label=self._trigger_source(trigger),
+            target_label=self._trigger_target(trigger),
         ):
             lines.append(f"效果：{line}")
         return tuple(lines)
@@ -411,27 +425,81 @@ class MechanicProjector:
         effect: EffectDefinition,
         *,
         visited: frozenset[str],
+        source_label: str,
+        target_label: str,
     ) -> tuple[str, ...]:
         lines: list[str] = []
         persistent = effect.duration_turns is None or effect.duration_turns > 0
         if persistent:
-            lines.append(f"施加“{self._name(effect.id)}”")
+            status = f"施加“{self._name(effect.id)}”"
+            rule = self._effect_rule(effect)
+            if rule:
+                status += f"（{rule}）"
+            lines.append(status)
         lines.extend(self._condition_lines(effect.conditions))
-        for operation in effect.operations:
-            lines.extend(self._operation_lines(operation, visited=visited))
+        lines.extend(
+            self._collapsed_operation_lines(
+                effect.operations,
+                visited=visited,
+                source_label=source_label,
+                target_label=target_label,
+            )
+        )
         if not effect.operations and not persistent:
             lines.append(f"施加“{self._name(effect.id)}”")
-        rule = self._effect_rule(effect)
-        if rule:
-            lines.append(rule)
         return tuple(lines)
 
-    def _operation_lines(self, operation: object, *, visited: frozenset[str]) -> tuple[str, ...]:
+    def _collapsed_operation_lines(
+        self,
+        operations,
+        *,
+        visited: frozenset[str],
+        source_label: str,
+        target_label: str,
+    ) -> tuple[str, ...]:
+        """合并连续且展示规则相同的操作，同时明确保留执行次数。"""
+
+        groups = tuple(
+            self._operation_lines(
+                operation,
+                visited=visited,
+                source_label=source_label,
+                target_label=target_label,
+            )
+            for operation in operations
+        )
+        lines: list[str] = []
+        index = 0
+        while index < len(groups):
+            group = groups[index]
+            count = 1
+            while index + count < len(groups) and groups[index + count] == group:
+                count += 1
+            if count == 1:
+                lines.extend(group)
+            elif len(group) == 1 and group[0].startswith("造成"):
+                lines.append(f"连续攻击 {count} 次，每次{group[0]}")
+            else:
+                lines.append(f"连续执行 {count} 次：{'；'.join(group)}")
+            index += count
+        return tuple(lines)
+
+    def _operation_lines(
+        self,
+        operation: object,
+        *,
+        visited: frozenset[str],
+        source_label: str,
+        target_label: str,
+    ) -> tuple[str, ...]:
         if isinstance(operation, DealDamage):
-            details = [
-                f"造成 {self._magnitude(operation.magnitude)} 的 "
-                f"{self._name(operation.damage_type)}"
-            ]
+            text = self._action_amount_text(
+                "造成",
+                operation.magnitude,
+                self._name(operation.damage_type),
+                source_label=source_label,
+                target_label=target_label,
+            )
             limits = []
             if not operation.can_miss:
                 limits.append("必定命中")
@@ -447,19 +515,37 @@ class MechanicProjector:
                 limits.append(f"最高 {self._number(operation.maximum_damage)} 点")
             if operation.maximum_target_health_ratio is not None:
                 limits.append(
-                    "单次不超过目标气血上限的 "
+                    f"单次伤害不超过{target_label}"
+                    f"{self._name(self.health_maximum_attribute_id)}的 "
                     f"{self._percent(operation.maximum_target_health_ratio)}"
                 )
             if limits:
-                details.append("伤害规则：" + "，".join(limits))
-            return tuple(details)
+                text += f"（{'，'.join(limits)}）"
+            return (text,)
         if isinstance(operation, Heal):
-            return (f"恢复 {self._magnitude(operation.magnitude)} 气血",)
+            return (
+                self._action_amount_text(
+                    "恢复",
+                    operation.magnitude,
+                    self._resource_name(self.health_resource_id),
+                    source_label=source_label,
+                    target_label=target_label,
+                ),
+            )
         if isinstance(operation, GrantShield):
-            text = f"获得 {self._magnitude(operation.magnitude)} 护盾"
+            if self.shield_resource_id is None:
+                raise MechanicPresentationError("当前战斗配置缺少护盾资源")
+            text = self._action_amount_text(
+                "获得",
+                operation.magnitude,
+                self._resource_name(self.shield_resource_id),
+                source_label=source_label,
+                target_label=target_label,
+            )
             if operation.maximum_target_health_ratio is not None:
                 text += (
-                    "，最多不超过目标气血上限的 "
+                    f"，最多不超过{target_label}"
+                    f"{self._name(self.health_maximum_attribute_id)}的 "
                     f"{self._percent(operation.maximum_target_health_ratio)}"
                 )
             return (text,)
@@ -467,37 +553,45 @@ class MechanicProjector:
             direction = self._magnitude_direction(operation.magnitude)
             verb = "消耗" if direction < 0 else "恢复" if direction > 0 else "改变"
             return (
-                f"{verb} {self._magnitude(operation.magnitude, absolute=direction < 0)} "
-                f"{self._name(operation.resource_id)}",
+                self._action_amount_text(
+                    verb,
+                    operation.magnitude,
+                    self._resource_name(operation.resource_id),
+                    absolute=direction < 0,
+                    source_label=source_label,
+                    target_label=target_label,
+                ),
             )
         if isinstance(operation, TransferResource):
-            text = (
-                f"从目标抽取 {self._magnitude(operation.magnitude)} "
-                f"{self._name(operation.resource_id)}"
+            text = self._action_amount_text(
+                f"从{target_label}抽取",
+                operation.magnitude,
+                self._resource_name(operation.resource_id),
+                source_label=source_label,
+                target_label=target_label,
             )
             if operation.efficiency != 1:
-                text += f"，自身获得其中 {self._percent(operation.efficiency)}"
+                text += f"，{source_label}获得其中 {self._percent(operation.efficiency)}"
             return (text,)
         if isinstance(operation, ModifyAttribute):
             direction = self._magnitude_direction(operation.magnitude)
             verb = "降低" if direction < 0 else "提高" if direction > 0 else "调整"
             return (
-                f"{verb} {self._name(operation.attribute_id)} "
-                f"{self._magnitude(operation.magnitude, absolute=direction < 0, as_rate=self._is_rate_attribute(operation.attribute_id))}",
+                f"{verb}{self._name(operation.attribute_id)} "
+                f"{self._magnitude(operation.magnitude, absolute=direction < 0, as_rate=self._is_rate_attribute(operation.attribute_id), source_label=source_label, target_label=target_label)}",
             )
         if isinstance(operation, ApplyControl):
             definition = self.catalog.controls.require(operation.control_id)
             return (
-                f"尝试施加“{self._name(operation.control_id)}”：基础成功率 "
-                f"{self._percent(definition.base_chance)}，基础持续 "
-                f"{definition.base_duration_turns} 回合；控制命中、抵抗和韧性会参与结算",
+                f"尝试施加“{self._name(operation.control_id)}”"
+                f"（基础成功率 {self._percent(definition.base_chance)}，"
+                f"基础持续 {definition.base_duration_turns} 回合；"
+                "控制命中、抵抗和韧性参与结算）",
             )
         if isinstance(operation, GrantTrigger):
             trigger = self.catalog.triggers.require(operation.trigger_id)
-            lines = [f"获得“{self._name(trigger.id)}”"]
-            lines.extend(
-                f"联动{line}" for line in self._trigger_lines(trigger, visited=visited)
-            )
+            lines = [f"获得触发效果“{self._name(trigger.id)}”"]
+            lines.extend(f"联动{line}" for line in self._trigger_lines(trigger, visited=visited))
             return tuple(lines)
         if isinstance(operation, GrantInterceptor):
             return (self._interceptor_text(operation.interceptor_id),)
@@ -525,21 +619,18 @@ class MechanicProjector:
                 kind = "增益状态"
             elif operation.required_tags.has("status.negative"):
                 kind = "负面状态"
-            maximum = f"最多 {operation.maximum} 个" if operation.maximum else "全部"
-            return (f"移除目标{maximum}{kind}",)
+            if operation.maximum:
+                return (f"移除{target_label}最多 {operation.maximum} 个{kind}",)
+            return (f"移除{target_label}的全部{kind}",)
         if isinstance(operation, ConsumeEffectStacks):
-            return (
-                f"消耗“{self._name(operation.effect_id)}” {operation.stacks} 层",
-            )
+            return (f"消耗“{self._name(operation.effect_id)}” {operation.stacks} 层",)
         if isinstance(operation, ModifyEffectDuration):
             verb = "延长" if operation.turns > 0 else "缩短"
-            return (
-                f"{verb}“{self._name(operation.effect_id)}” {abs(operation.turns)} 回合",
-            )
+            return (f"{verb}“{self._name(operation.effect_id)}” {abs(operation.turns)} 回合",)
         if isinstance(operation, GrantAbility):
             return (f"获得能力“{self._name(operation.ability_id)}”",)
         if isinstance(operation, GrantTag):
-            return ("获得该机制声明的战斗状态",)
+            raise MechanicPresentationError("正式机制的战斗状态标签缺少玩家可读说明")
         if isinstance(operation, ChooseOne):
             total = sum(operation.weights)
             branches = []
@@ -547,33 +638,26 @@ class MechanicProjector:
                 branch_lines = [
                     line
                     for item in branch
-                    for line in self._operation_lines(item, visited=visited)
+                    for line in self._operation_lines(
+                        item,
+                        visited=visited,
+                        source_label=source_label,
+                        target_label=target_label,
+                    )
                 ]
                 chance = operation.weights[index] / total
-                branches.append(
-                    f"{self._percent(chance)}：{'；'.join(branch_lines)}"
-                )
-            return ("随机选择一种：" + "；".join(branches),)
-        raise MechanicPresentationError(
-            f"正式机制包含尚未支持的展示操作：{type(operation).__name__}"
-        )
+                branches.append(f"随机分支 {index + 1}（{self._percent(chance)}）：{'；'.join(branch_lines)}")
+            return tuple(branches)
+        raise MechanicPresentationError(f"正式机制包含尚未支持的展示操作：{type(operation).__name__}")
 
     def _condition_lines(self, conditions) -> tuple[str, ...]:
         return tuple(self._condition_text(condition) for condition in conditions)
 
     def _condition_text(self, condition: object) -> str:
         if isinstance(condition, EventValueCondition):
-            if (
-                condition.key == "is_proc"
-                and condition.comparison is Comparison.EQUAL
-                and float(condition.value) == 0
-            ):
+            if condition.key == "is_proc" and condition.comparison is Comparison.EQUAL and float(condition.value) == 0:
                 return "条件：只响应直接攻击，追加伤害不会再次触发"
-            if (
-                condition.key == "actual"
-                and condition.comparison is Comparison.GREATER
-                and float(condition.value) == 0
-            ):
+            if condition.key == "actual" and condition.comparison is Comparison.GREATER and float(condition.value) == 0:
                 return "条件：本次实际恢复量必须大于 0"
             if (
                 condition.key == "damage_type"
@@ -585,7 +669,7 @@ class MechanicProjector:
         if isinstance(condition, ResourceRatioCondition):
             return (
                 f"条件：{self._condition_subject(condition.subject)}的"
-                f"{self._name(condition.resource_id)}比例"
+                f"{self._resource_name(condition.resource_id)}比例"
                 f"{_COMPARISONS[condition.comparison]} {self._percent(float(condition.value))}"
             )
         if isinstance(condition, AttributeCondition):
@@ -601,10 +685,8 @@ class MechanicProjector:
                 f"{_COMPARISONS[condition.comparison]} {condition.value}"
             )
         if isinstance(condition, TagCondition):
-            return f"条件：{self._condition_subject(condition.subject)}满足指定战斗状态"
-        raise MechanicPresentationError(
-            f"正式机制包含尚未支持的展示条件：{type(condition).__name__}"
-        )
+            raise MechanicPresentationError("正式机制的战斗状态条件缺少玩家可读说明")
+        raise MechanicPresentationError(f"正式机制包含尚未支持的展示条件：{type(condition).__name__}")
 
     def _interceptor_text(self, interceptor_id: object) -> str:
         definition = self.catalog.interceptors.require(str(interceptor_id))
@@ -612,50 +694,41 @@ class MechanicProjector:
         config = definition.configuration
         if definition.handler_id == "interceptor.death_guard":
             minimum = self._number(float(config.get("minimum_health", 1)))
-            return f"获得“{name}”：致命伤结算后至少保留 {minimum} 点气血"
+            return f"获得“{name}”：受到致命伤害后至少保留 {minimum} 点{self._resource_name(self.health_resource_id)}"
         if definition.handler_id == "interceptor.immunity":
+            if not definition.required_damage_tags.values and not definition.blocked_damage_tags.values:
+                return f"获得“{name}”：免疫受到的所有伤害"
             return f"获得“{name}”：免疫符合条件的伤害"
         if definition.handler_id == "interceptor.cap":
             maximum = self._number(float(config["maximum"]))
+            if not definition.required_damage_tags.values and not definition.blocked_damage_tags.values:
+                return f"获得“{name}”：单次受到的伤害最多结算 {maximum} 点"
             return f"获得“{name}”：单次符合条件的伤害最多结算 {maximum} 点"
         if definition.handler_id == "interceptor.bypass_shield":
             return f"获得“{name}”：符合条件的伤害无视护盾"
         if definition.handler_id == "interceptor.multiply":
-            return (
-                f"获得“{name}”：符合条件的伤害按 "
-                f"{self._percent(float(config['multiplier']))} 结算"
-            )
+            return f"获得“{name}”：符合条件的伤害按 {self._percent(float(config['multiplier']))} 结算"
         if definition.handler_id == "interceptor.flat":
-            return (
-                f"获得“{name}”：符合条件的伤害调整 "
-                f"{self._number(float(config['amount']), signed=True)} 点"
-            )
+            return f"获得“{name}”：符合条件的伤害调整 {self._number(float(config['amount']), signed=True)} 点"
         if definition.handler_id == "interceptor.convert":
-            return (
-                f"获得“{name}”：将符合条件的伤害转换为"
-                f"{self._name(str(config['damage_type']))}"
-            )
+            return f"获得“{name}”：将符合条件的伤害转换为{self._name(str(config['damage_type']))}"
         if definition.handler_id == "interceptor.redirect_to_grant_source":
-            return (
-                f"获得“{name}”：将符合条件伤害的 "
-                f"{self._percent(float(config['ratio']))} 转移给效果来源"
-            )
+            return f"获得“{name}”：将符合条件的伤害中的 {self._percent(float(config['ratio']))} 转移给效果来源"
         raise MechanicPresentationError(f"{name} 缺少伤害干预说明")
 
     def _constraint_text(self, constraint_id: object) -> str:
         definition = self.catalog.target_constraints.require(str(constraint_id))
         name = self._name(definition.id)
         if definition.kind is TargetConstraintKind.FORCE_GRANT_SOURCE:
-            return f"获得“{name}”：敌方单体行动会被强制指向效果来源"
+            return f"获得“{name}”：敌方单体行动必须以效果施加者为目标"
         if definition.kind is TargetConstraintKind.UNTARGETABLE:
-            return f"获得“{name}”：敌方单体行动不能选中自身"
+            return f"获得“{name}”：自身不会成为敌方单体行动的目标"
         raise MechanicPresentationError(f"{name} 缺少目标规则说明")
 
     def _effect_rule(self, effect: EffectDefinition) -> str:
         if effect.duration_turns == 0:
             return ""
-        duration = "永久" if effect.duration_turns is None else f"{effect.duration_turns} 回合"
-        rules = [f"持续：{duration}"]
+        rules = ["永久生效" if effect.duration_turns is None else f"持续 {effect.duration_turns} 回合"]
         if effect.stacking is StackingPolicy.STACK:
             rules.append(f"最多叠加 {effect.max_stacks} 层")
         elif effect.stacking is StackingPolicy.REFRESH:
@@ -666,39 +739,43 @@ class MechanicProjector:
             rules.append("重复施加时覆盖原效果")
         if effect.stack_by_source:
             rules.append("不同来源分别计算")
-        return "；".join(rules)
+        return "，".join(rules)
 
     def _trigger_target(self, trigger: TriggerDefinition) -> str:
         if trigger.target is TriggerTarget.OWNER:
             return "自身"
-        if (
-            trigger.target is TriggerTarget.EVENT_SOURCE
-            and trigger.owner is TriggerOwner.EVENT_SOURCE
-        ) or (
-            trigger.target is TriggerTarget.EVENT_TARGET
-            and trigger.owner is TriggerOwner.EVENT_TARGET
+        if (trigger.target is TriggerTarget.EVENT_SOURCE and trigger.owner is TriggerOwner.EVENT_SOURCE) or (
+            trigger.target is TriggerTarget.EVENT_TARGET and trigger.owner is TriggerOwner.EVENT_TARGET
         ):
             return "自身"
         if trigger.target is TriggerTarget.EVENT_SOURCE:
             return "本次事件来源"
         return "本次事件目标"
 
+    @staticmethod
+    def _trigger_source(trigger: TriggerDefinition) -> str:
+        if trigger.source is TriggerSource.OWNER:
+            return "自身"
+        if trigger.source is TriggerSource.GRANT_SOURCE:
+            return "效果施加者"
+        if (trigger.source is TriggerSource.EVENT_SOURCE and trigger.owner is TriggerOwner.EVENT_SOURCE) or (
+            trigger.source is TriggerSource.EVENT_TARGET and trigger.owner is TriggerOwner.EVENT_TARGET
+        ):
+            return "自身"
+        if trigger.source is TriggerSource.EVENT_SOURCE:
+            return "本次事件来源"
+        return "本次事件目标"
+
     def _attribute_grant(self, grant) -> str:
         verb = "降低" if grant.value < 0 else "提高"
         value = abs(float(grant.value))
-        return (
-            f"{verb} {self._name(grant.attribute_id)} "
-            f"{self._format_attribute_value(grant.attribute_id, value)}"
-        )
+        return f"{verb}{self._name(grant.attribute_id)} {self._format_attribute_value(grant.attribute_id, value)}"
 
     def _parameter_range(self, parameter: PropertyParameterDefinition) -> str:
         minimum = self._format_value(parameter.minimum, parameter, signed=True)
         maximum = self._format_value(parameter.maximum, parameter, signed=True)
         step = self._format_value(parameter.step, parameter, signed=False)
-        return (
-            f"{self._name(parameter.attribute_id)}：{minimum} 至 {maximum}"
-            f"，步长 {step}"
-        )
+        return f"{self._name(parameter.attribute_id)}：{minimum} 至 {maximum}，步长 {step}"
 
     def _format_value(
         self,
@@ -711,24 +788,68 @@ class MechanicProjector:
             return self._percent(value, signed=signed)
         return self._number(value, signed=signed)
 
+    def _amount_text(
+        self,
+        magnitude: object,
+        unit: str,
+        *,
+        absolute: bool = False,
+        source_label: str = "自身",
+        target_label: str = "目标",
+    ) -> str:
+        amount = self._magnitude(
+            magnitude,
+            absolute=absolute,
+            source_label=source_label,
+            target_label=target_label,
+        )
+        if isinstance(magnitude, FixedMagnitude):
+            return f"{amount} 点{unit}"
+        if isinstance(magnitude, SumMagnitude):
+            amount = f"（{amount}）"
+        return f"相当于{amount}的{unit}"
+
+    def _action_amount_text(
+        self,
+        action: str,
+        magnitude: object,
+        unit: str,
+        *,
+        absolute: bool = False,
+        source_label: str,
+        target_label: str,
+    ) -> str:
+        amount = self._amount_text(
+            magnitude,
+            unit,
+            absolute=absolute,
+            source_label=source_label,
+            target_label=target_label,
+        )
+        separator = " " if isinstance(magnitude, FixedMagnitude) else ""
+        return f"{action}{separator}{amount}"
+
     def _magnitude(
         self,
         magnitude: object,
         *,
         absolute: bool = False,
         as_rate: bool = False,
+        source_label: str = "自身",
+        target_label: str = "目标",
     ) -> str:
         if isinstance(magnitude, FixedMagnitude):
             value = abs(magnitude.value) if absolute else magnitude.value
             return self._percent(value) if as_rate else self._number(value)
         if isinstance(magnitude, AttributeMagnitude):
-            scale = abs(magnitude.scale) if absolute else magnitude.scale
-            subject = "自身" if magnitude.owner == "source" else "目标"
+            subject = source_label if magnitude.owner == "source" else target_label
             base = f"{subject}{self._name(magnitude.attribute_id)}"
-            text = base if scale == 1 else f"{base}的 {self._percent(scale)}"
-            if magnitude.offset:
-                text += f" 再调整 {self._number(magnitude.offset, signed=True)}"
-            return text
+            return self._scaled_magnitude_text(
+                base,
+                magnitude.scale,
+                magnitude.offset,
+                absolute=absolute,
+            )
         if isinstance(magnitude, ParameterMagnitude):
             labels = {
                 "event.effective_damage": "本次实际伤害",
@@ -739,62 +860,126 @@ class MechanicProjector:
                 base = labels[magnitude.key]
             except KeyError as exc:
                 raise MechanicPresentationError("正式机制包含尚未支持的事件数值") from exc
-            scale = abs(magnitude.scale) if absolute else magnitude.scale
-            text = base if scale == 1 else f"{base}的 {self._percent(scale)}"
-            if magnitude.offset:
-                text += f" 再调整 {self._number(magnitude.offset, signed=True)}"
-            return text
+            return self._scaled_magnitude_text(
+                base,
+                magnitude.scale,
+                magnitude.offset,
+                absolute=absolute,
+            )
         if isinstance(magnitude, ResourceMagnitude):
-            subject = "自身" if magnitude.owner == "source" else "目标"
-            mode = {
-                ResourceValueMode.CURRENT: "当前",
-                ResourceValueMode.MISSING: "已损失",
-                ResourceValueMode.RATIO: "当前比例",
-                ResourceValueMode.MISSING_RATIO: "已损失比例",
+            subject = source_label if magnitude.owner == "source" else target_label
+            resource = self._resource_name(magnitude.resource_id)
+            base = {
+                ResourceValueMode.CURRENT: f"{subject}当前{resource}",
+                ResourceValueMode.MISSING: f"{subject}已损失的{resource}",
+                ResourceValueMode.RATIO: f"{subject}当前{resource}比例",
+                ResourceValueMode.MISSING_RATIO: f"{subject}已损失的{resource}比例",
             }[magnitude.mode]
-            base = f"{subject}{mode}{self._name(magnitude.resource_id)}"
-            scale = abs(magnitude.scale) if absolute else magnitude.scale
-            text = base if scale == 1 else f"{base}的 {self._percent(scale)}"
-            if magnitude.offset:
-                text += f" 再调整 {self._number(magnitude.offset, signed=True)}"
-            return text
+            return self._scaled_magnitude_text(
+                base,
+                magnitude.scale,
+                magnitude.offset,
+                absolute=absolute,
+            )
         if isinstance(magnitude, EffectStacksMagnitude):
-            subject = "自身" if magnitude.owner == "source" else "目标"
-            base = f"{subject}“{self._name(magnitude.effect_id)}”层数"
-            scale = abs(magnitude.scale) if absolute else magnitude.scale
-            text = base if scale == 1 else f"{base}的 {self._percent(scale)}"
-            if magnitude.offset:
-                text += f" 再调整 {self._number(magnitude.offset, signed=True)}"
-            return text
+            subject = source_label if magnitude.owner == "source" else target_label
+            base = f"{subject}“{self._name(magnitude.effect_id)}”的层数"
+            return self._scaled_magnitude_text(
+                base,
+                magnitude.scale,
+                magnitude.offset,
+                absolute=absolute,
+            )
         if isinstance(magnitude, SumMagnitude):
-            return " + ".join(self._magnitude(value) for value in magnitude.terms)
+            return " + ".join(
+                self._magnitude(
+                    value,
+                    source_label=source_label,
+                    target_label=target_label,
+                )
+                for value in magnitude.terms
+            )
         if isinstance(magnitude, ProductMagnitude):
-            return " × ".join(self._magnitude(value) for value in magnitude.factors)
+            return " × ".join(
+                self._magnitude(
+                    value,
+                    source_label=source_label,
+                    target_label=target_label,
+                )
+                for value in magnitude.factors
+            )
         if isinstance(magnitude, MinimumMagnitude):
-            return "以下数值中的较低值（" + "、".join(
-                self._magnitude(value) for value in magnitude.values
-            ) + "）"
+            return (
+                "以下数值中的较低值（"
+                + "、".join(
+                    self._magnitude(
+                        value,
+                        source_label=source_label,
+                        target_label=target_label,
+                    )
+                    for value in magnitude.values
+                )
+                + "）"
+            )
         if isinstance(magnitude, MaximumMagnitude):
-            return "以下数值中的较高值（" + "、".join(
-                self._magnitude(value) for value in magnitude.values
-            ) + "）"
+            return (
+                "以下数值中的较高值（"
+                + "、".join(
+                    self._magnitude(
+                        value,
+                        source_label=source_label,
+                        target_label=target_label,
+                    )
+                    for value in magnitude.values
+                )
+                + "）"
+            )
         if isinstance(magnitude, ClampMagnitude):
-            text = self._magnitude(magnitude.value)
+            text = self._magnitude(
+                magnitude.value,
+                source_label=source_label,
+                target_label=target_label,
+            )
             if magnitude.minimum is not None:
-                text += f"，最低 {self._magnitude(magnitude.minimum)}"
+                text += "，最低 " + self._magnitude(
+                    magnitude.minimum,
+                    source_label=source_label,
+                    target_label=target_label,
+                )
             if magnitude.maximum is not None:
-                text += f"，最高 {self._magnitude(magnitude.maximum)}"
+                text += "，最高 " + self._magnitude(
+                    magnitude.maximum,
+                    source_label=source_label,
+                    target_label=target_label,
+                )
             return text
         if isinstance(magnitude, RatioMagnitude):
             return (
-                f"{self._magnitude(magnitude.numerator)} ÷ "
-                f"{self._magnitude(magnitude.denominator)}"
+                f"{self._magnitude(magnitude.numerator, source_label=source_label, target_label=target_label)} ÷ "
+                f"{self._magnitude(magnitude.denominator, source_label=source_label, target_label=target_label)}"
             )
         if isinstance(magnitude, PowerMagnitude):
-            return f"{self._magnitude(magnitude.value)} 的 {self._number(magnitude.exponent)} 次方"
-        raise MechanicPresentationError(
-            f"正式机制包含尚未支持的数值表达式：{type(magnitude).__name__}"
-        )
+            return (
+                f"{self._magnitude(magnitude.value, source_label=source_label, target_label=target_label)}"
+                f" 的 {self._number(magnitude.exponent)} 次方"
+            )
+        raise MechanicPresentationError(f"正式机制包含尚未支持的数值表达式：{type(magnitude).__name__}")
+
+    def _scaled_magnitude_text(
+        self,
+        base: str,
+        scale: float,
+        offset: float,
+        *,
+        absolute: bool,
+    ) -> str:
+        scale = abs(scale) if absolute else scale
+        text = base if scale == 1 else f"{base} × {self._percent(scale)}"
+        if offset > 0:
+            text += f" + {self._number(offset)}"
+        elif offset < 0:
+            text += f" - {self._number(abs(offset))}"
+        return text
 
     @staticmethod
     def _magnitude_direction(magnitude: object) -> int:
@@ -831,11 +1016,7 @@ class MechanicProjector:
         if key.startswith("property.weapon_affix."):
             return "武器词条"
         if key.startswith("property.equipment."):
-            return (
-                "装备特效"
-                if any(tier.contribution.triggers for tier in definition.tiers)
-                else "装备词条"
-            )
+            return "装备特效" if any(tier.contribution.triggers for tier in definition.tiers) else "装备词条"
         raise MechanicPresentationError("正式随机词条缺少展示分类")
 
     def _supported_content_id(self, content_id: object | None) -> str | None:
@@ -875,6 +1056,11 @@ class MechanicProjector:
             return self.projector.name(str(content_id))
         except KeyError as exc:
             raise MechanicPresentationError("正式机制缺少世界皮肤名称") from exc
+
+    def _resource_name(self, content_id: object) -> str:
+        """资源在数量语句中使用名词，避免出现“当前当前生命”。"""
+
+        return self._name(content_id).removeprefix("当前").strip()
 
     def _description(self, content_id: object) -> str:
         try:

@@ -77,10 +77,13 @@ _MECHANISM_ENTRIES = build_combat_mechanism_entries(
 MAGIC_COMBAT_ENTRIES = {
     BASIC_COMBAT_FEATURE_ID: SkinEntry(name="基础战技"),
     PHYSICAL_DAMAGE_ID: SkinEntry(name="物理伤害"),
-    BASIC_ATTACK_ABILITY_ID: SkinEntry(name="基础攻击"),
+    BASIC_ATTACK_ABILITY_ID: SkinEntry(
+        name="基础攻击",
+        description="对单个敌人造成相当于自身攻击力的物理伤害。",
+    ),
     BREAKING_STRIKE_ABILITY_ID: SkinEntry(
         name="破势斩",
-        description="造成 150% 攻击伤害，消耗 20% 最大魔力，冷却 2 次自身行动。",
+        description=("对单个敌人造成相当于自身攻击力 × 150%的物理伤害，消耗 20 点魔力，冷却 2 次自身行动。"),
     ),
     **_MECHANISM_ENTRIES,
 }

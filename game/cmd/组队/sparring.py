@@ -16,14 +16,21 @@ async def challenge(message: str, current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     token = str(message or "").strip().split(maxsplit=1)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     if not token:
-        await send_game_reply(shared.failure("发送：组队切磋 玩家"))
+        await send_game_reply(
+            shared.failure("发送：组队切磋 玩家", shared.sparring_action())
+        )
         return
     target = await asyncio.to_thread(shared.resolve_target, token[0])
     if target is None:
-        await send_game_reply(shared.failure("对方尚未创建角色，无法组队切磋"))
+        await send_game_reply(
+            shared.failure(
+                "对方尚未创建角色，无法组队切磋",
+                shared.sparring_action("重新选择"),
+            )
+        )
         return
     try:
         result = await asyncio.to_thread(
@@ -42,10 +49,12 @@ async def accept(message: str, current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     request_id = str(message or "").strip()
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     if not request_id:
-        await send_game_reply(shared.failure("组队切磋请求编号不能为空"))
+        await send_game_reply(
+            shared.failure("组队切磋请求编号不能为空", shared.party_action())
+        )
         return
     try:
         result = await asyncio.to_thread(
@@ -64,10 +73,12 @@ async def reject(message: str, current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     request_id = str(message or "").strip()
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     if not request_id:
-        await send_game_reply(shared.failure("组队切磋请求编号不能为空"))
+        await send_game_reply(
+            shared.failure("组队切磋请求编号不能为空", shared.party_action())
+        )
         return
     try:
         result = await asyncio.to_thread(
@@ -78,9 +89,16 @@ async def reject(message: str, current: CurrentCharacterResult) -> None:
             logical_time=shared.command_time(),
         )
         reply = (
-            shared.success("组队切磋", "已经拒绝这次组队切磋")
+            shared.success(
+                "组队切磋",
+                "已经拒绝这次组队切磋",
+                shared.party_action(),
+            )
             if result.status == "rejected"
-            else shared.failure(result.failure_message or "组队切磋请求没有处理")
+            else shared.failure(
+                result.failure_message or "组队切磋请求没有处理",
+                shared.party_action(),
+            )
         )
         await send_game_reply(reply)
     except Exception as exc:
@@ -90,7 +108,11 @@ async def reject(message: str, current: CurrentCharacterResult) -> None:
 def _request_message(result) -> DocumentMessage:
     builder = M.document().section("组队切磋邀请", icon="combat")
     if result.status not in {"created", "already_pending"} or result.request is None:
-        return builder.line(result.failure_message or "组队切磋请求没有发出").build()
+        return (
+            builder.line(result.failure_message or "组队切磋请求没有发出")
+            .action(shared.sparring_action("重新选择"))
+            .build()
+        )
     challenger = result.challenger_party
     defender = result.defender_party
     challenger_name = (
@@ -131,7 +153,11 @@ def _request_message(result) -> DocumentMessage:
 def _result_message(result) -> DocumentMessage:
     builder = M.document().section("组队切磋结果", icon="combat")
     if result.status not in {"accepted", "replayed"}:
-        return builder.line(result.failure_message or "组队切磋没有完成").build()
+        return (
+            builder.line(result.failure_message or "组队切磋没有完成")
+            .action(shared.party_action())
+            .build()
+        )
     if result.draw:
         builder.line("双方战成平局")
     elif result.winner_party_id and result.challenger_party and result.defender_party:
@@ -156,7 +182,7 @@ def _result_message(result) -> DocumentMessage:
             M.link("查看完整战报", public_url("battle", result.report.share_id)),
         )
     builder.note("组队切磋不改变资源、装备、成长、位置、世界或队伍状态，也不产生奖励。")
-    return builder.build()
+    return builder.action(shared.party_action()).build()
 
 
 __all__ = ["accept", "challenge", "reject"]

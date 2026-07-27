@@ -14,7 +14,7 @@ from game.app import (
 )
 from game.core.gameplay import ActionRecord, NotificationEntry
 from launch import C, config, logger
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
@@ -43,11 +43,21 @@ async def mark_notification_read(
     """校验当前账号后把一条通知标记为已读。"""
 
     if current.status != "ok" or current.character is None:
-        await send_game_reply(_unavailable_message("未读通知"))
+        await send_game_reply(
+            _unavailable_message(
+                "未读通知",
+                Action("notifications.retry", "重试", "未读通知"),
+            )
+        )
         return
     parts = str(message or "").strip().split()
     if len(parts) != 2:
-        await send_game_reply(_unavailable_message("未读通知"))
+        await send_game_reply(
+            _unavailable_message(
+                "未读通知",
+                Action("notifications.back", "返回通知", "未读通知"),
+            )
+        )
         return
     try:
         notification_id = urlsafe_b64decode(parts[0].encode("ascii")).decode("utf-8")
@@ -66,7 +76,12 @@ async def mark_notification_read(
                 C.kv("character", current.character.id),
             )
         )
-        await send_game_reply(_unavailable_message("未读通知"))
+        await send_game_reply(
+            _unavailable_message(
+                "未读通知",
+                Action("notifications.retry", "重试", "未读通知"),
+            )
+        )
         return
     result = await _load_details(current)
     note = "已标记为已读" if marked.status == "read" else "通知已经处理或状态发生变化"
@@ -103,14 +118,19 @@ def _notifications_message(
     note: str = "",
 ) -> DocumentMessage:
     if result.status != "ok" or result.details is None or world_view is None:
-        return _unavailable_message("未读通知")
+        return _unavailable_message(
+            "未读通知",
+            Action("notifications.retry", "重试", "未读通知"),
+        )
     details = result.details
     builder = M.document().section("未读通知", icon="notice")
     if not details.notifications:
         builder.line("暂无未读通知")
         if note:
             builder.note(note)
-        return builder.build()
+        return builder.action(
+            Action("notifications.pending", "查看待领取", "待领取")
+        ).build()
     builder.field("数量", len(details.notifications))
     for index, entry in enumerate(details.notifications, start=1):
         parts = [f"[{index}] {_notification_title(entry, world_view)}", FieldSeparator(), M.em(_time(entry.created_at))]
@@ -149,11 +169,18 @@ def _pending_actions_message(
     world_view,
 ) -> DocumentMessage:
     if result.status != "ok" or result.details is None or world_view is None:
-        return _unavailable_message("待领取")
+        return _unavailable_message(
+            "待领取",
+            Action("pending-actions.retry", "重试", "待领取"),
+        )
     details = result.details
     builder = M.document().section("待领取", icon="reward")
     if not details.pending_actions:
-        return builder.line("暂无待领取行动").build()
+        return (
+            builder.line("暂无待领取行动")
+            .action(Action("pending-actions.notifications", "查看通知", "未读通知"))
+            .build()
+        )
     builder.field("数量", len(details.pending_actions))
     for index, record in enumerate(details.pending_actions, start=1):
         builder.line(
@@ -161,7 +188,9 @@ def _pending_actions_message(
             FieldSeparator(),
             M.em(_time(record.completes_at)),
         )
-    return builder.build()
+    return builder.action(
+        Action("pending-actions.notifications", "查看通知", "未读通知")
+    ).build()
 
 
 def _notification_title(entry: NotificationEntry, world_view) -> str:
@@ -185,11 +214,12 @@ def _world_view(current: CurrentCharacterResult):
     return current_game_services().world_view(current.character_world)
 
 
-def _unavailable_message(title: str) -> DocumentMessage:
+def _unavailable_message(title: str, recovery: Action) -> DocumentMessage:
     return (
         M.document()
         .section(title, icon="notice")
         .line("当前没有读取到提醒状态，请稍后重试")
+        .action(recovery)
         .build()
     )
 

@@ -68,7 +68,9 @@ async def _main() -> None:
             home = await _dispatch("exchange-user", "归航兑换", "exchange-home")
             assert "定相尘" in home.replies[0].message.content
             assert "套装图纸" in home.replies[0].message.content
-            assert not home.replies[0].message.actions
+            assert tuple(
+                action.data for action in home.replies[0].message.actions
+            ) == ("归航兑换记录",)
             page = await _dispatch(
                 "exchange-user",
                 "归航兑换 套装",
@@ -77,7 +79,9 @@ async def _main() -> None:
             assert "归航兑换·套装" in page.replies[0].message.content
             assert "页码: _1/1_" in page.replies[0].message.content
             assert f"总计: _{len(services.content.catalog.equipment.sets.ids())}_" in page.replies[0].message.content
-            assert not page.replies[0].message.actions
+            assert tuple(
+                action.data for action in page.replies[0].message.actions
+            ) == ("归航兑换",)
             set_id = services.content.catalog.equipment.sets.ids()[0]
             overview = services.load_character_overview(character).overview
             assert overview is not None

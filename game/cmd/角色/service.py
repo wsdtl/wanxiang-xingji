@@ -276,6 +276,14 @@ def _result_message(result: CharacterCreationCommandResult) -> DocumentMessage:
             .section("角色已存在", icon="notice")
             .field("状态", "已建立")
             .line("当前账号不能重复创建角色。")
+            .action(
+                Action(
+                    "character.existing.view",
+                    "查看角色",
+                    "我的角色",
+                    behavior="callback",
+                )
+            )
             .build()
         )
     if result.status == "name_required":
@@ -323,6 +331,15 @@ def _result_message(result: CharacterCreationCommandResult) -> DocumentMessage:
             .header("创建角色")
             .section("身份归属冲突", icon="notice")
             .line("当前平台身份对应多个账号，暂时不能创建角色。")
+            .action(
+                Action(
+                    "character.identity.help",
+                    "查看帮助",
+                    "帮助",
+                    behavior="callback",
+                    style="secondary",
+                )
+            )
             .build()
         )
     return (
@@ -330,6 +347,15 @@ def _result_message(result: CharacterCreationCommandResult) -> DocumentMessage:
         .header("创建角色")
         .section("创建失败", icon="notice")
         .line("当前没有写入角色，请稍后重试。")
+        .action(
+            Action(
+                "character.create.retry",
+                "重新填写",
+                "创建角色 ",
+                behavior="fill",
+                style="secondary",
+            )
+        )
         .build()
     )
 
@@ -406,6 +432,15 @@ def _overview_message(result: CharacterOverviewResult) -> DocumentMessage:
             .header("我的角色")
             .section("身份归属冲突", icon="notice")
             .line("当前平台身份对应多个账号，暂时不能查看角色。")
+            .action(
+                Action(
+                    "character.overview.identity_help",
+                    "查看帮助",
+                    "帮助",
+                    behavior="callback",
+                    style="secondary",
+                )
+            )
             .build()
         )
     return (
@@ -413,6 +448,14 @@ def _overview_message(result: CharacterOverviewResult) -> DocumentMessage:
         .header("我的角色")
         .section("读取失败", icon="notice")
         .line("当前没有读取到角色状态，请稍后重试。")
+        .action(
+            Action(
+                "character.overview.retry",
+                "重试",
+                "我的角色",
+                behavior="callback",
+            )
+        )
         .build()
     )
 
@@ -453,6 +496,14 @@ def _mood_unavailable_message() -> DocumentMessage:
         .header("心情")
         .section("读取失败", icon="notice")
         .line("当前没有读取到角色设置，请稍后重试。")
+        .action(
+            Action(
+                "character.mood.retry",
+                "重试",
+                "心情",
+                behavior="callback",
+            )
+        )
         .build()
     )
 
@@ -508,11 +559,16 @@ def _auto_rest_message(
 
 
 def _setting_unavailable_message(title: str) -> DocumentMessage:
+    action_id = {
+        "自动用药": "character.auto_medicine.retry",
+        "自动休整": "character.auto_rest.retry",
+    }[title]
     return (
         M.document()
         .header(title)
         .section("读取失败", icon="notice")
         .line("当前没有读取到角色设置，请稍后重试。")
+        .action(Action(action_id, "重试", title, behavior="callback"))
         .build()
     )
 
@@ -704,7 +760,15 @@ def _combat_panel_message(overview: CharacterOverview) -> DocumentMessage:
     _append_value_group(builder, "能力", _ability_names(entity.abilities, view), 3)
     _append_value_group(builder, "特效", _mechanic_names(overview, entity, view), 4)
     _append_value_group(builder, "套装", _set_bonus_names(overview, view), 2)
-    return builder.build()
+    return builder.action(
+        Action(
+            "combat-panel.back",
+            "返回角色",
+            "我的角色",
+            behavior="callback",
+            style="secondary",
+        )
+    ).build()
 
 
 def _combat_panel_unavailable_message() -> DocumentMessage:
@@ -712,6 +776,14 @@ def _combat_panel_unavailable_message() -> DocumentMessage:
         M.document()
         .section("战斗面板", icon="combat")
         .line("当前没有读取到角色战斗数据，请稍后重试。")
+        .action(
+            Action(
+                "combat-panel.retry",
+                "重试",
+                "战斗面板",
+                behavior="callback",
+            )
+        )
         .build()
     )
 

@@ -18,7 +18,7 @@ from . import shared
 async def set_ready(current: CurrentCharacterResult, ready: bool) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         services = current_game_services()
@@ -28,7 +28,7 @@ async def set_ready(current: CurrentCharacterResult, ready: bool) -> None:
             logical_time=shared.command_time(),
         )
         if party_view.party is None:
-            await send_game_reply(shared.failure("当前没有队伍"))
+            await send_game_reply(shared.failure("当前没有队伍", shared.create_action()))
             return
         result = await asyncio.to_thread(
             services.party_battles.set_ready,
@@ -72,7 +72,7 @@ async def set_ready(current: CurrentCharacterResult, ready: bool) -> None:
 async def view(current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         services = current_game_services()
@@ -82,7 +82,7 @@ async def view(current: CurrentCharacterResult) -> None:
             logical_time=shared.command_time(),
         )
         if party_view.party is None:
-            await send_game_reply(shared.failure("请先加入队伍"))
+            await send_game_reply(shared.failure("请先加入队伍", shared.create_action()))
             return
         challenge = await asyncio.to_thread(
             services.party_battles.view,
@@ -123,12 +123,22 @@ async def view(current: CurrentCharacterResult) -> None:
 async def select(message: str, current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         level = int(str(message or "").strip())
     except ValueError:
-        await send_game_reply(shared.failure("发送：选择组队挑战 等级"))
+        await send_game_reply(
+            shared.failure(
+                "发送：选择组队挑战 等级",
+                Action(
+                    "party-battle.select",
+                    "填写等级",
+                    "选择组队挑战 ",
+                    behavior="fill",
+                ),
+            )
+        )
         return
     try:
         services = current_game_services()
@@ -138,7 +148,7 @@ async def select(message: str, current: CurrentCharacterResult) -> None:
             logical_time=shared.command_time(),
         )
         if party_view.party is None:
-            await send_game_reply(shared.failure("请先加入队伍"))
+            await send_game_reply(shared.failure("请先加入队伍", shared.create_action()))
             return
         result = await asyncio.to_thread(
             services.party_battles.select,
@@ -173,7 +183,7 @@ async def select(message: str, current: CurrentCharacterResult) -> None:
 async def start(current: CurrentCharacterResult) -> None:
     character = shared.character(current)
     if character is None:
-        await send_game_reply(shared.failure("当前没有可用角色"))
+        await send_game_reply(shared.failure("当前没有可用角色", shared.character_action()))
         return
     try:
         services = current_game_services()
@@ -183,7 +193,7 @@ async def start(current: CurrentCharacterResult) -> None:
             logical_time=shared.command_time(),
         )
         if party_view.party is None:
-            await send_game_reply(shared.failure("请先加入队伍"))
+            await send_game_reply(shared.failure("请先加入队伍", shared.create_action()))
             return
         result = await asyncio.to_thread(
             services.party_battles.challenge,
@@ -284,10 +294,13 @@ async def start(current: CurrentCharacterResult) -> None:
                             "准备",
                         )
                     )
+                else:
+                    builder.action(shared.party_action())
                 reply = builder.build()
             else:
                 reply = shared.failure(
-                    result.failure_message or "组队挑战没有开始"
+                    result.failure_message or "组队挑战没有开始",
+                    shared.challenge_action(),
                 )
         await send_game_reply(reply)
     except Exception as exc:

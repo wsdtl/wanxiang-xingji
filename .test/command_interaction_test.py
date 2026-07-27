@@ -80,6 +80,8 @@ def main() -> None:
             confirmation_callers.add(source_path.relative_to(command_root).as_posix())
     assert confirmation_callers == {"回收/service.py"}
     _assert_action_command_semantics(command_root)
+    _assert_no_player_visible_world_location_intents(command_root)
+    _assert_reply_builders_declare_interaction(command_root)
 
     mixed = (
         Action("secondary.first", "辅助一", "secondary 1", style="secondary"),
@@ -95,16 +97,9 @@ def main() -> None:
     )
 
     failure = M.document().section("读取失败", icon="notice").line("请稍后重试").build()
-    recovered = reply_service._with_retry_action(failure, "地图")
-    assert recovered.document.actions[0].id == "game.retry"
-    assert recovered.document.actions[0].data == "地图"
-    automatic = reply_service._with_temporary_failure_retry(failure, "地图")
-    assert automatic.document.actions[0].data == "地图"
-    validation = M.document().section("参数错误", icon="notice").line("页码必须是正整数").build()
-    assert not reply_service._with_temporary_failure_retry(
-        validation,
-        "纳戒 x",
-    ).document.actions
+    assert not reply_service._normalize_game_reply(failure).document.actions
+    assert not hasattr(reply_service, "_with_temporary_failure_retry")
+    assert not hasattr(reply_service, "_with_retry_action")
 
     normalized = reply_service._normalize_game_reply(
         M.document().section("顺序", icon="system").line("验证").actions(mixed).build()
@@ -147,6 +142,101 @@ def _assert_action_command_semantics(command_root: Path) -> None:
                 location = f"{source_path.relative_to(command_root)}:{node.lineno}"
                 violations.append(f"{location} action_behavior 不能使用 send")
     assert not violations, "按钮命令语义不一致:\n" + "\n".join(violations)
+
+
+def _assert_no_player_visible_world_location_intents(command_root: Path) -> None:
+    violations: list[str] = []
+    for source_path in command_root.rglob("*.py"):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "WorldLocationIntent"
+            ):
+                violations.append(
+                    f"{source_path.relative_to(command_root)}:{node.lineno}"
+                )
+    assert not violations, (
+        "玩家地点入口不得构造内部 WorldLocationIntent:\n"
+        + "\n".join(violations)
+    )
+
+
+def _assert_reply_builders_declare_interaction(command_root: Path) -> None:
+    """只读巡检每个回复构造函数，不在公共发送层自动补动作。"""
+
+    violations: list[str] = []
+    for source_path in command_root.rglob("*.py"):
+        if "web" in source_path.parts or source_path.name in {"jobs.py", "site.py"}:
+            continue
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        functions = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        interactive = {
+            name
+            for name, node in functions.items()
+            if _declares_interaction(node)
+        }
+        changed = True
+        while changed:
+            changed = False
+            for name, node in functions.items():
+                if name in interactive:
+                    continue
+                called = {
+                    call.func.id
+                    for call in ast.walk(node)
+                    if isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                }
+                if called & interactive:
+                    interactive.add(name)
+                    changed = True
+        for name, node in functions.items():
+            builds_reply = any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "build"
+                for call in ast.walk(node)
+            )
+            if builds_reply and name not in interactive:
+                violations.append(
+                    f"{source_path.relative_to(command_root)}:{node.lineno} {name}"
+                )
+    assert not violations, (
+        "回复构造函数必须显式声明 Action 或 CommandLink:\n"
+        + "\n".join(violations)
+    )
+
+
+def _declares_interaction(node: ast.AST) -> bool:
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call):
+            continue
+        function = call.func
+        if isinstance(function, ast.Name) and function.id == "CommandLink":
+            return True
+        if not isinstance(function, ast.Attribute):
+            continue
+        if function.attr in {"action", "actions"}:
+            return True
+        if (
+            function.attr == "command"
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "M"
+        ):
+            return True
+        if (
+            function.attr == "link"
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "reply_intents"
+        ):
+            return True
+    return False
 
 
 def _literal_keyword(node: ast.Call, name: str) -> str | None:

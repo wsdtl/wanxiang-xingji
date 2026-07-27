@@ -12,7 +12,7 @@ from .world import BUNDLE, SPACE
 
 
 WORLD_EXTENSION = build_world_extension(
-    version=ContentVersion(1, 0, 0),
+    version=ContentVersion(1, 0, 2),
     order=10,
     bundle=BUNDLE,
     space=SPACE,

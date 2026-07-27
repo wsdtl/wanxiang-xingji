@@ -108,7 +108,7 @@ async def _main() -> None:
             assert "5000" in content
             assert "开荒装备" in content
             assert "装配" in content and "武库" in content
-            assert not message.actions
+            assert tuple(action.data for action in message.actions) == ("纳戒",)
 
             inventory = _inventory(services, character.id)
             new_ids = set(inventory.instances) - before_ids

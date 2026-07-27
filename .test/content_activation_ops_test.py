@@ -147,7 +147,7 @@ def main() -> None:
         activation = store.require()
         assert activation.revision == 1
         assert activation.fingerprint == report.content_fingerprint
-        assert activation.packages[0] == ("content.catalog.base", "3.32.0")
+        assert activation.packages[0] == ("content.catalog.base", "3.32.2")
 
         with redirect_stdout(StringIO()):
             repeated = OPS_MODULE._activate(

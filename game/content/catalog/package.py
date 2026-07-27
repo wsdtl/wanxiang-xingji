@@ -146,7 +146,7 @@ validate_nacre_item_categories(OFFICIAL_ITEMS)
 CATALOG_PACKAGE = ContentPackage(
     manifest=ContentPackageManifest(
         id=CATALOG_PACKAGE_ID,
-        version=ContentVersion(3, 32, 0),
+        version=ContentVersion(3, 32, 2),
     ),
     item_component_types=(
         ITEM_RECYCLE_COMPONENT_TYPE,

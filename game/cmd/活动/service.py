@@ -16,7 +16,7 @@ from game.rules.activity import (
     resolve_global_activity_presentation,
 )
 from launch import C, config, logger
-from message import DocumentMessage, M
+from message import Action, DocumentMessage, M
 from message.schema import FieldSeparator
 
 from ..command_helpers import command_time
@@ -78,7 +78,11 @@ def _activity_list_message(
 ) -> DocumentMessage:
     builder = M.document().section("活动", icon="system")
     if not activities:
-        return builder.line("当前没有开放的活动").build()
+        return (
+            builder.line("当前没有开放的活动")
+            .action(Action("activity.character", "查看角色", "我的角色"))
+            .build()
+        )
     projector = world_view.projector
     builder.field("数量", len(activities))
     for index, view in enumerate(activities, start=1):
@@ -107,6 +111,7 @@ def _activity_detail_message(
             M.document()
             .section("活动详情", icon="system")
             .line("活动不存在、尚未开放或已经结束")
+            .action(Action("activity.back", "返回活动", "活动"))
             .build()
         )
     projector = world_view.projector
@@ -137,7 +142,9 @@ def _activity_detail_message(
                 },
             )
         )
-    return builder.build()
+    return builder.action(
+        Action("activity.back", "返回活动", "活动", style="secondary")
+    ).build()
 
 
 def _unavailable_message() -> DocumentMessage:
@@ -145,6 +152,7 @@ def _unavailable_message() -> DocumentMessage:
         M.document()
         .section("活动", icon="system")
         .line("当前没有读取到活动状态，请稍后重试")
+        .action(Action("activity.retry", "重试", "活动"))
         .build()
     )
 

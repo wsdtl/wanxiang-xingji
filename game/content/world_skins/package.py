@@ -28,7 +28,7 @@ validate_distinct_item_skin_names(
 WORLD_SKIN_PACKAGE = ContentPackage(
     manifest=ContentPackageManifest(
         id=WORLD_SKIN_PACKAGE_ID,
-        version=ContentVersion(3, 24, 0),
+        version=ContentVersion(3, 24, 1),
         dependencies=(
             PackageRequirement(
                 package_id=CATALOG_PACKAGE_ID,

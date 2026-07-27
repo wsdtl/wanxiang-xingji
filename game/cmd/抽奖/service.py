@@ -57,7 +57,12 @@ TIER_LABELS = {
 async def draw(current: CurrentCharacterResult, rolls: int) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("draw.character", "查看角色", "我的角色"),
+            )
+        )
         return
     context = current_message_context()
     if context is None:
@@ -79,14 +84,26 @@ async def draw(current: CurrentCharacterResult, rolls: int) -> None:
             "抽奖命令失败",
             character.id,
             exc,
-            _failure("当前操作没有完成，请稍后重试"),
+            _failure(
+                "当前操作没有完成，请稍后重试",
+                Action(
+                    "draw.retry",
+                    "再次抽取",
+                    "抽奖" if rolls == 1 else "十连抽奖",
+                ),
+            ),
         )
 
 
 async def pool(current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("draw.character", "查看角色", "我的角色"),
+            )
+        )
         return
     try:
         services = current_game_services()
@@ -136,14 +153,22 @@ async def pool(current: CurrentCharacterResult) -> None:
             "抽奖奖池查询失败",
             character.id,
             exc,
-            _failure("当前没有读取到奖池状态，请稍后重试"),
+            _failure(
+                "当前没有读取到奖池状态，请稍后重试",
+                Action("draw.pool.retry", "重试", "抽奖奖池"),
+            ),
         )
 
 
 async def history(current: CurrentCharacterResult) -> None:
     character = current.character if current.status == "ok" else None
     if character is None:
-        await send_game_reply(_failure("当前没有可用角色"))
+        await send_game_reply(
+            _failure(
+                "当前没有可用角色",
+                Action("draw.character", "查看角色", "我的角色"),
+            )
+        )
         return
     try:
         services = current_game_services()
@@ -165,7 +190,10 @@ async def history(current: CurrentCharacterResult) -> None:
             "抽奖记录查询失败",
             character.id,
             exc,
-            _failure("当前没有读取到抽奖记录，请稍后重试"),
+            _failure(
+                "当前没有读取到抽奖记录，请稍后重试",
+                Action("draw.history.retry", "重试", "抽奖记录"),
+            ),
         )
 
 
@@ -186,7 +214,10 @@ def _result_message(result: DrawOperationResult, projector, rolls: int) -> Docum
             .build()
         )
     if result.status not in {"drawn", "replayed"} or result.record is None:
-        return _failure(result.failure_message or "抽奖没有完成")
+        return _failure(
+            result.failure_message or "抽奖没有完成",
+            Action("draw.pool", "查看奖池", "抽奖奖池"),
+        )
 
     record = result.record
     tier = _highest_tier(record)
@@ -277,8 +308,14 @@ def _actions() -> tuple[Action, ...]:
     )
 
 
-def _failure(message: str) -> DocumentMessage:
-    return M.document().section("抽奖", icon="notice").line(message).build()
+def _failure(message: str, recovery: Action) -> DocumentMessage:
+    return (
+        M.document()
+        .section("抽奖", icon="notice")
+        .line(message)
+        .action(recovery)
+        .build()
+    )
 
 
 __all__ = ["draw", "history", "pool"]

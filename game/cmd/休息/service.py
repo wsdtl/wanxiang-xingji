@@ -71,8 +71,16 @@ def _start_message(result, view) -> DocumentMessage:
             .build()
         )
     if result.status == "full":
-        return builder.line("当前状态已经完全恢复").build()
-    return builder.line(result.failure_message or "休息没有开始").build()
+        return (
+            builder.line("当前状态已经完全恢复")
+            .action(Action("rest.character", "查看角色", "我的角色"))
+            .build()
+        )
+    return (
+        builder.line(result.failure_message or "休息没有开始")
+        .action(Action("rest.retry", "重新休息", "休息"))
+        .build()
+    )
 
 
 def _stop_message(result, view) -> DocumentMessage:
@@ -85,9 +93,17 @@ def _stop_message(result, view) -> DocumentMessage:
         )
         return builder.line(feedback.text).action(feedback.recovery).build()
     if result.status == "not_running":
-        return builder.line("当前没有正在进行的休息").build()
+        return (
+            builder.line("当前没有正在进行的休息")
+            .action(Action("rest.start", "开始休息", "休息"))
+            .build()
+        )
     if result.status == "failed":
-        return builder.line(result.failure_message or "休息没有结束").build()
+        return (
+            builder.line(result.failure_message or "休息没有结束")
+            .action(Action("rest.stop.retry", "重试", "结束休息"))
+            .build()
+        )
     builder.row(
         (f"恢复{_resource_name(view, HEALTH_CURRENT)}", _number(result.recovered_health)),
         (f"恢复{_resource_name(view, SPIRIT_CURRENT)}", _number(result.recovered_spirit)),
@@ -105,7 +121,9 @@ def _stop_message(result, view) -> DocumentMessage:
         )
     if result.progress_ratio <= 0:
         builder.note("累计休息尚未达到一分钟，本次没有恢复。")
-    return builder.build()
+    return builder.action(
+        Action("rest.character", "查看角色", "我的角色")
+    ).build()
 
 
 async def _failed(title: str, character_id: str, exc: Exception) -> None:
@@ -139,9 +157,13 @@ def _number(value: float) -> str:
 
 
 def _unavailable() -> DocumentMessage:
-    return M.document().section("休息", icon="notice").line(
-        "当前没有读取到角色状态，请稍后重试"
-    ).build()
+    return (
+        M.document()
+        .section("休息", icon="notice")
+        .line("当前没有读取到角色状态，请稍后重试")
+        .action(Action("rest.character", "查看角色", "我的角色"))
+        .build()
+    )
 
 
 __all__ = ["start", "stop"]

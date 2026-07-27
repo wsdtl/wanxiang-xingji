@@ -63,11 +63,10 @@ def world_lore_record_message(definition, record, world_name: str) -> DocumentMe
 
 def world_lore_failure_message(
     message: str,
-    recovery: Action | None = None,
+    recovery: Action,
 ) -> DocumentMessage:
     builder = M.document().section("世界志", icon="notice").line(message)
-    if recovery is not None:
-        builder.action(recovery)
+    builder.action(recovery)
     return builder.build()
 
 
